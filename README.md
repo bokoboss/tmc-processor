@@ -1,115 +1,204 @@
 # TMC Processor
 
-Streamlit MVP for processing Turning Movement Count (TMC) Excel files into report-ready outputs.
+TMC Processor เป็นเครื่องมือบน Streamlit สำหรับประมวลผลข้อมูล **Turning Movement Count (TMC)** จากไฟล์ Excel ของงานสำรวจจราจร ให้เป็นตารางสรุป กราฟ ตรวจสอบช่วงเร่งด่วน และรายงาน Excel ที่พร้อมนำไปใช้ต่อในงานรายงานด้านวิศวกรรมจราจร
 
-## Features
+โปรแกรมนี้ออกแบบมาเพื่อช่วยลดงานซ้ำ เช่น การจัดทิศทางจากไฟล์สำรวจ การรวม movement จากหลาย source stream การเลือกช่วง Peak และการสร้างรายงานตามเทมเพลต Excel
 
-- Detects raw direction sheets named like `ทิศ 1`, `ทิศ 2`, or `ทิศ 2+3`.
-- Previews detected raw sheets before processing.
-- Provides an editable mapping table for raw sheet to movement metadata, with dropdowns for standard movement codes, legs, turn types, and facility types.
-- Exports and reloads mapping templates so the same intersection mapping can be reused across team members and future surveys.
-- Normalizes raw count sheets into the long format defined in `AGENTS.md`.
-- Calculates PCU using the default PCE factors.
-- Produces hourly, movement, vehicle-composition, AM/PM peak, and PHF summaries.
-- Supports fixed hourly or rolling 60-minute peak detection with configurable AM/PM peak search windows.
-- Runs QC checks for unmapped sheets, vehicle/PCE issues, zero-volume mapped movements, and peak-time issues.
-- Exports an Excel workbook with `Setup`, `Mapping`, `Normalized_Data`, `QC_Check`, `Hourly_Summary`, `Movement_Summary`, `Vehicle_Composition`, `Peak_PHF`, and `Report_Text`.
-- Recommends Microsoft Excel COM automation on Windows for final reports with native template charts, formulas, and workbook layout.
-- Keeps openpyxl with generated PNG charts available as the compatibility fallback export path.
+## ความสามารถหลัก
 
-Automatic intersection diagram generation is intentionally out of scope for this MVP.
+- อ่านไฟล์ TMC Excel ที่มี sheet ทิศทาง เช่น `ทิศ 1`, `ทิศ 2`, หรือ `ทิศ 2+3`
+- ตรวจพบ sheet ทิศทางและแสดงตัวอย่างก่อนประมวลผล
+- กำหนด Mapping จากทิศทาง/stream ในไฟล์สำรวจไปยัง movement มาตรฐาน เช่น `NS`, `NE`, `WU`, `EU`
+- รองรับการรวมหลาย source stream ไปยัง movement เดียว เช่น ทางหลักตรง + ทางคู่ขนานตรง → `NS`
+- เก็บรายละเอียด trace กลับได้ผ่าน `Movement_Aggregation_Audit`
+- คำนวณ PCU จากค่า PCE factor ที่กำหนดไว้
+- สร้างตารางสรุปรายชั่วโมง แยก movement แยกประเภทยานพาหนะ สัดส่วนยานพาหนะ และ PHF
+- แสดง Dashboard สำหรับตรวจสอบกราฟปริมาณจราจรรวมรายชั่วโมง
+- ให้ผู้ใช้ยืนยันหรือ override ช่วง AM/PM Peak ก่อนสร้างรายงาน
+- ใช้ช่วง Peak ที่ยืนยันแล้วเป็น source of truth สำหรับทุก output ที่เกี่ยวข้อง
+- ส่งออก Excel report ตามเทมเพลต 4-leg TMC
+- รองรับ **Excel Template Mode** ผ่าน Microsoft Excel COM เพื่อรักษา Native Chart, สูตร และรูปแบบของเทมเพลต
+- มี **Safe PNG Export Mode** เป็นโหมดสำรองเมื่อ Excel COM ใช้งานไม่ได้
+- Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`
+- UI ภาษาไทย สำหรับ workflow การใช้งานของทีมงานด้านจราจร
 
-## Setup
+## Workflow การใช้งาน
+
+```text
+อัปโหลดไฟล์ → ตั้งค่างาน → กำหนดทิศทาง → ประมวลผล → ตรวจสอบช่วงเร่งด่วน → ส่งออกไฟล์
+```
+
+ขั้นตอนทั่วไป:
+
+1. อัปโหลดไฟล์ TMC Excel
+2. กรอกข้อมูลรายงาน ป้ายปลายทาง ชื่อถนน และข้อมูล setup
+3. ตรวจสอบและแก้ไข Mapping
+4. ประมวลผลข้อมูล
+5. ตรวจสอบ Dashboard และยืนยันช่วง AM/PM Peak
+6. สร้างรายงาน Excel
+7. ดาวน์โหลดรายงาน หรือบันทึก Project Session ไว้ใช้ต่อ
+
+## การติดตั้ง
+
+แนะนำให้ใช้ virtual environment
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
 ```
 
-## Run The App
+โปรเจกต์กำหนด `requires-python = ">=3.10"` และใช้ dependencies หลัก ได้แก่ Streamlit, pandas, openpyxl และ matplotlib
 
-```powershell
-streamlit run app.py
-```
-
-If Windows reports that `streamlit` is not on PATH, use:
+## การรันโปรแกรม
 
 ```powershell
 python -m streamlit run app.py
 ```
 
-Upload a raw TMC Excel workbook. Each raw direction sheet should be named with the Thai direction prefix, for example `ทิศ 1`, `ทิศ 2`, or `ทิศ 2+3`.
-
-## Mapping Workflow
-
-After upload, the app detects every raw direction sheet and creates one mapping row per sheet. Review every row before processing.
-
-Required fields:
-
-- `movement_code`: choose one of the standard movement codes such as `NS`, `NE`, `SW`, `OVP_NS`, `UND_EW`, or `CUSTOM`.
-- `from_leg` and `to_leg`: choose `N`, `S`, `E`, `W`, `NE`, `NW`, `SE`, `SW`, or `CUSTOM`.
-- `turn_type`: choose `Through`, `Left`, `Right`, `U-turn`, `Combined`, or `Other`.
-- `facility_type`: choose `At-grade`, `U-turn`, `Overpass`, `Underpass`, or `Other`.
-
-Use `Download mapping template` to save the current mapping table to Excel. This is useful after one person has reviewed the vendor sheet directions and wants to share the mapping with the rest of the team.
-
-Use `Load saved mapping Excel` to apply a previous template to the currently detected raw sheets. Rows are matched by `raw_sheet`; sheets present in the current workbook but missing from the saved mapping stay in the table with blank required fields so they can be completed manually.
-
-The app validates the mapping before processing. Every detected raw sheet must have `movement_code`, `from_leg`, `to_leg`, `turn_type`, and `facility_type`; incomplete mappings are shown in a validation table and processing stops until they are fixed.
-
-## Expected Raw Sheet Shape
-
-The MVP supports straightforward interval tables where each detected sheet contains:
-
-- A time column such as `time`, `interval`, `ช่วงเวลา`, or `เวลา`, with values like `07:00-07:15`.
-- Or separate start/end columns such as `time_start` and `time_end`.
-- Vehicle-class columns matching `Bicy`, `MC`, `PC<7`, `PC>7`, `LB`, `MB`, `HB`, `LT`, `MT`, `HT`, `TR`, `STR`.
-
-Raw direction numbers are vendor-defined. The app does not infer movement direction automatically; users must review and edit the mapping table.
-
-## Tests
+หรือถ้า `streamlit` อยู่ใน PATH แล้ว:
 
 ```powershell
-pytest
+streamlit run app.py
 ```
 
-## Excel Export Modes
+## Excel Template Mode และ Excel COM
 
-On Windows machines with Microsoft Excel available, the Streamlit export section defaults to Excel Template Mode. This is the recommended final report path because it uses Excel COM automation to preserve native template charts, template formulas, and workbook layout.
+โหมดที่แนะนำสำหรับ final report คือ **Excel Template Mode** เพราะโปรแกรมจะใช้ Microsoft Excel เปิดสำเนาของเทมเพลต แล้วเติมข้อมูลลงใน cell/range ที่กำหนดไว้ เพื่อรักษา:
 
-Safe PNG Export Mode remains available as the compatibility fallback. It uses openpyxl and generated static PNG charts, avoids Excel COM automation, and does not require Microsoft Excel.
+- Native Chart ใน Excel
+- สูตรในเทมเพลต
+- layout และ formatting ของ workbook
 
-Excel Template Mode requires Microsoft Excel and pywin32. It opens a copy of `templates/four_leg_tmc_report_template.xlsx`, writes report data into mapped cells/ranges, lets the native template charts update from their linked source ranges, and saves a new output workbook. The source template is never overwritten.
+ข้อกำหนดสำหรับ Excel Template Mode:
 
-If Excel COM is unavailable, the app warns and automatically falls back to Safe PNG Export Mode. If a COM-generated workbook opens with an Excel repair warning, do not use that output; report the issue and use the safe export instead.
+- Windows
+- Microsoft Excel แบบ desktop app
+- `pywin32`
 
-Manual COM smoke test:
+ติดตั้ง `pywin32` ได้ด้วย:
 
 ```powershell
-python scripts/export_with_excel_com_smoke_test.py
+python -m pip install pywin32
 ```
 
-## Expected Validation Results
-
-Create or refresh the validation baseline workbook with:
+ทดสอบ Excel COM:
 
 ```powershell
-python scripts/create_expected_results.py
+python scripts\export_with_excel_com_smoke_test.py
 ```
 
-The script writes `samples/expected/expected_results.xlsx` with one row per raw workbook in `samples/raw`. See `samples/expected/README.md` for the manual review workflow and verification status rules.
+หาก Excel COM ใช้งานไม่ได้ โปรแกรมจะ fallback ไปใช้ **Safe PNG Export Mode** ซึ่งใช้ openpyxl และกราฟ PNG แบบคงที่แทน
 
-Validate eligible baseline rows with:
+## Project Session
+
+โปรแกรมรองรับการ Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`
+
+Project Session ใช้เก็บการตั้งค่า เช่น:
+
+- ข้อมูลรายงาน
+- ป้ายปลายทางและชื่อถนน
+- Mapping
+- source stream / movement aggregation
+- ช่วง Peak ที่ยืนยันแล้ว
+- export settings
+
+ไฟล์ session **ไม่เก็บ raw Excel input file** เพื่อลดความเสี่ยงเรื่องข้อมูลจริงและขนาดไฟล์ ผู้ใช้ต้องอัปโหลด raw file ใหม่เมื่อต้องการเปิด session กลับมาใช้งาน
+
+## Many-to-one Movement Aggregation
+
+โปรแกรมรองรับกรณีที่หลาย source stream ต้องรวมเป็น movement เดียวในรายงาน เช่น:
+
+| Source stream | Raw movement | Output movement |
+|---|---|---|
+| mainline | ตรงทางหลัก | NS |
+| frontage | ตรงทางคู่ขนาน | NS |
+
+ผลลัพธ์ในตารางสรุปจะมี `NS` เพียงคอลัมน์เดียว โดยรวมค่าจาก source stream ทั้งหมด และสามารถตรวจสอบย้อนหลังได้ใน sheet `Movement_Aggregation_Audit`
+
+ค่า `source_stream` ที่รองรับใน Mapping editor ได้แก่:
+
+- `mainline`
+- `frontage`
+- `service_road`
+- `ramp`
+- `other`
+
+## โครงสร้าง output หลัก
+
+Workbook ที่ export จะมี sheet สำหรับตรวจสอบและใช้งานต่อ เช่น:
+
+- `Setup`
+- `Mapping`
+- `Normalized_Data`
+- `QC_Check`
+- `Hourly_Movement_PCU`
+- `Hourly_Vehicle_Class`
+- `Vehicle_Composition_Report`
+- `Vehicle_Group_PCE`
+- `PHF_15min`
+- `Peak_PHF`
+- `Diagram_Data`
+- `Movement_Aggregation_Audit`
+- `Report_Text`
+- `Charts`
+- sheet รายงานตามเทมเพลต
+
+ชื่อ sheet อาจเปลี่ยนได้ตามเวอร์ชันของโปรแกรมและการตั้งค่า export
+
+## Validation และ QA
+
+สร้างหรือปรับปรุง baseline expected results:
 
 ```powershell
-python scripts/validate_expected_results.py
+python scripts\create_expected_results.py
 ```
 
-The validation runner includes rows marked `verified`, `needs_manual_check`, or `partial_report_baseline`. It loads each row's raw workbook and mapping workbook when available, runs the processing pipeline, and writes `samples/expected/validation_report.xlsx`.
+ตรวจสอบผลกับ baseline:
 
-By default, validation searches AM peaks in `07:00-12:00` and PM peaks in `15:00-19:00`. To match report-specific peak definitions, fill `am_peak_window_start`, `am_peak_window_end`, `pm_peak_window_start`, or `pm_peak_window_end` in `expected_results.xlsx`; blank window fields use the defaults. The Streamlit app exposes the same peak search window settings, and exported workbooks record them in `Setup`.
+```powershell
+python scripts\validate_expected_results.py
+```
 
-Report-derived expected PCU values may be rounded presentation values rather than exact raw calculations. Validation therefore allows `total_pcu` to pass within the larger of 10 PCU or 0.1%, AM/PM peak PCU within 2 PCU, and PHF within 0.005. Peak time fields still must match exactly after normalization.
+Audit template:
 
-Blank expected fields are reported as `skipped_blank_expected` with `pass_fail = SKIPPED`, not filled or treated as failures. Rows without a mapping file are reported as `skipped_missing_mapping`. The validation report includes `tolerance_used` and `relative_difference_pct` columns for numeric comparisons. Use `--fail-on-mismatch` if you want a non-zero exit code when any compared metric fails.
+```powershell
+python scripts\audit_template.py
+```
+
+Smoke test สำหรับ Excel COM:
+
+```powershell
+python scripts\export_with_excel_com_smoke_test.py
+```
+
+## การทดสอบ
+
+```powershell
+python -m pytest
+```
+
+## ข้อจำกัดปัจจุบัน
+
+- โปรแกรมยังไม่ infer ทิศทางจราจรจาก geometry อัตโนมัติ ผู้ใช้ต้องตรวจและกำหนด Mapping เอง
+- โหมด Excel Template Mode ใช้งานได้เฉพาะ Windows ที่มี Microsoft Excel และ pywin32
+- Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่ จึงไม่รักษา Native Chart ของ Excel template
+- กรณีสะพาน/อุโมงค์/ทางยกระดับพิเศษยังควรจัดการด้วย tag/audit และ Mapping ก่อน ยังไม่ได้เป็น geometry engine เต็มรูปแบบ
+- Project Session ไม่เก็บ raw Excel file ต้องอัปโหลดไฟล์สำรวจใหม่เมื่อนำ session กลับมาใช้
+
+## ความเป็นส่วนตัวและข้อมูลจริง
+
+Repository นี้เป็น public repository ดังนั้นไม่ควร commit ไฟล์ที่มีข้อมูลจริง เช่น:
+
+- raw survey Excel files
+- ไฟล์รายงาน/output ที่สร้างจากข้อมูลจริง
+- Project Session ที่มีชื่อโครงการจริงหรือข้อมูลเฉพาะงาน
+- mapping files ที่อ้างอิงโครงการจริง
+- ไฟล์จากลูกค้า หรือไฟล์ที่มีข้อมูลที่ไม่ควรเผยแพร่
+
+แนะนำให้เก็บข้อมูลจริงไว้ในเครื่องหรือ private storage เท่านั้น และใช้ synthetic/demo data สำหรับ public repository
+
+## License
+
+ยังไม่ได้กำหนด license อย่างเป็นทางการ หากต้องการเผยแพร่เป็น open source ควรเลือก license ให้ชัดเจนก่อนใช้งานหรือแจกจ่ายในวงกว้าง
