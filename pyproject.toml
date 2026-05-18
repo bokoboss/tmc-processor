@@ -1,0 +1,20 @@
+[project]
+name = "tmc-processor"
+version = "0.1.0"
+description = "Streamlit MVP for processing Turning Movement Count Excel files."
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib>=3.8",
+  "openpyxl>=3.1",
+  "pandas>=2.0",
+  "streamlit>=1.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
