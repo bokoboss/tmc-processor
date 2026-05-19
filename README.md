@@ -134,6 +134,16 @@ cd tmc-processor
 
 หาก Excel COM ใช้งานไม่ได้ โปรแกรมจะ fallback ไปใช้ **Safe PNG Export Mode** ซึ่งใช้ openpyxl และกราฟ PNG แบบคงที่แทน
 
+## Mapping Preset vs Project Session
+
+- Mapping Preset (`.mapping.json`) stores only the mapping table: raw sheet,
+  source stream, movement label, output movement code, include flags, and
+  aggregation fields. Use it to reuse the same intersection mapping across
+  survey dates, raw workbooks, or team members.
+- Project Session (`.tmcproj.json`) stores the broader job setup, including
+  metadata, mapping, PCE factors, peak settings, and export settings. Use it to
+  reopen a full job configuration.
+
 ## Project Session
 
 โปรแกรมรองรับการ Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`

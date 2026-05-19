@@ -132,6 +132,8 @@ def test_export_package_zip_contains_expected_files() -> None:
         export_summary_text=summary_text,
         project_session_bytes=b'{"schema_version":1}',
         project_session_filename="TMC01_session.tmcproj.json",
+        mapping_preset_bytes=b'{"preset_type":"tmc_mapping_preset"}',
+        mapping_preset_filename="mapping_preset.mapping.json",
         mapping=_mapping(),
         chart_pngs={"hourly_pcu": b"png1", "vehicle_composition": b"png2"},
         diagram_png=b"diagram",
@@ -144,6 +146,7 @@ def test_export_package_zip_contains_expected_files() -> None:
     assert "TMC01_output.xlsx" in names
     assert "export_summary.txt" in names
     assert "TMC01_session.tmcproj.json" in names
+    assert "mapping_preset.mapping.json" in names
     assert "mapping_table.xlsx" in names
     assert "charts/hourly_pcu.png" in names
     assert "charts/vehicle_composition.png" in names

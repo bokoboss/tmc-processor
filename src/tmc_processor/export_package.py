@@ -163,6 +163,8 @@ def create_export_package_zip(
     export_summary_text: str,
     project_session_bytes: bytes | None = None,
     project_session_filename: str | None = None,
+    mapping_preset_bytes: bytes | None = None,
+    mapping_preset_filename: str | None = None,
     mapping: pd.DataFrame | None = None,
     chart_pngs: dict[str, bytes] | None = None,
     diagram_png: bytes | None = None,
@@ -177,6 +179,11 @@ def create_export_package_zip(
             archive.writestr(
                 _safe_member_name(project_session_filename, "tmc_session.tmcproj.json"),
                 bytes(project_session_bytes),
+            )
+        if mapping_preset_bytes:
+            archive.writestr(
+                _safe_member_name(mapping_preset_filename, "mapping_preset.mapping.json"),
+                bytes(mapping_preset_bytes),
             )
         if mapping is not None and not mapping.empty:
             archive.writestr("mapping_table.xlsx", mapping_to_excel_bytes(mapping))

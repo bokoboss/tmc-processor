@@ -46,6 +46,15 @@ from tmc_processor.mapping import (
     selectbox_options_with_existing_values,
     validate_mapping_for_processing,
 )
+from tmc_processor.mapping_preset import (
+    MAPPING_PRESET_MIME,
+    MappingPresetError,
+    apply_mapping_preset_to_detected_sheets,
+    build_mapping_preset,
+    load_mapping_preset,
+    safe_mapping_preset_filename,
+    serialize_mapping_preset,
+)
 from tmc_processor.metadata import (
     APP_VERSION,
     DEFAULT_CAPTION_TEXT,
@@ -1515,10 +1524,16 @@ def _run_streamlit_app() -> None:
             if st.session_state.get("mapping_table") is not None:
                 default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
 
-            mapping_tools = st.columns([1, 1, 2])
-            with mapping_tools[0]:
-                mapping_upload = st.file_uploader("โหลดไฟล์ Mapping", type=["xlsx", "xlsm", "xls"], key="mapping_upload")
-            with mapping_tools[1]:
+            st.markdown("#### นำเข้า/ส่งออก Mapping")
+            mapping_excel_col, mapping_preset_col = st.columns(2)
+            with mapping_excel_col:
+                st.markdown("**Mapping Excel**")
+                st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
+                mapping_upload = st.file_uploader(
+                    "โหลดไฟล์ Mapping Excel",
+                    type=["xlsx", "xlsm", "xls"],
+                    key="mapping_upload",
+                )
                 _render_download_button(
                     "ดาวน์โหลดเทมเพลต Mapping",
                     mapping_to_excel_bytes(default_mapping),
@@ -1541,6 +1556,65 @@ def _run_streamlit_app() -> None:
                         st.success("โหลด Mapping และปรับใช้กับ Sheet ที่ตรวจพบแล้ว")
                 except Exception as exc:  # pragma: no cover - UI guardrail
                     st.error(f"ไม่สามารถโหลดไฟล์ Mapping ได้: {exc}")
+
+            preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
+            preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
+            preset_bytes = serialize_mapping_preset(
+                build_mapping_preset(
+                    preset_source,
+                    preset_name=str(preset_name_seed or "TMC Mapping Preset"),
+                )
+            )
+            st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
+            st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
+            with mapping_preset_col:
+                st.markdown("**Mapping Preset**")
+                st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
+                mapping_preset_upload = st.file_uploader(
+                    "เปิด Mapping Preset",
+                    type=["json"],
+                    key="mapping_preset_upload",
+                )
+                st.download_button(
+                    "ดาวน์โหลด Mapping Preset",
+                    data=download_buffer(preset_bytes),
+                    file_name=st.session_state["tmc_mapping_preset_filename"],
+                    mime=MAPPING_PRESET_MIME,
+                    key="download_mapping_preset",
+                )
+            if mapping_preset_upload is not None:
+                try:
+                    preset_upload_bytes = mapping_preset_upload.getvalue()
+                    preset_upload_identity = (
+                        mapping_preset_upload.name,
+                        hashlib.sha256(preset_upload_bytes).hexdigest(),
+                    )
+                    if st.session_state.get("tmc_mapping_preset_upload_identity") != preset_upload_identity:
+                        loaded_preset = load_mapping_preset(preset_upload_bytes)
+                        apply_result = apply_mapping_preset_to_detected_sheets(loaded_preset, detected_sheet_names)
+                        default_mapping = apply_result.mapping
+                        st.session_state["mapping_table"] = default_mapping.to_dict("records")
+                        st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
+                        st.session_state["tmc_mapping_table_from_session"] = False
+                        st.session_state["tmc_mapping_preset_upload_identity"] = preset_upload_identity
+                        st.session_state["tmc_mapping_preset_apply_info"] = {
+                            "matched": apply_result.matched_sheet_count,
+                            "missing": apply_result.missing_detected_sheet_count,
+                            "extra": apply_result.extra_preset_row_count,
+                        }
+                        st.session_state["tmc_mapping_preset_warnings"] = list(loaded_preset.warnings)
+                except (MappingPresetError, ValueError) as exc:
+                    st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
+            preset_info = st.session_state.get("tmc_mapping_preset_apply_info")
+            if preset_info:
+                st.success("โหลด Mapping Preset สำเร็จ")
+                st.info(
+                    f"{preset_info.get('matched', 0)} sheets matched; "
+                    f"{preset_info.get('missing', 0)} detected sheets still need review; "
+                    f"{preset_info.get('extra', 0)} preset rows were not found in current workbook."
+                )
+            for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
+                st.warning(warning_message)
 
             mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
             for warning_message in mapping_control_warnings(default_mapping):
@@ -1902,6 +1976,13 @@ def _run_streamlit_app() -> None:
                 export_summary_text=summary_text,
                 project_session_bytes=session_bytes,
                 project_session_filename=session_filename,
+                mapping_preset_bytes=serialize_mapping_preset(
+                    build_mapping_preset(
+                        mapping_df,
+                        preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
+                    )
+                ),
+                mapping_preset_filename="mapping_preset.mapping.json",
                 mapping=mapping_df,
                 chart_pngs=output.get("chart_pngs", {}),
                 diagram_png=output.get("diagram_png"),

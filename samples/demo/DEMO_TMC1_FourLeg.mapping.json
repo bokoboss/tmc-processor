@@ -1,0 +1,68 @@
+{
+  "app_version": "0.1.0",
+  "created_at": "2026-01-01T00:00:00Z",
+  "intersection_type": "four_leg",
+  "mapping_rows": [
+    {
+      "aggregation_method": "sum",
+      "facility_type": "at_grade",
+      "from_leg": "N",
+      "include_in_peak": true,
+      "include_in_report": true,
+      "output_movement_code": "NS",
+      "raw_direction": "1",
+      "raw_movement_label": "Demo northbound through - mainline",
+      "raw_sheet": "\u0e17\u0e34\u0e28 1",
+      "source_stream": "mainline",
+      "to_leg": "S",
+      "turn_type": "through"
+    },
+    {
+      "aggregation_method": "sum",
+      "facility_type": "frontage",
+      "from_leg": "N",
+      "include_in_peak": true,
+      "include_in_report": true,
+      "output_movement_code": "NS",
+      "raw_direction": "2",
+      "raw_movement_label": "Demo northbound through - frontage",
+      "raw_sheet": "\u0e17\u0e34\u0e28 2",
+      "source_stream": "frontage",
+      "to_leg": "S",
+      "turn_type": "through"
+    },
+    {
+      "aggregation_method": "sum",
+      "facility_type": "at_grade",
+      "from_leg": "W",
+      "include_in_peak": true,
+      "include_in_report": true,
+      "output_movement_code": "WE",
+      "raw_direction": "3",
+      "raw_movement_label": "Demo westbound through",
+      "raw_sheet": "\u0e17\u0e34\u0e28 3",
+      "source_stream": "mainline",
+      "to_leg": "E",
+      "turn_type": "through"
+    },
+    {
+      "aggregation_method": "sum",
+      "facility_type": "at_grade",
+      "from_leg": "E",
+      "include_in_peak": true,
+      "include_in_report": true,
+      "output_movement_code": "EW",
+      "raw_direction": "4",
+      "raw_movement_label": "Demo eastbound through",
+      "raw_sheet": "\u0e17\u0e34\u0e28 4",
+      "source_stream": "mainline",
+      "to_leg": "W",
+      "turn_type": "through"
+    }
+  ],
+  "movement_code_scheme": "from_to",
+  "notes": "Synthetic demo mapping preset. Contains mapping rows only and no raw traffic counts.",
+  "preset_name": "DEMO TMC1 Four-Leg Mapping",
+  "preset_type": "tmc_mapping_preset",
+  "schema_version": 1
+}

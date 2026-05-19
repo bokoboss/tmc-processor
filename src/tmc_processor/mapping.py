@@ -221,6 +221,14 @@ REQUIRED_MAPPING_FIELDS = ["movement_code", "from_leg", "to_leg", "turn_type", "
 def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataFrame) -> pd.DataFrame:
     """Align a saved mapping workbook to the currently detected raw sheets."""
     current = default_mapping_for_sheets(raw_sheets)
+    extra_columns = [
+        column
+        for column in ("note", "remark")
+        if column in saved_mapping.columns and "raw_sheet" in saved_mapping.columns
+    ]
+    saved_extras = saved_mapping.copy() if extra_columns else pd.DataFrame()
+    if extra_columns:
+        saved_extras = saved_extras.drop_duplicates("raw_sheet", keep="last").set_index("raw_sheet")
     saved = clean_mapping(saved_mapping)
     saved_by_sheet = saved.drop_duplicates("raw_sheet", keep="last").set_index("raw_sheet")
 
@@ -234,11 +242,16 @@ def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataF
                 if column == "raw_sheet":
                     continue
                 merged[column] = saved_row[column]
+            if extra_columns and raw_sheet in saved_extras.index:
+                extra_row = saved_extras.loc[raw_sheet]
+                for column in extra_columns:
+                    merged[column] = "" if pd.isna(extra_row[column]) else str(extra_row[column])
             merged["raw_direction"] = merged["raw_direction"] or extract_raw_direction(raw_sheet) or ""
             rows.append(merged)
         else:
             rows.append(current_row.to_dict())
-    return pd.DataFrame(rows, columns=MAPPING_COLUMNS)
+    columns = [*MAPPING_COLUMNS, *[column for column in extra_columns if column not in MAPPING_COLUMNS]]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
