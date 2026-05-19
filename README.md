@@ -20,6 +20,7 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 - รองรับ **Excel Template Mode** ผ่าน Microsoft Excel COM เพื่อรักษา Native Chart, สูตร และรูปแบบของเทมเพลต
 - มี **Safe PNG Export Mode** เป็นโหมดสำรองเมื่อ Excel COM ใช้งานไม่ได้
 - Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`
+- Basic Batch Processing v1 สำหรับประมวลผลไฟล์สำรวจหลายวันของจุดเดียวกันด้วย Mapping Preset และค่า PCE ร่วมกัน
 - UI ภาษาไทย สำหรับ workflow การใช้งานของทีมงานด้านจราจร
 
 ## Workflow การใช้งาน
@@ -48,6 +49,14 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 4. Process
 5. Review Peak
 6. Generate Excel Report
+
+Batch demo:
+
+1. Open the `ประมวลผลหลายไฟล์` tab.
+2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx` and `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
+3. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
+4. Click Process Batch.
+5. Download the Batch ZIP.
 
 ## วิธีเปิดแบบง่ายที่สุดสำหรับ Windows
 
@@ -133,6 +142,18 @@ cd tmc-processor
 - `pywin32`
 
 หาก Excel COM ใช้งานไม่ได้ โปรแกรมจะ fallback ไปใช้ **Safe PNG Export Mode** ซึ่งใช้ openpyxl และกราฟ PNG แบบคงที่แทน
+
+## Basic Batch Processing v1
+
+Basic Batch v1 is intended for the same survey point or intersection surveyed
+across multiple days. Upload multiple raw TMC Excel workbooks, use one shared
+Mapping Preset and shared PCE factors, then download one Batch ZIP.
+
+The batch ZIP contains `batch_summary.xlsx` plus one sanitized folder per
+successful input file. Each folder contains `report.xlsx`, `export_summary.txt`,
+`session.tmcproj.json`, `mapping_preset.mapping.json`, and chart PNGs. Raw input
+Excel files and local file paths are not included. If one workbook fails,
+processing continues and the failure is recorded in `batch_summary.xlsx`.
 
 ## Mapping Preset vs Project Session
 

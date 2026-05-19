@@ -13,6 +13,12 @@ import warnings
 import pandas as pd
 import streamlit as st
 
+from tmc_processor.batch import (
+    BATCH_PACKAGE_MIME,
+    BatchItem,
+    batch_package_filename,
+    process_batch_files,
+)
 from tmc_processor.charts import report_chart_pngs
 from tmc_processor.constants import (
     AM_WINDOW,
@@ -1419,8 +1425,8 @@ def _run_streamlit_app() -> None:
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
 
-    setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
-        ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "QA / ขั้นสูง"]
+    setup_tab, mapping_tab, batch_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
+        ["ตั้งค่า", "กำหนดทิศทาง", "ประมวลผลหลายไฟล์", "ตรวจ Peak", "ส่งออก", "QA / ขั้นสูง"]
     )
 
     with setup_tab:
@@ -1704,6 +1710,86 @@ def _run_streamlit_app() -> None:
                     st.session_state.pop("tmc_output", None)
                     st.session_state.pop("tmc_pce_results_stale", None)
                     st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
+
+    with batch_tab:
+        st.header("ประมวลผลหลายไฟล์")
+        st.info("Batch v1 เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+        batch_uploads = st.file_uploader(
+            "อัปโหลดไฟล์ TMC Excel หลายไฟล์",
+            type=["xlsx", "xlsm", "xls"],
+            accept_multiple_files=True,
+            key="batch_raw_tmc_uploads",
+        )
+        batch_preset_upload = st.file_uploader(
+            "โหลด Mapping Preset สำหรับทุกไฟล์",
+            type=["json"],
+            key="batch_mapping_preset_upload",
+        )
+        use_current_mapping_for_batch = False
+        if st.session_state.get("mapping_table"):
+            use_current_mapping_for_batch = st.checkbox(
+                "ใช้ Mapping จากแท็บกำหนดทิศทางปัจจุบันแทนไฟล์ Preset",
+                key="batch_use_current_mapping",
+            )
+
+        loaded_batch_preset = None
+        batch_preset_name = ""
+        if batch_preset_upload is not None and not use_current_mapping_for_batch:
+            try:
+                loaded = load_mapping_preset(batch_preset_upload.getvalue())
+                loaded_batch_preset = loaded.preset
+                batch_preset_name = loaded.preset.get("preset_name", batch_preset_upload.name)
+                for warning_message in loaded.warnings:
+                    st.warning(warning_message)
+            except (MappingPresetError, ValueError) as exc:
+                st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
+
+        batch_mapping = None
+        if use_current_mapping_for_batch and st.session_state.get("mapping_table"):
+            batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
+            batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
+
+        batch_ready = bool(batch_uploads) and (batch_mapping is not None or loaded_batch_preset is not None)
+        st.caption("Batch v1 จะใช้ค่า Setup, PCE factors และช่วงค้นหา Peak ร่วมกัน แล้วใช้ Peak ที่ระบบแนะนำเป็น Peak ที่ยืนยันของแต่ละไฟล์")
+        run_batch = st.button("Process Batch", type="primary", disabled=not batch_ready, key="run_batch_processing")
+        if run_batch:
+            items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
+            with st.spinner("กำลังประมวลผล Batch..."):
+                batch_result = process_batch_files(
+                    items,
+                    mapping=batch_mapping,
+                    mapping_preset=loaded_batch_preset,
+                    setup=setup,
+                    pce_factors=selected_pce_factors,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    use_template_report_layout=True,
+                    mapping_preset_name=batch_preset_name,
+                )
+            st.session_state["tmc_batch_result"] = batch_result
+            st.success("ประมวลผล Batch เสร็จแล้ว")
+
+        batch_result = st.session_state.get("tmc_batch_result")
+        if batch_result:
+            batch_table = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
+            display_columns = {
+                "file_name": "file_name",
+                "status": "status",
+                "AM_peak": "AM peak",
+                "PM_peak": "PM peak",
+                "total_PCU": "total PCU",
+                "QC_warnings": "QC warnings",
+                "QC_info": "QC info",
+                "notes": "notes",
+            }
+            st.dataframe(batch_table[list(display_columns)].rename(columns=display_columns), width="stretch")
+            st.download_button(
+                "Download Batch ZIP",
+                data=download_buffer(batch_result.package_bytes),
+                file_name=batch_package_filename(batch_preset_name or "tmc_batch"),
+                mime=BATCH_PACKAGE_MIME,
+                key="download_batch_zip",
+            )
 
     processed = st.session_state.get("tmc_processed")
     pce_results_stale = _processed_pce_results_stale(processed, selected_pce_factors)
