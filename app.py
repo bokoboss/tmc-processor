@@ -29,6 +29,12 @@ from tmc_processor.constants import (
 from tmc_processor.diagram import DiagramConfig, generate_four_leg_tmc_diagram
 from tmc_processor.downloads import EXCEL_MIME, PNG_MIME, download_buffer, safe_workbook_filename
 from tmc_processor.excel_com_export import ExcelComStatus, probe_excel_com
+from tmc_processor.export_package import (
+    PACKAGE_MIME,
+    build_export_summary_text,
+    create_export_package_zip,
+    safe_package_filename,
+)
 from tmc_processor.importer import detect_raw_direction_sheet_names, load_detected_sheet_details, preview_detected_sheets
 from tmc_processor.mapping import (
     apply_saved_mapping_to_sheets,
@@ -1795,6 +1801,8 @@ def _run_streamlit_app() -> None:
                         "diagram_png": diagram_png,
                         "workbook_bytes": confirmed_result.workbook_bytes,
                         "workbook_filename": safe_workbook_filename(tmc_id),
+                        "confirmed_setup": confirmed_setup,
+                        "export_mode": export_mode,
                     }
                     st.success("สร้างรายงาน Excel เสร็จแล้ว")
             except Exception as exc:  # pragma: no cover - UI guardrail
@@ -1805,6 +1813,49 @@ def _run_streamlit_app() -> None:
             _render_download_button("ดาวน์โหลดรายงาน Excel", output["workbook_bytes"], output["workbook_filename"], EXCEL_MIME)
             session_bytes = st.session_state.get("tmc_project_session_bytes")
             session_filename = st.session_state.get("tmc_project_session_filename", "tmc_session.tmcproj.json")
+            if not session_bytes:
+                session = _build_session_from_state(
+                    uploaded_file.name if uploaded_file is not None else None,
+                    len(file_bytes) if uploaded_file is not None else None,
+                )
+                session_bytes = session_to_json_bytes(session)
+                filename_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or (uploaded_file.name if uploaded_file is not None else None)
+                session_filename = safe_project_session_filename(filename_seed)
+                st.session_state["tmc_project_session_bytes"] = session_bytes
+                st.session_state["tmc_project_session_filename"] = session_filename
+
+            output_result = output["result"]
+            output_setup = output.get("confirmed_setup", setup)
+            summary_text = build_export_summary_text(
+                setup=output_setup,
+                source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                export_mode=output.get("export_mode", export_mode),
+                peaks=output_result.peaks,
+                mapping=mapping_df,
+                qc=output_result.qc,
+                workbook_filename=output["workbook_filename"],
+                pce_factors=output_result.pce_factors,
+                export_settings={
+                    "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
+                    "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
+                },
+            )
+            package_bytes = create_export_package_zip(
+                workbook_bytes=output["workbook_bytes"],
+                workbook_filename=output["workbook_filename"],
+                export_summary_text=summary_text,
+                project_session_bytes=session_bytes,
+                project_session_filename=session_filename,
+                mapping=mapping_df,
+                chart_pngs=output.get("chart_pngs", {}),
+                diagram_png=output.get("diagram_png"),
+            )
+            _render_download_button(
+                "ดาวน์โหลด Export Package ZIP",
+                package_bytes,
+                safe_package_filename(output["workbook_filename"]),
+                PACKAGE_MIME,
+            )
             if session_bytes:
                 st.download_button(
                     "ดาวน์โหลด Project Session",

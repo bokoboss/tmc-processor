@@ -1,0 +1,198 @@
+"""Traceability summary and ZIP package helpers for report exports."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from importlib import metadata
+from io import BytesIO
+from pathlib import Path
+import re
+from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import pandas as pd
+
+from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
+from .pcu import pce_factor_traceability_frame
+
+
+PACKAGE_MIME = "application/zip"
+
+
+def app_version() -> str:
+    """Return the installed package version, falling back for editable local runs."""
+
+    try:
+        return metadata.version("tmc-processor")
+    except metadata.PackageNotFoundError:
+        return "0.1.0"
+
+
+def _timestamp_text(generated_at: datetime | str | None = None) -> str:
+    if generated_at is None:
+        return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if isinstance(generated_at, datetime):
+        value = generated_at
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(generated_at)
+
+
+def _safe_member_name(name: str | None, default: str) -> str:
+    base = Path(str(name or default)).name
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+    return base or default
+
+
+def safe_package_filename(workbook_filename: str | None, default: str = "tmc_export_package.zip") -> str:
+    stem = Path(_safe_member_name(workbook_filename, "tmc_report.xlsx")).stem
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_")
+    return f"{cleaned[:60] or 'tmc_export'}_package.zip" if cleaned else default
+
+
+def _text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if pd.isna(value) if not isinstance(value, (dict, list, tuple, set)) else False:
+        return ""
+    text = str(value).strip()
+    return text[:5] if len(text) >= 5 and text[2:3] == ":" else text
+
+
+def _peak_period(setup: dict[str, Any], peaks: pd.DataFrame | None, period: str) -> str:
+    prefix = period.casefold()
+    start = _text_value(setup.get(f"{prefix}_peak_start"))
+    end = _text_value(setup.get(f"{prefix}_peak_end"))
+    if (not start or not end) and peaks is not None and not peaks.empty and "period" in peaks.columns:
+        rows = peaks[peaks["period"].astype(str).str.upper() == period.upper()]
+        if not rows.empty:
+            row = rows.iloc[0]
+            start = start or _text_value(row.get("peak_start"))
+            end = end or _text_value(row.get("peak_end"))
+    return f"{start}-{end}" if start and end else ""
+
+
+def _template_version(template_version: str | None, export_settings: dict[str, Any] | None) -> str:
+    if template_version:
+        return str(template_version)
+    export_settings = export_settings or {}
+    return str(export_settings.get("template_version") or export_settings.get("template_name") or "")
+
+
+def _mapping_summary(mapping: pd.DataFrame | None) -> list[str]:
+    if mapping is None or mapping.empty:
+        return ["Mapping rows: 0"]
+    cleaned = clean_mapping(mapping)
+    included = cleaned[cleaned["include_in_report"]]
+    lines = [
+        f"Mapping rows: {len(cleaned)}",
+        f"Included in report: {len(included)}",
+        f"Included in peak: {int(cleaned['include_in_peak'].sum())}",
+    ]
+    messages = movement_aggregation_messages(cleaned)
+    if messages:
+        lines.append("Aggregated movements:")
+        lines.extend(f"- {message}" for message in messages)
+    else:
+        lines.append("Aggregated movements: none")
+    return lines
+
+
+def _qc_count_summary(qc: pd.DataFrame | None) -> str:
+    if qc is None or qc.empty or "severity" not in qc.columns:
+        return "total=0, error=0, warning=0, info=0"
+    counts = qc["severity"].fillna("").astype(str).str.casefold().value_counts()
+    return (
+        f"total={len(qc)}, "
+        f"error={int(counts.get('error', 0))}, "
+        f"warning={int(counts.get('warning', 0))}, "
+        f"info={int(counts.get('info', 0))}"
+    )
+
+
+def build_export_summary_text(
+    *,
+    setup: dict[str, Any] | None = None,
+    source_file_name: str | None = None,
+    export_mode: str | None = None,
+    peaks: pd.DataFrame | None = None,
+    mapping: pd.DataFrame | None = None,
+    qc: pd.DataFrame | None = None,
+    workbook_filename: str | None = None,
+    pce_factors: dict[str, float] | None = None,
+    export_settings: dict[str, Any] | None = None,
+    template_version: str | None = None,
+    generated_at: datetime | str | None = None,
+) -> str:
+    """Build a plain-text export summary suitable for traceability packages."""
+
+    setup = setup or {}
+    pce_rows = pce_factor_traceability_frame(pce_factors)
+    survey_title = setup.get("survey_point") or setup.get("tmc_title") or setup.get("tmc_name") or ""
+    peak_selection_source = setup.get("peak_selection_source") or ""
+    if not peak_selection_source and peaks is not None and not peaks.empty and "peak_selection_source" in peaks.columns:
+        peak_selection_source = str(peaks["peak_selection_source"].dropna().iloc[0]) if peaks["peak_selection_source"].notna().any() else ""
+
+    lines = [
+        "TMC Processor Export Summary",
+        "",
+        f"App version: {app_version()}",
+        f"Template version: {_template_version(template_version, export_settings)}",
+        f"Generated timestamp: {_timestamp_text(generated_at)}",
+        f"Source file name: {Path(str(source_file_name or '')).name}",
+        f"Survey point / TMC title: {survey_title}",
+        f"Export mode: {export_mode or ''}",
+        f"AM peak period: {_peak_period(setup, peaks, 'AM')}",
+        f"PM peak period: {_peak_period(setup, peaks, 'PM')}",
+        f"Peak selection source: {peak_selection_source}",
+        "",
+        "PCE factors:",
+    ]
+    lines.extend(
+        f"- {row.vehicle_class}: {float(row.pce_factor):g} ({row.source})"
+        for row in pce_rows.itertuples(index=False)
+    )
+    lines.extend(["", "Mapping aggregation summary:"])
+    lines.extend(_mapping_summary(mapping))
+    lines.extend(
+        [
+            "",
+            f"QC warnings / info count: {_qc_count_summary(qc)}",
+            f"Output workbook name: {_safe_member_name(workbook_filename, 'tmc_report.xlsx')}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def create_export_package_zip(
+    *,
+    workbook_bytes: bytes,
+    workbook_filename: str,
+    export_summary_text: str,
+    project_session_bytes: bytes | None = None,
+    project_session_filename: str | None = None,
+    mapping: pd.DataFrame | None = None,
+    chart_pngs: dict[str, bytes] | None = None,
+    diagram_png: bytes | None = None,
+) -> bytes:
+    """Create an in-memory ZIP package from explicitly provided export artifacts."""
+
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(_safe_member_name(workbook_filename, "tmc_report.xlsx"), bytes(workbook_bytes))
+        archive.writestr("export_summary.txt", export_summary_text.encode("utf-8"))
+        if project_session_bytes:
+            archive.writestr(
+                _safe_member_name(project_session_filename, "tmc_session.tmcproj.json"),
+                bytes(project_session_bytes),
+            )
+        if mapping is not None and not mapping.empty:
+            archive.writestr("mapping_table.xlsx", mapping_to_excel_bytes(mapping))
+        for name, png_bytes in sorted((chart_pngs or {}).items()):
+            if png_bytes:
+                archive.writestr(f"charts/{_safe_member_name(name, 'chart')}.png", bytes(png_bytes))
+        if diagram_png:
+            archive.writestr("charts/tmc_movement_diagram.png", bytes(diagram_png))
+    return output.getvalue()
