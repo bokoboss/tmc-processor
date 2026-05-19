@@ -1,6 +1,5 @@
 @echo off
-setlocal EnableDelayedExpansion
-chcp 65001 >nul
+setlocal
 
 cd /d "%~dp0"
 
@@ -9,124 +8,123 @@ echo TMC Processor
 echo =============
 echo.
 
-if exist ".venv" (
-    echo พบโฟลเดอร์ .venv แล้ว ข้ามขั้นตอนติดตั้ง
+if exist ".venv\Scripts\python.exe" goto RUN_APP
+
+echo First-time setup is required.
+echo This may take several minutes. Please keep this window open.
+echo.
+
+call :FIND_PYTHON
+if errorlevel 1 goto ERROR_END
+
+%PYTHON_CMD% --version
+if errorlevel 1 (
+    echo.
+    echo Python was found but could not be started.
+    goto ERROR_END
+)
+
+echo.
+echo Creating virtual environment in .venv ...
+%PYTHON_CMD% -m venv .venv
+if errorlevel 1 (
+    echo.
+    echo Failed to create .venv.
+    goto ERROR_END
+)
+
+if not exist ".venv\Scripts\python.exe" (
+    echo.
+    echo .venv was created, but .venv\Scripts\python.exe was not found.
+    goto ERROR_END
+)
+
+echo.
+echo Upgrading pip ...
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+if errorlevel 1 (
+    echo.
+    echo Failed to upgrade pip.
+    goto ERROR_END
+)
+
+echo.
+echo Installing TMC Processor and required packages ...
+".venv\Scripts\python.exe" -m pip install -e .
+if errorlevel 1 (
+    echo.
+    echo Failed to install TMC Processor dependencies.
+    goto ERROR_END
+)
+
+echo.
+echo Installing pywin32 for Excel COM support ...
+".venv\Scripts\python.exe" -m pip install pywin32
+if errorlevel 1 (
+    echo.
+    echo Warning: pywin32 installation failed.
+    echo The app can still run, but Excel Template Mode may be unavailable.
 ) else (
-    echo ไม่พบโฟลเดอร์ .venv
-    echo กำลังติดตั้งครั้งแรก อาจใช้เวลาหลายนาที...
-    echo.
-
-    where python >nul 2>nul
-    if errorlevel 1 (
-        where py >nul 2>nul
-        if errorlevel 1 (
-            echo ไม่พบ Python
-            echo กรุณาติดตั้ง Python 3.10 หรือใหม่กว่า แล้วเปิดไฟล์นี้ใหม่อีกครั้ง
-            echo ดาวน์โหลดได้ที่ https://www.python.org/downloads/windows/
-            echo.
-            pause
-            exit /b 1
-        )
-        set "PYTHON_CMD=py -3"
-    ) else (
-        set "PYTHON_CMD=python"
-    )
-
-    !PYTHON_CMD! --version
-    if errorlevel 1 (
-        echo.
-        echo เปิด Python ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo กำลังสร้างสภาพแวดล้อม Python ใน .venv ...
-    !PYTHON_CMD! -m venv .venv
-    if errorlevel 1 (
-        echo.
-        echo สร้าง .venv ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    call ".venv\Scripts\activate.bat"
-    if errorlevel 1 (
-        echo.
-        echo เปิดใช้งาน .venv ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo กำลังอัปเดต pip ...
-    python -m pip install --upgrade pip
-    if errorlevel 1 (
-        echo.
-        echo อัปเดต pip ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo กำลังติดตั้งแพ็กเกจที่จำเป็น ...
-    python -m pip install -e .
-    if errorlevel 1 (
-        echo.
-        echo ติดตั้งแพ็กเกจของ TMC Processor ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo กำลังติดตั้ง pywin32 สำหรับ Excel COM ...
-    python -m pip install pywin32
-    if errorlevel 1 (
-        echo.
-        echo ติดตั้ง pywin32 ไม่สำเร็จ
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo ทดสอบ Excel COM แบบไม่บังคับ ...
-    python -c "import win32com.client as client; excel = client.Dispatch('Excel.Application'); print('Excel COM พร้อมใช้งาน เวอร์ชัน', excel.Version); excel.Quit()"
-    if errorlevel 1 (
-        echo Excel COM ยังไม่พร้อมใช้งานหรือไม่มี Microsoft Excel
-        echo โปรแกรมยังเปิดได้ และจะใช้โหมดสำรองเมื่อจำเป็น
-    )
-
-    echo.
-    echo ติดตั้งครั้งแรกเสร็จแล้ว
-)
-
-if not exist ".venv\Scripts\activate.bat" (
-    echo.
-    echo พบ .venv แต่ไม่พบไฟล์เปิดใช้งาน
-    echo กรุณาลบโฟลเดอร์ .venv แล้วเปิดไฟล์นี้ใหม่อีกครั้ง
-    echo.
-    pause
-    exit /b 1
-)
-
-call ".venv\Scripts\activate.bat"
-if errorlevel 1 (
-    echo.
-    echo เปิดใช้งาน .venv ไม่สำเร็จ
-    pause
-    exit /b 1
+    echo pywin32 installed.
 )
 
 echo.
-echo กำลังเปิด TMC Processor ...
-echo หน้าต่างเว็บเบราว์เซอร์จะเปิดขึ้นอัตโนมัติ
-echo หากต้องการปิดโปรแกรม ให้กลับมาที่หน้าต่างนี้แล้วกด Ctrl+C
-echo.
-
-python -m streamlit run app.py
+echo Optional Excel COM check ...
+".venv\Scripts\python.exe" -c "import win32com.client as client; excel = client.Dispatch('Excel.Application'); print('Excel COM available. Excel version:', excel.Version); excel.Quit()"
 if errorlevel 1 (
     echo.
-    echo เปิดโปรแกรมไม่สำเร็จ
-    pause
-    exit /b 1
+    echo Warning: Excel COM is not available on this machine.
+    echo The app can still run using Safe PNG Export Mode.
 )
+
+echo.
+echo First-time setup complete.
+echo.
+
+:RUN_APP
+if not exist ".venv\Scripts\python.exe" (
+    echo.
+    echo .venv\Scripts\python.exe was not found.
+    echo Delete the .venv folder and run this file again.
+    goto ERROR_END
+)
+
+echo Starting TMC Processor ...
+echo A browser window should open automatically.
+echo To stop the app, return to this window and press Ctrl+C.
+echo.
+
+".venv\Scripts\python.exe" -m streamlit run app.py
+if errorlevel 1 (
+    echo.
+    echo TMC Processor could not be started.
+    goto ERROR_END
+)
+
+exit /b 0
+
+:FIND_PYTHON
+where python >nul 2>nul
+if not errorlevel 1 (
+    set "PYTHON_CMD=python"
+    exit /b 0
+)
+
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "PYTHON_CMD=py -3"
+    exit /b 0
+)
+
+echo Python was not found.
+echo Please install Python 3.10 or newer, then run this file again.
+echo Download Python from: https://www.python.org/downloads/windows/
+echo Important: during installation, select "Add python.exe to PATH".
+exit /b 1
+
+:ERROR_END
+echo.
+echo Setup/startup stopped because of the error above.
+echo.
+pause
+exit /b 1
