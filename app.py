@@ -1343,14 +1343,33 @@ def _run_streamlit_app() -> None:
 
     excel_com_status = _probe_excel_com_for_ui()
 
+    st.session_state.setdefault("work_mode", "ประมวลผลไฟล์เดียว")
+    work_mode_options = ["ประมวลผลไฟล์เดียว", "ประมวลผลหลายไฟล์"]
+    if st.session_state.get("work_mode") not in work_mode_options:
+        st.session_state["work_mode"] = "ประมวลผลไฟล์เดียว"
+    is_single_file_mode = st.session_state["work_mode"] == "ประมวลผลไฟล์เดียว"
+    uploaded_file = None
+
     with st.sidebar:
-        st.header("Single-file controls")
-        st.caption("Batch controls are self-contained inside the Batch tab. This upload is only for the single-file workflow.")
-        uploaded_file = st.file_uploader(
-            "อัปโหลดไฟล์ TMC Excel",
-            type=["xlsx", "xlsm", "xls"],
-            key="raw_tmc_upload",
+        st.header("โหมดการทำงาน")
+        work_mode = st.radio(
+            "เลือกโหมดการทำงาน",
+            options=work_mode_options,
+            key="work_mode",
+            label_visibility="collapsed",
         )
+        is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
+        if is_single_file_mode:
+            st.caption("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
+            st.divider()
+            st.subheader("ไฟล์เดี่ยว")
+            uploaded_file = st.file_uploader(
+                "อัปโหลดไฟล์ TMC Excel",
+                type=["xlsx", "xlsm", "xls"],
+                key="raw_tmc_upload",
+            )
+        else:
+            st.caption("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
 
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
@@ -1405,33 +1424,37 @@ def _run_streamlit_app() -> None:
     _ensure_pce_factor_state()
 
     with st.sidebar:
-        _render_project_session_section(
-            uploaded_file.name if uploaded_file is not None else None,
-            len(file_bytes) if uploaded_file is not None else None,
-            compact=True,
-        )
-        st.divider()
-        st.subheader("Single-file export mode")
-        if excel_com_status.available:
-            export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
-            if st.session_state.get("report_export_mode_radio") not in export_mode_options:
-                if st.session_state.get("use_excel_com_native_charts_checkbox", True):
-                    st.session_state["report_export_mode_radio"] = EXCEL_TEMPLATE_EXPORT_MODE
-                else:
-                    st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
+        if is_single_file_mode:
+            _render_project_session_section(
+                uploaded_file.name if uploaded_file is not None else None,
+                len(file_bytes) if uploaded_file is not None else None,
+                compact=True,
+            )
+            st.divider()
+            st.subheader("โหมดส่งออกไฟล์เดี่ยว")
+            if excel_com_status.available:
+                export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
+                if st.session_state.get("report_export_mode_radio") not in export_mode_options:
+                    if st.session_state.get("use_excel_com_native_charts_checkbox", True):
+                        st.session_state["report_export_mode_radio"] = EXCEL_TEMPLATE_EXPORT_MODE
+                    else:
+                        st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
+            else:
+                export_mode_options = [SAFE_PNG_EXPORT_MODE]
+                st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
+
+            export_mode = st.radio("โหมดส่งออกรายงาน", options=export_mode_options, key="report_export_mode_radio")
+            use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
+            st.session_state["use_excel_com_native_charts_checkbox"] = use_excel_com_native_charts
+            st.caption(
+                "ใช้ Excel Template เมื่อ COM พร้อมใช้งาน"
+                if use_excel_com_native_charts
+                else "โหมดสำรองใช้กราฟ PNG แบบคงที่"
+            )
+            st.divider()
         else:
-            export_mode_options = [SAFE_PNG_EXPORT_MODE]
-            st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
-
-        export_mode = st.radio("โหมดส่งออกรายงาน", options=export_mode_options, key="report_export_mode_radio")
-        use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
-        st.session_state["use_excel_com_native_charts_checkbox"] = use_excel_com_native_charts
-        st.caption(
-            "ใช้ Excel Template เมื่อ COM พร้อมใช้งาน"
-            if use_excel_com_native_charts
-            else "โหมดสำรองใช้กราฟ PNG แบบคงที่"
-        )
-
+            export_mode = st.session_state.get("report_export_mode_radio", SAFE_PNG_EXPORT_MODE)
+            use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
         st.divider()
         st.subheader("Excel Engine")
         previous_excel_com_available = bool(excel_com_status.available)
@@ -1463,11 +1486,15 @@ def _run_streamlit_app() -> None:
         """,
         unsafe_allow_html=True,
     )
-    _render_status_cards(
-        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-        excel_com_status=excel_com_status,
-        export_mode=export_mode,
-    )
+    if is_single_file_mode:
+        st.info("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
+        _render_status_cards(
+            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+            excel_com_status=excel_com_status,
+            export_mode=export_mode,
+        )
+    else:
+        st.info("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
 
     detected_sheet_names: list[str] = []
     preview_summary = pd.DataFrame()
@@ -1486,11 +1513,15 @@ def _run_streamlit_app() -> None:
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
 
-    setup_tab, mapping_tab, batch_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
-        ["ตั้งค่า", "กำหนดทิศทาง", "ประมวลผลหลายไฟล์", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
-    )
+    if is_single_file_mode:
+        setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
+            ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
+        )
+    else:
+        batch_tab = st.container()
 
-    with setup_tab:
+    if is_single_file_mode:
+      with setup_tab:
         st.header("ตั้งค่างาน")
         with st.container(border=True):
             _render_section_header("ข้อมูลรายงาน", "ข้อมูลหลักที่จะใช้ในหน้าแรกของรายงาน")
@@ -1538,6 +1569,32 @@ def _run_streamlit_app() -> None:
 
         selected_pce_factors = _render_pce_factor_editor()
 
+    if not is_single_file_mode:
+        project_name = st.session_state.get("project_name_input", "")
+        tmc_id = st.session_state.get("tmc_id_input", "")
+        tmc_title = st.session_state.get("tmc_title_input", "")
+        survey_point = st.session_state.get("survey_point_input", "")
+        survey_date_text = st.session_state.get("survey_date_text_input", "")
+        weather = st.session_state.get("weather_input", DEFAULT_WEATHER)
+        responsible_party = st.session_state.get("responsible_party_input", DEFAULT_RESPONSIBLE_PARTY)
+        survey_period = st.session_state.get("survey_period_input", DEFAULT_SURVEY_PERIOD)
+        north_label = st.session_state.get("north_label_input", "")
+        south_label = st.session_state.get("south_label_input", "")
+        east_label = st.session_state.get("east_label_input", "")
+        west_label = st.session_state.get("west_label_input", "")
+        north_road = st.session_state.get("north_road_input", "")
+        south_road = st.session_state.get("south_road_input", "")
+        east_road = st.session_state.get("east_road_input", "")
+        west_road = st.session_state.get("west_road_input", "")
+        caption_text = st.session_state.get("caption_text_input", DEFAULT_CAPTION_TEXT)
+        peak_mode = st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE)
+        am_peak_window_start = st.session_state.get("am_peak_window_start_input", _time_from_text(AM_WINDOW[0]))
+        am_peak_window_end = st.session_state.get("am_peak_window_end_input", _time_from_text(AM_WINDOW[1]))
+        pm_peak_window_start = st.session_state.get("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0]))
+        pm_peak_window_end = st.session_state.get("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1]))
+        show_u_turn = st.session_state.get("show_u_turn_checkbox", True)
+        selected_pce_factors = _current_pce_factors_from_state()
+
     setup = _setup_from_inputs(
         project_name=project_name,
         tmc_id=tmc_id,
@@ -1570,555 +1627,581 @@ def _run_streamlit_app() -> None:
     }
     mapping = pd.DataFrame(st.session_state.get("mapping_table") or [])
 
-    with mapping_tab:
-        st.header("กำหนดทิศทาง")
-        if uploaded_file is None:
-            _render_empty_state(
-                "ยังไม่มีไฟล์สำรวจ",
-                "อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ",
-            )
-        elif not detected_sheet_names:
-            st.warning('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"')
-        else:
-            st.markdown("#### Sheet ทิศทางที่ตรวจพบ")
-            st.dataframe(preview_summary, width="stretch")
-            _render_section_header(
-                "ตารางกำหนดทิศทาง",
-                "ตรวจสอบ Sheet สำรวจและกำหนด movement สำหรับรายงาน",
-            )
-            st.caption("หลายแถวสามารถ map ไปยัง movement เดียวกันได้ เช่น ทางหลักตรง + ทางคู่ขนานตรง → NS")
-            default_mapping = default_mapping_for_sheets(detected_sheet_names)
-            if st.session_state.get("mapping_table") is not None:
-                default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
-
-            st.markdown("#### นำเข้า/ส่งออก Mapping")
-            mapping_excel_col, mapping_preset_col = st.columns(2)
-            with mapping_excel_col:
-                st.markdown("**Mapping Excel**")
-                st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
-                mapping_upload = st.file_uploader(
-                    "โหลดไฟล์ Mapping Excel",
-                    type=["xlsx", "xlsm", "xls"],
-                    key="mapping_upload",
-                )
-                _render_download_button(
-                    "ดาวน์โหลดเทมเพลต Mapping",
-                    mapping_to_excel_bytes(default_mapping),
-                    "tmc_mapping_template.xlsx",
-                    EXCEL_MIME,
-                )
-            if mapping_upload is not None:
-                try:
-                    mapping_upload_bytes = mapping_upload.getvalue()
-                    mapping_upload_identity = (mapping_upload.name, hashlib.sha256(mapping_upload_bytes).hexdigest())
-                    if st.session_state.get("tmc_mapping_upload_identity") != mapping_upload_identity:
-                        default_mapping = apply_saved_mapping_to_sheets(
-                            detected_sheet_names,
-                            read_mapping_excel(BytesIO(mapping_upload_bytes)),
-                        )
-                        st.session_state["mapping_table"] = default_mapping.to_dict("records")
-                        st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
-                        st.session_state["tmc_mapping_table_from_session"] = False
-                        st.session_state["tmc_mapping_upload_identity"] = mapping_upload_identity
-                        st.success("โหลด Mapping และปรับใช้กับ Sheet ที่ตรวจพบแล้ว")
-                except Exception as exc:  # pragma: no cover - UI guardrail
-                    st.error(f"ไม่สามารถโหลดไฟล์ Mapping ได้: {exc}")
-
-            preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
-            preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
-            preset_bytes = serialize_mapping_preset(
-                build_mapping_preset(
-                    preset_source,
-                    preset_name=str(preset_name_seed or "TMC Mapping Preset"),
-                )
-            )
-            st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
-            st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
-            with mapping_preset_col:
-                st.markdown("**Mapping Preset**")
-                st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
-                mapping_preset_upload = st.file_uploader(
-                    "เปิด Mapping Preset",
-                    type=["json"],
-                    key="mapping_preset_upload",
-                )
-                st.download_button(
-                    "ดาวน์โหลด Mapping Preset",
-                    data=download_buffer(preset_bytes),
-                    file_name=st.session_state["tmc_mapping_preset_filename"],
-                    mime=MAPPING_PRESET_MIME,
-                    key="download_mapping_preset",
-                )
-            if mapping_preset_upload is not None:
-                try:
-                    preset_upload_bytes = mapping_preset_upload.getvalue()
-                    preset_upload_identity = (
-                        mapping_preset_upload.name,
-                        hashlib.sha256(preset_upload_bytes).hexdigest(),
-                    )
-                    if st.session_state.get("tmc_mapping_preset_upload_identity") != preset_upload_identity:
-                        loaded_preset = load_mapping_preset(preset_upload_bytes)
-                        apply_result = apply_mapping_preset_to_detected_sheets(loaded_preset, detected_sheet_names)
-                        default_mapping = apply_result.mapping
-                        st.session_state["mapping_table"] = default_mapping.to_dict("records")
-                        st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
-                        st.session_state["tmc_mapping_table_from_session"] = False
-                        st.session_state["tmc_mapping_preset_upload_identity"] = preset_upload_identity
-                        st.session_state["tmc_mapping_preset_apply_info"] = {
-                            "matched": apply_result.matched_sheet_count,
-                            "missing": apply_result.missing_detected_sheet_count,
-                            "extra": apply_result.extra_preset_row_count,
-                        }
-                        st.session_state["tmc_mapping_preset_warnings"] = list(loaded_preset.warnings)
-                except (MappingPresetError, ValueError) as exc:
-                    st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
-            preset_info = st.session_state.get("tmc_mapping_preset_apply_info")
-            if preset_info:
-                st.success("โหลด Mapping Preset สำเร็จ")
-                st.info(
-                    f"{preset_info.get('matched', 0)} sheets matched; "
-                    f"{preset_info.get('missing', 0)} detected sheets still need review; "
-                    f"{preset_info.get('extra', 0)} preset rows were not found in current workbook."
-                )
-            for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
-                st.warning(warning_message)
-
-            mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
-            for warning_message in mapping_control_warnings(default_mapping):
-                st.warning(_thai_mapping_control_warning(warning_message))
-            movement_code_options = selectbox_options_with_existing_values(
-                ["", *MOVEMENT_CODE_OPTIONS],
-                default_mapping["movement_code"] if "movement_code" in default_mapping else None,
-            )
-            mapping_view = st.radio(
-                "มุมมองตาราง Mapping",
-                options=["Basic", "Advanced"],
-                horizontal=True,
-                key="mapping_editor_view_mode",
-                help="Basic แสดงคอลัมน์ที่ใช้บ่อย ส่วน Advanced แสดงคอลัมน์เสริมและเชิงเทคนิค",
-            )
-            mapping = st.data_editor(
-                _mapping_editor_frame(default_mapping, mapping_view),
-                width="stretch",
-                num_rows="dynamic",
-                column_config={
-                    "raw_sheet": st.column_config.TextColumn("Sheet ต้นทาง", disabled=True),
-                    "raw_direction": st.column_config.TextColumn("ทิศทางต้นทาง", disabled=True),
-                    "movement_code": st.column_config.SelectboxColumn(
-                        "movement_code สำหรับรายงาน",
-                        options=movement_code_options,
-                        required=True,
-                    ),
-                    "from_leg": st.column_config.SelectboxColumn("from_leg", options=["", *LEG_OPTIONS], required=True),
-                    "to_leg": st.column_config.SelectboxColumn("to_leg", options=["", *LEG_OPTIONS], required=True),
-                    "turn_type": st.column_config.SelectboxColumn("turn_type", options=["", *TURN_TYPE_OPTIONS], required=True),
-                    "facility_type": st.column_config.SelectboxColumn(
-                        "facility_type",
-                        options=["", *FACILITY_TYPE_OPTIONS],
-                        required=True,
-                        default="at_grade",
-                    ),
-                    "source_stream": st.column_config.SelectboxColumn(
-                        "source_stream",
-                        options=SOURCE_STREAM_OPTIONS,
-                        required=False,
-                        default="mainline",
-                    ),
-                    "raw_movement_label": st.column_config.TextColumn("ป้าย movement ต้นทาง", required=False),
-                    "include_in_peak": st.column_config.CheckboxColumn("ใช้คำนวณ Peak", default=True),
-                    "include_in_report": st.column_config.CheckboxColumn("แสดงในรายงาน", default=True),
-                    "aggregation_method": st.column_config.SelectboxColumn(
-                        "aggregation_method",
-                        options=AGGREGATION_METHOD_OPTIONS,
-                        required=False,
-                        default="sum",
-                    ),
-                },
-                key=f"mapping_editor_{mapping_view.lower()}_{mapping_editor_version}",
-            )
-            mapping = _merge_mapping_editor_result(default_mapping, pd.DataFrame(mapping))
-            st.session_state["mapping_table"] = mapping.to_dict("records")
-            st.session_state["tmc_mapping_table_from_session"] = False
-
-            st.markdown("#### ตรวจสอบการรวม movement")
-            for aggregation_message in movement_aggregation_messages(mapping):
-                st.info(_thai_aggregation_message(aggregation_message))
-
-            mapping_issues = validate_mapping_for_processing(detected_sheet_names, mapping)
-            if mapping_issues.empty:
-                st.success("การกำหนดทิศทางพร้อมสำหรับประมวลผล")
-            else:
-                st.warning("กรุณาตรวจสอบ Mapping ก่อนประมวลผล")
-                st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
-
-            run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty)
-            if run:
-                try:
-                    raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                    result = process_tmc(
-                        raw_sheets=raw_sheets,
-                        mapping=mapping,
-                        setup=setup,
-                        detected_sheets=detected_sheet_names,
-                        peak_mode=peak_mode,
-                        peak_windows=peak_windows,
-                        pce_factors=selected_pce_factors,
-                        generate_workbook=False,
-                    )
-                except Exception as exc:  # pragma: no cover - UI guardrail
-                    st.error(f"ประมวลผลไม่สำเร็จ: {exc}")
-                else:
-                    st.session_state["tmc_processed"] = {
-                        "result": result,
-                        "mapping": mapping,
-                        "setup": setup,
-                        "peak_windows": peak_windows,
-                        "pce_factors": selected_pce_factors,
-                    }
-                    st.session_state.pop("tmc_output", None)
-                    st.session_state.pop("tmc_pce_results_stale", None)
-                    st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
-
-    with batch_tab:
-        st.header("ประมวลผลหลายไฟล์")
-
-        with st.container(border=True):
-            _render_section_header(
-                "Step 1: ขอบเขต Batch",
-                "Batch v1 เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
-            )
-            _render_readiness_checklist(
-                [
-                    ("ใช้ Mapping Preset เดียวกัน", True, "ทุกไฟล์ในชุด Batch ใช้ mapping ชุดเดียว"),
-                    ("ใช้ค่า PCE ชุดเดียวกัน", True, "อ้างอิงค่า PCE จากแท็บตั้งค่า"),
-                    ("ตรวจ Peak แยกแต่ละไฟล์ก่อนส่งออก", True, "ยืนยัน AM/PM ต่อไฟล์หลังวิเคราะห์"),
-                    ("ไม่รวมไฟล์ raw Excel ใน ZIP", True, "ZIP มีเฉพาะรายงาน สรุป Session Preset และ charts"),
-                ]
-            )
-
-        with st.container(border=True):
-            _render_section_header("Step 2: ข้อมูลนำเข้า", "เตรียมไฟล์สำรวจและ Mapping Preset เดียวสำหรับทั้งชุด")
-            input_cols = st.columns(2)
-            with input_cols[0]:
-                batch_uploads = st.file_uploader(
-                    "Upload multiple TMC Excel files",
-                    type=["xlsx", "xlsm", "xls"],
-                    accept_multiple_files=True,
-                    key="batch_raw_tmc_uploads",
-                    help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
-                )
-            with input_cols[1]:
-                batch_preset_upload = st.file_uploader(
-                    "Load Mapping Preset for all files",
-                    type=["json"],
-                    key="batch_mapping_preset_upload",
-                    help="Batch v1 ใช้ Mapping Preset เดียวกันกับทุกไฟล์ ไม่รองรับการเลือก Mapping แยกต่อไฟล์",
-                )
-                use_current_mapping_for_batch = False
-                if st.session_state.get("mapping_table"):
-                    use_current_mapping_for_batch = st.checkbox(
-                        "ใช้ Mapping จากแท็บกำหนดทิศทางปัจจุบันแทนไฟล์ Preset",
-                        key="batch_use_current_mapping",
-                    )
-
-            loaded_batch_preset = None
-            batch_preset_name = ""
-            if batch_preset_upload is not None and not use_current_mapping_for_batch:
-                try:
-                    loaded = load_mapping_preset(batch_preset_upload.getvalue())
-                    loaded_batch_preset = loaded.preset
-                    batch_preset_name = loaded.preset.get("preset_name", batch_preset_upload.name)
-                    for warning_message in loaded.warnings:
-                        st.warning(warning_message)
-                except (MappingPresetError, ValueError) as exc:
-                    st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
-
-            batch_mapping = None
-            if use_current_mapping_for_batch and st.session_state.get("mapping_table"):
-                batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
-                batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
-
-            st.markdown("#### Batch export mode")
-            batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
-            if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
-                st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
-            batch_export_mode = st.radio(
-                "Batch export mode",
-                options=batch_export_options,
-                key="tmc_batch_export_mode",
-                help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
-            )
-            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                st.success("Excel Template Mode selected for Batch. Native Excel chart export will be attempted per file.")
-            else:
-                st.warning("Safe PNG Export Mode selected for Batch. Reports will use static PNG charts.")
-            if not excel_com_status.available:
-                st.warning(f"Excel COM is unavailable, so Batch Excel Template Mode is disabled. Reason: {excel_com_status.reason}")
-
-            uploaded_ready = bool(batch_uploads)
-            mapping_ready = batch_mapping is not None or loaded_batch_preset is not None
-            pce_ready = bool(selected_pce_factors)
-            batch_ready = batch_inputs_ready(
-                uploaded_workbook_count=len(batch_uploads or []),
-                mapping_available=mapping_ready,
-                pce_factors_ready=pce_ready,
-            )
-            _render_readiness_checklist(
-                [
-                    (
-                        "uploaded workbooks",
-                        uploaded_ready,
-                        f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel",
-                    ),
-                    (
-                        "mapping preset/current mapping ready",
-                        mapping_ready,
-                        "พร้อมใช้" if mapping_ready else "โหลด Mapping Preset หรือใช้ Mapping ปัจจุบัน",
-                    ),
-                    (
-                        "PCE factors ready",
-                        pce_ready,
-                        "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า",
-                    ),
-                ]
-            )
-
-        with st.container(border=True):
-            _render_section_header("Step 3: วิเคราะห์และตรวจ Peak", "วิเคราะห์ทุกไฟล์ แล้วตรวจ AM/PM peak ที่จะใช้สร้างรายงาน")
-            if not batch_ready:
+    if is_single_file_mode:
+        with mapping_tab:
+            st.header("กำหนดทิศทาง")
+            if uploaded_file is None:
                 _render_empty_state(
-                    "ยังไม่พร้อมวิเคราะห์ Batch",
-                    "อัปโหลด workbooks และโหลด Mapping Preset หรือใช้ Mapping ปัจจุบันก่อนเริ่มวิเคราะห์",
+                    "ยังไม่มีไฟล์สำรวจ",
+                    "อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ",
                 )
-            analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
-            if analyze_batch:
-                items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
-                with st.spinner("กำลังวิเคราะห์ Batch..."):
-                    batch_analysis = analyze_batch_files(
-                        items,
-                        mapping=batch_mapping,
-                        mapping_preset=loaded_batch_preset,
-                        setup=setup,
-                        pce_factors=selected_pce_factors,
-                        peak_mode=peak_mode,
-                        peak_windows=peak_windows,
-                        mapping_preset_name=batch_preset_name,
+            elif not detected_sheet_names:
+                st.warning('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"')
+            else:
+                st.markdown("#### Sheet ทิศทางที่ตรวจพบ")
+                st.dataframe(preview_summary, width="stretch")
+                _render_section_header(
+                    "ตารางกำหนดทิศทาง",
+                    "ตรวจสอบ Sheet สำรวจและกำหนด movement สำหรับรายงาน",
+                )
+                st.caption("หลายแถวสามารถ map ไปยัง movement เดียวกันได้ เช่น ทางหลักตรง + ทางคู่ขนานตรง → NS")
+                default_mapping = default_mapping_for_sheets(detected_sheet_names)
+                if st.session_state.get("mapping_table") is not None:
+                    default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
+    
+                st.markdown("#### นำเข้า/ส่งออก Mapping")
+                mapping_excel_col, mapping_preset_col = st.columns(2)
+                with mapping_excel_col:
+                    st.markdown("**Mapping Excel**")
+                    st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
+                    mapping_upload = st.file_uploader(
+                        "โหลดไฟล์ Mapping Excel",
+                        type=["xlsx", "xlsm", "xls"],
+                        key="mapping_upload",
                     )
-                st.session_state["tmc_batch_analysis"] = batch_analysis
-                st.session_state["tmc_batch_preset_name"] = batch_preset_name
-                st.session_state.pop("tmc_batch_result", None)
-                st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
-                st.session_state["tmc_batch_confirmed_peaks"] = {
-                    analyzed_item.folder_name: {
-                        "AM": analyzed_item.confirmed_AM_peak,
-                        "PM": analyzed_item.confirmed_PM_peak,
-                    }
-                    for analyzed_item in batch_analysis.successful_items
-                }
-                st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
-
-            batch_analysis = st.session_state.get("tmc_batch_analysis")
-            if batch_analysis:
-                st.info("ระบบจะใช้ช่วงเร่งด่วนที่ยืนยันในตารางนี้สำหรับการสร้างรายงาน Batch")
-                batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
-                batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
-                review_header = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
-                for column, label in zip(
-                    review_header,
-                    ["file_name", "status", "AM suggested", "PM suggested", "AM confirmed", "PM confirmed", "QC errors", "QC warnings", "QC info", "notes"],
-                ):
-                    column.markdown(f"**{label}**")
-                for analyzed_item in batch_analysis.items:
-                    row_cols = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
-                    row_cols[0].write(analyzed_item.file_name)
-                    row_cols[1].write("สำเร็จ" if analyzed_item.status == "success" else "ไม่สำเร็จ")
-                    row_cols[2].write(analyzed_item.suggested_AM_peak or "-")
-                    row_cols[3].write(analyzed_item.suggested_PM_peak or "-")
-                    if analyzed_item.status == "success":
-                        options = analyzed_item.hourly_period_options or [
-                            value
-                            for value in [analyzed_item.suggested_AM_peak, analyzed_item.suggested_PM_peak]
-                            if value
-                        ]
-                        stored_peaks = batch_confirmed_peaks.setdefault(
-                            analyzed_item.folder_name,
-                            {"AM": analyzed_item.confirmed_AM_peak, "PM": analyzed_item.confirmed_PM_peak},
+                    _render_download_button(
+                        "ดาวน์โหลดเทมเพลต Mapping",
+                        mapping_to_excel_bytes(default_mapping),
+                        "tmc_mapping_template.xlsx",
+                        EXCEL_MIME,
+                    )
+                if mapping_upload is not None:
+                    try:
+                        mapping_upload_bytes = mapping_upload.getvalue()
+                        mapping_upload_identity = (mapping_upload.name, hashlib.sha256(mapping_upload_bytes).hexdigest())
+                        if st.session_state.get("tmc_mapping_upload_identity") != mapping_upload_identity:
+                            default_mapping = apply_saved_mapping_to_sheets(
+                                detected_sheet_names,
+                                read_mapping_excel(BytesIO(mapping_upload_bytes)),
+                            )
+                            st.session_state["mapping_table"] = default_mapping.to_dict("records")
+                            st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
+                            st.session_state["tmc_mapping_table_from_session"] = False
+                            st.session_state["tmc_mapping_upload_identity"] = mapping_upload_identity
+                            st.success("โหลด Mapping และปรับใช้กับ Sheet ที่ตรวจพบแล้ว")
+                    except Exception as exc:  # pragma: no cover - UI guardrail
+                        st.error(f"ไม่สามารถโหลดไฟล์ Mapping ได้: {exc}")
+    
+                preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
+                preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
+                preset_bytes = serialize_mapping_preset(
+                    build_mapping_preset(
+                        preset_source,
+                        preset_name=str(preset_name_seed or "TMC Mapping Preset"),
+                    )
+                )
+                st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
+                st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
+                with mapping_preset_col:
+                    st.markdown("**Mapping Preset**")
+                    st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
+                    mapping_preset_upload = st.file_uploader(
+                        "เปิด Mapping Preset",
+                        type=["json"],
+                        key="mapping_preset_upload",
+                    )
+                    st.download_button(
+                        "ดาวน์โหลด Mapping Preset",
+                        data=download_buffer(preset_bytes),
+                        file_name=st.session_state["tmc_mapping_preset_filename"],
+                        mime=MAPPING_PRESET_MIME,
+                        key="download_mapping_preset",
+                    )
+                if mapping_preset_upload is not None:
+                    try:
+                        preset_upload_bytes = mapping_preset_upload.getvalue()
+                        preset_upload_identity = (
+                            mapping_preset_upload.name,
+                            hashlib.sha256(preset_upload_bytes).hexdigest(),
                         )
-                        am_default = stored_peaks.get("AM") or analyzed_item.confirmed_AM_peak
-                        pm_default = stored_peaks.get("PM") or analyzed_item.confirmed_PM_peak
-                        if am_default and am_default not in options:
-                            options = [am_default, *options]
-                        if pm_default and pm_default not in options:
-                            options = [pm_default, *options]
-                        options = list(dict.fromkeys(options))
-                        if options:
-                            selected_am = row_cols[4].selectbox(
-                                "AM confirmed",
-                                options=options,
-                                index=options.index(am_default) if am_default in options else 0,
-                                key=f"batch_peak_am_{batch_review_version}_{analyzed_item.folder_name}",
-                                label_visibility="collapsed",
+                        if st.session_state.get("tmc_mapping_preset_upload_identity") != preset_upload_identity:
+                            loaded_preset = load_mapping_preset(preset_upload_bytes)
+                            apply_result = apply_mapping_preset_to_detected_sheets(loaded_preset, detected_sheet_names)
+                            default_mapping = apply_result.mapping
+                            st.session_state["mapping_table"] = default_mapping.to_dict("records")
+                            st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
+                            st.session_state["tmc_mapping_table_from_session"] = False
+                            st.session_state["tmc_mapping_preset_upload_identity"] = preset_upload_identity
+                            st.session_state["tmc_mapping_preset_apply_info"] = {
+                                "matched": apply_result.matched_sheet_count,
+                                "missing": apply_result.missing_detected_sheet_count,
+                                "extra": apply_result.extra_preset_row_count,
+                            }
+                            st.session_state["tmc_mapping_preset_warnings"] = list(loaded_preset.warnings)
+                    except (MappingPresetError, ValueError) as exc:
+                        st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
+                preset_info = st.session_state.get("tmc_mapping_preset_apply_info")
+                if preset_info:
+                    st.success("โหลด Mapping Preset สำเร็จ")
+                    st.info(
+                        f"{preset_info.get('matched', 0)} sheets matched; "
+                        f"{preset_info.get('missing', 0)} detected sheets still need review; "
+                        f"{preset_info.get('extra', 0)} preset rows were not found in current workbook."
+                    )
+                for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
+                    st.warning(warning_message)
+
+                mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
+                for warning_message in mapping_control_warnings(default_mapping):
+                    st.warning(_thai_mapping_control_warning(warning_message))
+                movement_code_options = selectbox_options_with_existing_values(
+                    ["", *MOVEMENT_CODE_OPTIONS],
+                    default_mapping["movement_code"] if "movement_code" in default_mapping else None,
+                )
+                mapping_view = st.radio(
+                    "มุมมองตาราง Mapping",
+                    options=["Basic", "Advanced"],
+                    horizontal=True,
+                    key="mapping_editor_view_mode",
+                    help="Basic แสดงคอลัมน์ที่ใช้บ่อย ส่วน Advanced แสดงคอลัมน์เสริมและเชิงเทคนิค",
+                )
+                mapping = st.data_editor(
+                    _mapping_editor_frame(default_mapping, mapping_view),
+                    width="stretch",
+                    num_rows="dynamic",
+                    column_config={
+                        "raw_sheet": st.column_config.TextColumn("Sheet ต้นทาง", disabled=True),
+                        "raw_direction": st.column_config.TextColumn("ทิศทางต้นทาง", disabled=True),
+                        "movement_code": st.column_config.SelectboxColumn(
+                            "movement_code สำหรับรายงาน",
+                            options=movement_code_options,
+                            required=True,
+                        ),
+                        "from_leg": st.column_config.SelectboxColumn("from_leg", options=["", *LEG_OPTIONS], required=True),
+                        "to_leg": st.column_config.SelectboxColumn("to_leg", options=["", *LEG_OPTIONS], required=True),
+                        "turn_type": st.column_config.SelectboxColumn("turn_type", options=["", *TURN_TYPE_OPTIONS], required=True),
+                        "facility_type": st.column_config.SelectboxColumn(
+                            "facility_type",
+                            options=["", *FACILITY_TYPE_OPTIONS],
+                            required=True,
+                            default="at_grade",
+                        ),
+                        "source_stream": st.column_config.SelectboxColumn(
+                            "source_stream",
+                            options=SOURCE_STREAM_OPTIONS,
+                            required=False,
+                            default="mainline",
+                        ),
+                        "raw_movement_label": st.column_config.TextColumn("ป้าย movement ต้นทาง", required=False),
+                        "include_in_peak": st.column_config.CheckboxColumn("ใช้คำนวณ Peak", default=True),
+                        "include_in_report": st.column_config.CheckboxColumn("แสดงในรายงาน", default=True),
+                        "aggregation_method": st.column_config.SelectboxColumn(
+                            "aggregation_method",
+                            options=AGGREGATION_METHOD_OPTIONS,
+                            required=False,
+                            default="sum",
+                        ),
+                    },
+                    key=f"mapping_editor_{mapping_view.lower()}_{mapping_editor_version}",
+                )
+                mapping = _merge_mapping_editor_result(default_mapping, pd.DataFrame(mapping))
+                st.session_state["mapping_table"] = mapping.to_dict("records")
+                st.session_state["tmc_mapping_table_from_session"] = False
+
+                st.markdown("#### ตรวจสอบการรวม movement")
+                for aggregation_message in movement_aggregation_messages(mapping):
+                    st.info(_thai_aggregation_message(aggregation_message))
+    
+                mapping_issues = validate_mapping_for_processing(detected_sheet_names, mapping)
+                if mapping_issues.empty:
+                    st.success("การกำหนดทิศทางพร้อมสำหรับประมวลผล")
+                else:
+                    st.warning("กรุณาตรวจสอบ Mapping ก่อนประมวลผล")
+                    st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
+
+                run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty)
+                if run:
+                    try:
+                        raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
+                        result = process_tmc(
+                            raw_sheets=raw_sheets,
+                            mapping=mapping,
+                            setup=setup,
+                            detected_sheets=detected_sheet_names,
+                            peak_mode=peak_mode,
+                            peak_windows=peak_windows,
+                            pce_factors=selected_pce_factors,
+                            generate_workbook=False,
+                        )
+                    except Exception as exc:  # pragma: no cover - UI guardrail
+                        st.error(f"ประมวลผลไม่สำเร็จ: {exc}")
+                    else:
+                        st.session_state["tmc_processed"] = {
+                            "result": result,
+                            "mapping": mapping,
+                            "setup": setup,
+                            "peak_windows": peak_windows,
+                            "pce_factors": selected_pce_factors,
+                        }
+                        st.session_state.pop("tmc_output", None)
+                        st.session_state.pop("tmc_pce_results_stale", None)
+                        st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
+
+    if not is_single_file_mode:
+        with batch_tab:
+            st.header("ประมวลผลหลายไฟล์")
+
+            with st.container(border=True):
+                _render_section_header(
+                    "Step 1: ขอบเขต Batch",
+                    "Batch v1 เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
+                )
+                _render_readiness_checklist(
+                    [
+                        ("ใช้ Mapping Preset เดียวกัน", True, "ทุกไฟล์ในชุด Batch ใช้ mapping ชุดเดียว"),
+                        ("ใช้ค่า PCE ชุดเดียวกัน", True, "อ้างอิงค่า PCE จากแท็บตั้งค่า"),
+                        ("ตรวจ Peak แยกแต่ละไฟล์ก่อนส่งออก", True, "ยืนยัน AM/PM ต่อไฟล์หลังวิเคราะห์"),
+                        ("ไม่รวมไฟล์ raw Excel ใน ZIP", True, "ZIP มีเฉพาะรายงาน สรุป Session Preset และ charts"),
+                    ]
+                )
+
+            with st.container(border=True):
+                _render_section_header("Step 2: ข้อมูลนำเข้า", "เตรียมไฟล์สำรวจและ Mapping Preset เดียวสำหรับทั้งชุด")
+                input_cols = st.columns(2)
+                with input_cols[0]:
+                    batch_uploads = st.file_uploader(
+                        "Upload multiple TMC Excel files",
+                        type=["xlsx", "xlsm", "xls"],
+                        accept_multiple_files=True,
+                        key="batch_raw_tmc_uploads",
+                        help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
+                    )
+                with input_cols[1]:
+                    batch_preset_upload = st.file_uploader(
+                        "Load Mapping Preset for all files",
+                        type=["json"],
+                        key="batch_mapping_preset_upload",
+                        help="Batch v1 ใช้ Mapping Preset เดียวกันกับทุกไฟล์ ไม่รองรับการเลือก Mapping แยกต่อไฟล์",
+                    )
+                    use_current_mapping_for_batch = False
+                    if st.session_state.get("mapping_table"):
+                        use_current_mapping_for_batch = st.checkbox(
+                            "ใช้ Mapping จากแท็บกำหนดทิศทางปัจจุบันแทนไฟล์ Preset",
+                            key="batch_use_current_mapping",
+                        )
+
+                loaded_batch_preset = None
+                batch_preset_name = ""
+                if batch_preset_upload is not None and not use_current_mapping_for_batch:
+                    try:
+                        loaded = load_mapping_preset(batch_preset_upload.getvalue())
+                        loaded_batch_preset = loaded.preset
+                        batch_preset_name = loaded.preset.get("preset_name", batch_preset_upload.name)
+                        for warning_message in loaded.warnings:
+                            st.warning(warning_message)
+                    except (MappingPresetError, ValueError) as exc:
+                        st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
+
+                batch_mapping = None
+                if use_current_mapping_for_batch and st.session_state.get("mapping_table"):
+                    batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
+                    batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
+
+                st.markdown("#### Batch export mode")
+                batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
+                if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
+                    st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
+                batch_export_mode = st.radio(
+                    "Batch export mode",
+                    options=batch_export_options,
+                    key="tmc_batch_export_mode",
+                    help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
+                )
+                if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+                    st.success("Excel Template Mode selected for Batch. Native Excel chart export will be attempted per file.")
+                else:
+                    st.warning("Safe PNG Export Mode selected for Batch. Reports will use static PNG charts.")
+                if not excel_com_status.available:
+                    st.warning(f"Excel COM is unavailable, so Batch Excel Template Mode is disabled. Reason: {excel_com_status.reason}")
+
+                uploaded_ready = bool(batch_uploads)
+                mapping_ready = batch_mapping is not None or loaded_batch_preset is not None
+                pce_ready = bool(selected_pce_factors)
+                batch_ready = batch_inputs_ready(
+                    uploaded_workbook_count=len(batch_uploads or []),
+                    mapping_available=mapping_ready,
+                    pce_factors_ready=pce_ready,
+                )
+                _render_readiness_checklist(
+                    [
+                        (
+                            "uploaded workbooks",
+                            uploaded_ready,
+                            f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel",
+                        ),
+                        (
+                            "mapping preset/current mapping ready",
+                            mapping_ready,
+                            "พร้อมใช้" if mapping_ready else "โหลด Mapping Preset หรือใช้ Mapping ปัจจุบัน",
+                        ),
+                        (
+                            "PCE factors ready",
+                            pce_ready,
+                            "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า",
+                        ),
+                    ]
+                )
+
+            with st.container(border=True):
+                _render_section_header("Step 3: วิเคราะห์และตรวจ Peak", "วิเคราะห์ทุกไฟล์ แล้วตรวจ AM/PM peak ที่จะใช้สร้างรายงาน")
+                if not batch_ready:
+                    _render_empty_state(
+                        "ยังไม่พร้อมวิเคราะห์ Batch",
+                        "อัปโหลด workbooks และโหลด Mapping Preset หรือใช้ Mapping ปัจจุบันก่อนเริ่มวิเคราะห์",
+                    )
+                analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
+                if analyze_batch:
+                    items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
+                    with st.spinner("กำลังวิเคราะห์ Batch..."):
+                        batch_analysis = analyze_batch_files(
+                            items,
+                            mapping=batch_mapping,
+                            mapping_preset=loaded_batch_preset,
+                            setup=setup,
+                            pce_factors=selected_pce_factors,
+                            peak_mode=peak_mode,
+                            peak_windows=peak_windows,
+                            mapping_preset_name=batch_preset_name,
+                        )
+                    st.session_state["tmc_batch_analysis"] = batch_analysis
+                    st.session_state["tmc_batch_preset_name"] = batch_preset_name
+                    st.session_state.pop("tmc_batch_result", None)
+                    st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
+                    st.session_state["tmc_batch_confirmed_peaks"] = {
+                        analyzed_item.folder_name: {
+                            "AM": analyzed_item.confirmed_AM_peak,
+                            "PM": analyzed_item.confirmed_PM_peak,
+                        }
+                        for analyzed_item in batch_analysis.successful_items
+                    }
+                    st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
+
+                batch_analysis = st.session_state.get("tmc_batch_analysis")
+                if batch_analysis:
+                    st.info("ระบบจะใช้ช่วงเร่งด่วนที่ยืนยันในตารางนี้สำหรับการสร้างรายงาน Batch")
+                    batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+                    batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
+                    review_header = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
+                    for column, label in zip(
+                        review_header,
+                        ["file_name", "status", "AM suggested", "PM suggested", "AM confirmed", "PM confirmed", "QC errors", "QC warnings", "QC info", "notes"],
+                    ):
+                        column.markdown(f"**{label}**")
+                    for analyzed_item in batch_analysis.items:
+                        row_cols = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
+                        row_cols[0].write(analyzed_item.file_name)
+                        row_cols[1].write("สำเร็จ" if analyzed_item.status == "success" else "ไม่สำเร็จ")
+                        row_cols[2].write(analyzed_item.suggested_AM_peak or "-")
+                        row_cols[3].write(analyzed_item.suggested_PM_peak or "-")
+                        if analyzed_item.status == "success":
+                            options = analyzed_item.hourly_period_options or [
+                                value
+                                for value in [analyzed_item.suggested_AM_peak, analyzed_item.suggested_PM_peak]
+                                if value
+                            ]
+                            stored_peaks = batch_confirmed_peaks.setdefault(
+                                analyzed_item.folder_name,
+                                {"AM": analyzed_item.confirmed_AM_peak, "PM": analyzed_item.confirmed_PM_peak},
                             )
-                            selected_pm = row_cols[5].selectbox(
-                                "PM confirmed",
-                                options=options,
-                                index=options.index(pm_default) if pm_default in options else 0,
-                                key=f"batch_peak_pm_{batch_review_version}_{analyzed_item.folder_name}",
-                                label_visibility="collapsed",
-                            )
-                            batch_confirmed_peaks[analyzed_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
+                            am_default = stored_peaks.get("AM") or analyzed_item.confirmed_AM_peak
+                            pm_default = stored_peaks.get("PM") or analyzed_item.confirmed_PM_peak
+                            if am_default and am_default not in options:
+                                options = [am_default, *options]
+                            if pm_default and pm_default not in options:
+                                options = [pm_default, *options]
+                            options = list(dict.fromkeys(options))
+                            if options:
+                                selected_am = row_cols[4].selectbox(
+                                    "AM confirmed",
+                                    options=options,
+                                    index=options.index(am_default) if am_default in options else 0,
+                                    key=f"batch_peak_am_{batch_review_version}_{analyzed_item.folder_name}",
+                                    label_visibility="collapsed",
+                                )
+                                selected_pm = row_cols[5].selectbox(
+                                    "PM confirmed",
+                                    options=options,
+                                    index=options.index(pm_default) if pm_default in options else 0,
+                                    key=f"batch_peak_pm_{batch_review_version}_{analyzed_item.folder_name}",
+                                    label_visibility="collapsed",
+                                )
+                                batch_confirmed_peaks[analyzed_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
+                            else:
+                                row_cols[4].write("-")
+                                row_cols[5].write("-")
                         else:
                             row_cols[4].write("-")
                             row_cols[5].write("-")
-                    else:
-                        row_cols[4].write("-")
-                        row_cols[5].write("-")
-                    row_cols[6].write(f"{analyzed_item.QC_errors:,}")
-                    row_cols[7].write(f"{analyzed_item.QC_warnings:,}")
-                    row_cols[8].write(f"{analyzed_item.QC_info:,}")
-                    row_cols[9].write(analyzed_item.notes or "")
+                        row_cols[6].write(f"{analyzed_item.QC_errors:,}")
+                        row_cols[7].write(f"{analyzed_item.QC_warnings:,}")
+                        row_cols[8].write(f"{analyzed_item.QC_info:,}")
+                        row_cols[9].write(analyzed_item.notes or "")
 
-                for analyzed_item in batch_analysis.successful_items:
-                    stored_peaks = batch_confirmed_peaks.get(analyzed_item.folder_name, {})
-                    analyzed_item.confirmed_AM_peak = stored_peaks.get("AM", analyzed_item.confirmed_AM_peak)
-                    analyzed_item.confirmed_PM_peak = stored_peaks.get("PM", analyzed_item.confirmed_PM_peak)
+                    for analyzed_item in batch_analysis.successful_items:
+                        stored_peaks = batch_confirmed_peaks.get(analyzed_item.folder_name, {})
+                        analyzed_item.confirmed_AM_peak = stored_peaks.get("AM", analyzed_item.confirmed_AM_peak)
+                        analyzed_item.confirmed_PM_peak = stored_peaks.get("PM", analyzed_item.confirmed_PM_peak)
 
-                successful_items = batch_analysis.successful_items
-                if successful_items:
-                    st.markdown("#### Per-file Peak Review")
-                    review_labels = {f"{item.file_name} ({item.folder_name})": item.folder_name for item in successful_items}
-                    label_by_folder = {folder: label for label, folder in review_labels.items()}
-                    selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
-                    selected_label = label_by_folder.get(selected_folder, next(iter(review_labels)))
-                    selected_review_label = st.selectbox(
-                        "Choose file for Peak Review",
-                        options=list(review_labels),
-                        index=list(review_labels).index(selected_label),
-                        key="tmc_batch_selected_review_label",
-                    )
-                    selected_folder = review_labels[selected_review_label]
-                    st.session_state["tmc_batch_selected_review_file"] = selected_folder
-                    selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
-                    _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
-                    review_peak_cols = st.columns(4)
-                    review_peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
-                    review_peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
-                    option_labels = selected_item.hourly_period_options or [
-                        value for value in [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak] if value
-                    ]
-                    stored_peaks = batch_confirmed_peaks.setdefault(
-                        selected_item.folder_name,
-                        {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak},
-                    )
-                    am_default = stored_peaks.get("AM") or selected_item.confirmed_AM_peak
-                    pm_default = stored_peaks.get("PM") or selected_item.confirmed_PM_peak
-                    for value in [am_default, pm_default]:
-                        if value and value not in option_labels:
-                            option_labels = [value, *option_labels]
-                    option_labels = list(dict.fromkeys(option_labels))
-                    if option_labels:
-                        selected_am = review_peak_cols[2].selectbox(
-                            "Confirmed AM",
-                            options=option_labels,
-                            index=option_labels.index(am_default) if am_default in option_labels else 0,
-                            key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
+                    successful_items = batch_analysis.successful_items
+                    if successful_items:
+                        st.markdown("#### Per-file Peak Review")
+                        review_labels = {f"{item.file_name} ({item.folder_name})": item.folder_name for item in successful_items}
+                        label_by_folder = {folder: label for label, folder in review_labels.items()}
+                        selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
+                        selected_label = label_by_folder.get(selected_folder, next(iter(review_labels)))
+                        selected_review_label = st.selectbox(
+                            "Choose file for Peak Review",
+                            options=list(review_labels),
+                            index=list(review_labels).index(selected_label),
+                            key="tmc_batch_selected_review_label",
                         )
-                        selected_pm = review_peak_cols[3].selectbox(
-                            "Confirmed PM",
-                            options=option_labels,
-                            index=option_labels.index(pm_default) if pm_default in option_labels else 0,
-                            key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
-                        )
-                        batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
-                        selected_item.confirmed_AM_peak = selected_am
-                        selected_item.confirmed_PM_peak = selected_pm
-
-                if batch_analysis.has_failures:
-                    st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้จะอยู่ใน batch_summary.xlsx และไม่ต้องยืนยัน Peak")
-            else:
-                _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กดวิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
-
-        with st.container(border=True):
-            _render_section_header("Step 4: ส่งออก Batch", "สร้าง ZIP หลังตรวจ Peak ของไฟล์ที่วิเคราะห์สำเร็จครบแล้ว")
-            batch_analysis = st.session_state.get("tmc_batch_analysis")
-            batch_result = st.session_state.get("tmc_batch_result")
-            no_successful_files = not batch_analysis or not batch_analysis.successful_items
-            peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
-            if not batch_analysis:
-                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
-            elif no_successful_files:
-                st.warning("ยังไม่มีไฟล์ที่วิเคราะห์สำเร็จ จึงยังสร้าง Batch ZIP ไม่ได้")
-            elif not peaks_ready:
-                st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
-            else:
-                st.code(
-                    "\n".join(
-                        [
-                            "batch_summary.xlsx",
-                            "one folder per processed file/",
-                            "  report.xlsx",
-                            "  export_summary.txt",
-                            "  session.tmcproj.json",
-                            "  mapping_preset.mapping.json",
-                            "  charts/",
+                        selected_folder = review_labels[selected_review_label]
+                        st.session_state["tmc_batch_selected_review_file"] = selected_folder
+                        selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
+                        _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
+                        review_peak_cols = st.columns(4)
+                        review_peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
+                        review_peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
+                        option_labels = selected_item.hourly_period_options or [
+                            value for value in [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak] if value
                         ]
-                    ),
-                    language="text",
-                )
-            generate_batch = st.button(
-                "Generate Batch ZIP",
-                type="primary",
-                disabled=no_successful_files or not peaks_ready,
-                key="generate_batch_zip",
-            )
-            if generate_batch and batch_analysis:
-                with st.spinner("กำลังสร้าง Batch ZIP..."):
-                    batch_result = generate_batch_zip_from_reviewed_peaks(
-                        batch_analysis,
-                        setup=setup,
-                        pce_factors=selected_pce_factors,
-                        peak_mode=peak_mode,
-                        peak_windows=peak_windows,
-                        export_mode=batch_export_mode,
-                        use_template_report_layout=True,
-                        use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
-                    )
-                st.session_state["tmc_batch_result"] = batch_result
-                st.success("สร้าง Batch ZIP เสร็จแล้ว")
+                        stored_peaks = batch_confirmed_peaks.setdefault(
+                            selected_item.folder_name,
+                            {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak},
+                        )
+                        am_default = stored_peaks.get("AM") or selected_item.confirmed_AM_peak
+                        pm_default = stored_peaks.get("PM") or selected_item.confirmed_PM_peak
+                        for value in [am_default, pm_default]:
+                            if value and value not in option_labels:
+                                option_labels = [value, *option_labels]
+                        option_labels = list(dict.fromkeys(option_labels))
+                        if option_labels:
+                            selected_am = review_peak_cols[2].selectbox(
+                                "Confirmed AM",
+                                options=option_labels,
+                                index=option_labels.index(am_default) if am_default in option_labels else 0,
+                                key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            selected_pm = review_peak_cols[3].selectbox(
+                                "Confirmed PM",
+                                options=option_labels,
+                                index=option_labels.index(pm_default) if pm_default in option_labels else 0,
+                                key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
+                            selected_item.confirmed_AM_peak = selected_am
+                            selected_item.confirmed_PM_peak = selected_pm
 
-            if batch_result:
-                batch_table = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
-                display_columns = {
-                    "file_name": "file_name",
-                    "status": "status",
-                    "export_mode_requested": "mode requested",
-                    "export_mode_used": "mode used",
-                    "export_status": "export status",
-                    "suggested_AM_peak": "AM suggested",
-                    "suggested_PM_peak": "PM suggested",
-                    "confirmed_AM_peak": "AM confirmed",
-                    "confirmed_PM_peak": "PM confirmed",
-                    "total_PCU": "total_PCU",
-                    "QC_errors": "QC errors",
-                    "QC_warnings": "QC warnings",
-                    "QC_info": "QC info",
-                    "notes": "notes",
-                }
-                display_table = batch_table[list(display_columns)].rename(columns=display_columns)
-                st.dataframe(display_table, width="stretch")
-                if batch_result.has_failures:
-                    st.warning("บางไฟล์ประมวลผลไม่สำเร็จ กรุณาตรวจสอบ batch_summary.xlsx")
-                with st.expander("ตัวอย่างโครงสร้าง Batch ZIP", expanded=True):
-                    st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
-                    st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
-                st.download_button(
-                    "Download Batch ZIP",
-                    data=download_buffer(batch_result.package_bytes),
-                    file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
-                    mime=BATCH_PACKAGE_MIME,
-                    key="download_batch_zip",
-                    help="ดาวน์โหลด ZIP ที่มี batch_summary.xlsx และผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ",
+                    if batch_analysis.has_failures:
+                        st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้จะอยู่ใน batch_summary.xlsx และไม่ต้องยืนยัน Peak")
+                else:
+                    _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กดวิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
+
+            with st.container(border=True):
+                _render_section_header("Step 4: ส่งออก Batch", "สร้าง ZIP หลังตรวจ Peak ของไฟล์ที่วิเคราะห์สำเร็จครบแล้ว")
+                batch_analysis = st.session_state.get("tmc_batch_analysis")
+                batch_result = st.session_state.get("tmc_batch_result")
+                no_successful_files = not batch_analysis or not batch_analysis.successful_items
+                peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
+                if not batch_analysis:
+                    _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
+                elif no_successful_files:
+                    st.warning("ยังไม่มีไฟล์ที่วิเคราะห์สำเร็จ จึงยังสร้าง Batch ZIP ไม่ได้")
+                elif not peaks_ready:
+                    st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
+                else:
+                    st.code(
+                        "\n".join(
+                            [
+                                "batch_summary.xlsx",
+                                "one folder per processed file/",
+                                "  report.xlsx",
+                                "  export_summary.txt",
+                                "  session.tmcproj.json",
+                                "  mapping_preset.mapping.json",
+                                "  charts/",
+                            ]
+                        ),
+                        language="text",
+                    )
+                generate_batch = st.button(
+                    "Generate Batch ZIP",
+                    type="primary",
+                    disabled=no_successful_files or not peaks_ready,
+                    key="generate_batch_zip",
                 )
+                if generate_batch and batch_analysis:
+                    with st.spinner("กำลังสร้าง Batch ZIP..."):
+                        batch_result = generate_batch_zip_from_reviewed_peaks(
+                            batch_analysis,
+                            setup=setup,
+                            pce_factors=selected_pce_factors,
+                            peak_mode=peak_mode,
+                            peak_windows=peak_windows,
+                            export_mode=batch_export_mode,
+                            use_template_report_layout=True,
+                            use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
+                        )
+                    st.session_state["tmc_batch_result"] = batch_result
+                    st.success("สร้าง Batch ZIP เสร็จแล้ว")
+
+                if batch_result:
+                    batch_table = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
+                    display_columns = {
+                        "file_name": "file_name",
+                        "status": "status",
+                        "export_mode_requested": "mode requested",
+                        "export_mode_used": "mode used",
+                        "export_status": "export status",
+                        "suggested_AM_peak": "AM suggested",
+                        "suggested_PM_peak": "PM suggested",
+                        "confirmed_AM_peak": "AM confirmed",
+                        "confirmed_PM_peak": "PM confirmed",
+                        "total_PCU": "total_PCU",
+                        "QC_errors": "QC errors",
+                        "QC_warnings": "QC warnings",
+                        "QC_info": "QC info",
+                        "notes": "notes",
+                    }
+                    display_table = batch_table[list(display_columns)].rename(columns=display_columns)
+                    st.dataframe(display_table, width="stretch")
+                    if batch_result.has_failures:
+                        st.warning("บางไฟล์ประมวลผลไม่สำเร็จ กรุณาตรวจสอบ batch_summary.xlsx")
+                    with st.expander("ตัวอย่างโครงสร้าง Batch ZIP", expanded=True):
+                        st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
+                        st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
+                    st.download_button(
+                        "Download Batch ZIP",
+                        data=download_buffer(batch_result.package_bytes),
+                        file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
+                        mime=BATCH_PACKAGE_MIME,
+                        key="download_batch_zip",
+                        help="ดาวน์โหลด ZIP ที่มี batch_summary.xlsx และผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ",
+                    )
+
+            with st.container(border=True):
+                _render_section_header("ตรวจสอบข้อมูล Batch", "สรุปสถานะการวิเคราะห์และการส่งออกของชุดไฟล์")
+                batch_analysis = st.session_state.get("tmc_batch_analysis")
+                batch_result = st.session_state.get("tmc_batch_result")
+                if batch_result:
+                    qc_rows = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
+                    qc_columns = ["file_name", "status", "export_status", "QC_errors", "QC_warnings", "QC_info", "notes"]
+                    st.dataframe(qc_rows[[column for column in qc_columns if column in qc_rows.columns]], width="stretch")
+                elif batch_analysis:
+                    analysis_rows = pd.DataFrame(
+                        {
+                            "file_name": item.file_name,
+                            "status": item.status,
+                            "QC_errors": item.QC_errors,
+                            "QC_warnings": item.QC_warnings,
+                            "QC_info": item.QC_info,
+                            "notes": item.notes,
+                        }
+                        for item in batch_analysis.items
+                    )
+                    st.dataframe(analysis_rows, width="stretch")
+                else:
+                    _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
 
     processed = st.session_state.get("tmc_processed")
     pce_results_stale = _processed_pce_results_stale(processed, selected_pce_factors)
@@ -2133,372 +2216,375 @@ def _run_streamlit_app() -> None:
     confirmed_pm_start = st.session_state.get("tmc_confirmed_pm_peak_start", "")
     confirmed_pm_end = st.session_state.get("tmc_confirmed_pm_peak_end", "")
 
-    with dashboard_tab:
-        st.header("ตรวจสอบกราฟและช่วงเร่งด่วน")
-        if pce_results_stale:
-            st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
-        if result is None:
-            _render_empty_state(
-                "ยังไม่มีผลประมวลผล",
-                "ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน",
-            )
-        else:
-            st.markdown("#### สรุปผลการประมวลผล")
-            metric_cols = st.columns(4)
-            metric_cols[0].metric("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}")
-            metric_cols[1].metric("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0")
-            metric_cols[2].metric("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0")
-            metric_cols[3].metric("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}")
-
-            _render_qc_status(result.qc)
-
-            st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
-            _render_hourly_pcu_line_chart(hourly_movement)
-
-            am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
-            pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
-            interval_options = _hourly_interval_options(hourly_movement, result.peaks)
-            if interval_options:
-                option_labels = [label for label, _, _ in interval_options]
-                am_default = f"{am_start}-{am_end}" if am_start and am_end else option_labels[0]
-                pm_default = f"{pm_start}-{pm_end}" if pm_start and pm_end else option_labels[min(1, len(option_labels) - 1)]
-                loaded_confirmed_peaks = st.session_state.get("tmc_loaded_confirmed_peaks") or {}
-                loaded_am_label = f"{loaded_confirmed_peaks.get('am_peak_start', '')}-{loaded_confirmed_peaks.get('am_peak_end', '')}".strip("-")
-                loaded_pm_label = f"{loaded_confirmed_peaks.get('pm_peak_start', '')}-{loaded_confirmed_peaks.get('pm_peak_end', '')}".strip("-")
-                if loaded_am_label in option_labels and "am_peak_period_select" not in st.session_state:
-                    st.session_state["am_peak_period_select"] = loaded_am_label
-                    am_default = loaded_am_label
-                if loaded_pm_label in option_labels and "pm_peak_period_select" not in st.session_state:
-                    st.session_state["pm_peak_period_select"] = loaded_pm_label
-                    pm_default = loaded_pm_label
-                am_index = option_labels.index(am_default) if am_default in option_labels else 0
-                pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
-
-                _render_section_header(
-                    "ยืนยันช่วงเร่งด่วน",
-                    "เปรียบเทียบค่าที่ระบบแนะนำกับช่วงเวลาที่ต้องการใช้ในรายงาน",
+    if is_single_file_mode:
+        with dashboard_tab:
+            st.header("ตรวจสอบกราฟและช่วงเร่งด่วน")
+            if pce_results_stale:
+                st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
+            if result is None:
+                _render_empty_state(
+                    "ยังไม่มีผลประมวลผล",
+                    "ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน",
                 )
-                confirm_cols = st.columns(2)
-                am_peak_label = confirm_cols[0].selectbox("เลือกช่วงเร่งด่วนเช้า", option_labels, index=am_index, key="am_peak_period_select")
-                pm_peak_label = confirm_cols[1].selectbox("เลือกช่วงเร่งด่วนเย็น", option_labels, index=pm_index, key="pm_peak_period_select")
-                confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
-                confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
-                st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
-                st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
-                st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
-                st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
-                st.caption("รายงาน Excel จะใช้ช่วงเร่งด่วนที่ยืนยันในหน้านี้")
-                if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
-                    st.success("ยืนยันช่วงเร่งด่วนแล้ว — พร้อมส่งออก")
-
-                peak_cols = st.columns(4)
-                with peak_cols[0]:
-                    _render_peak_card("ช่วงเร่งด่วนเช้า (แนะนำ)", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
-                with peak_cols[1]:
-                    _render_peak_card("ช่วงเร่งด่วนเย็น (แนะนำ)", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
-                with peak_cols[2]:
-                    confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
-                    _render_peak_card("ช่วงเร่งด่วนเช้า (ยืนยัน)", confirmed_am_label, _interval_total_pcu(hourly_movement, confirmed_am_label), "user_confirmed")
-                with peak_cols[3]:
-                    confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
-                    _render_peak_card("ช่วงเร่งด่วนเย็น (ยืนยัน)", confirmed_pm_label, _interval_total_pcu(hourly_movement, confirmed_pm_label), "user_confirmed")
             else:
-                st.warning("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak")
+                st.markdown("#### สรุปผลการประมวลผล")
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}")
+                metric_cols[1].metric("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0")
+                metric_cols[2].metric("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0")
+                metric_cols[3].metric("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}")
 
-            with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
-                st.dataframe(hourly_movement, width="stretch")
+                _render_qc_status(result.qc)
 
-    with export_tab:
-        st.header("ส่งออกไฟล์")
-        st.markdown("#### โหมดส่งออกรายงาน")
-        if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-            st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
-            st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
-        else:
-            st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
-            st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
+                st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
+                _render_hourly_pcu_line_chart(hourly_movement)
+    
+                am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
+                pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
+                interval_options = _hourly_interval_options(hourly_movement, result.peaks)
+                if interval_options:
+                    option_labels = [label for label, _, _ in interval_options]
+                    am_default = f"{am_start}-{am_end}" if am_start and am_end else option_labels[0]
+                    pm_default = f"{pm_start}-{pm_end}" if pm_start and pm_end else option_labels[min(1, len(option_labels) - 1)]
+                    loaded_confirmed_peaks = st.session_state.get("tmc_loaded_confirmed_peaks") or {}
+                    loaded_am_label = f"{loaded_confirmed_peaks.get('am_peak_start', '')}-{loaded_confirmed_peaks.get('am_peak_end', '')}".strip("-")
+                    loaded_pm_label = f"{loaded_confirmed_peaks.get('pm_peak_start', '')}-{loaded_confirmed_peaks.get('pm_peak_end', '')}".strip("-")
+                    if loaded_am_label in option_labels and "am_peak_period_select" not in st.session_state:
+                        st.session_state["am_peak_period_select"] = loaded_am_label
+                        am_default = loaded_am_label
+                    if loaded_pm_label in option_labels and "pm_peak_period_select" not in st.session_state:
+                        st.session_state["pm_peak_period_select"] = loaded_pm_label
+                        pm_default = loaded_pm_label
+                    am_index = option_labels.index(am_default) if am_default in option_labels else 0
+                    pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
 
-        st.markdown("#### Excel Engine")
-        if excel_com_status.available:
-            version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
-            st.success(f"Excel COM พร้อมใช้งาน — {version_text}")
-        else:
-            st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}")
-        st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
-        with st.expander("รายละเอียด Excel COM", expanded=False):
-            _render_excel_com_status(excel_com_status)
-
-        _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
-        if result is not None:
-            _render_qc_status(result.qc)
-        confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
-        _render_readiness_checklist(
-            [
-                ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
-                ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
-                ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
-                ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
-                (
-                    "Excel COM พร้อมใช้งาน",
-                    bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-                    "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
-                ),
-            ]
-        )
-
-        use_template_report_layout = st.checkbox(
-            "ใช้รูปแบบรายงานจาก Excel Template หากพร้อมใช้งาน",
-            key="use_template_report_layout_checkbox",
-        )
-        st.markdown("#### ดาวน์โหลดไฟล์")
-        if pce_results_stale:
-            st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
-        export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
-        if export_run:
-            excel_com_requested = bool(use_excel_com_native_charts)
-            export_excel_com_status = probe_excel_com() if excel_com_requested else None
-            excel_com_enabled = bool(export_excel_com_status and export_excel_com_status.available)
-            if excel_com_requested and export_excel_com_status is not None and not export_excel_com_status.available:
-                st.warning(
-                    "Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG "
-                    f"สาเหตุ: {export_excel_com_status.reason}. {export_excel_com_status.detail}"
-                )
-
-            confirmed_setup = {
-                **setup,
-                "am_peak_start": confirmed_am_start,
-                "am_peak_end": confirmed_am_end,
-                "pm_peak_start": confirmed_pm_start,
-                "pm_peak_end": confirmed_pm_end,
-                "peak_selection_source": PEAK_SELECTION_USER_CONFIRMED,
-            }
-            confirmed_periods = {
-                "AM": (confirmed_am_start, confirmed_am_end),
-                "PM": (confirmed_pm_start, confirmed_pm_end),
-            }
-            export_generated_at = generated_timestamp_text()
-            try:
-                raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                with warnings.catch_warnings(record=True) as export_warnings:
-                    warnings.simplefilter("always", RuntimeWarning)
-                    confirmed_result = process_tmc(
-                        raw_sheets=raw_sheets,
-                        mapping=mapping_df,
-                        setup=confirmed_setup,
-                        detected_sheets=detected_sheet_names,
-                        peak_mode=peak_mode,
-                        peak_windows=peak_windows,
-                        confirmed_peak_periods=confirmed_periods,
-                        pce_factors=selected_pce_factors,
-                        generate_workbook=True,
-                        use_template_report_layout=use_template_report_layout,
-                        use_excel_com_native_charts=excel_com_enabled,
-                        export_mode=export_mode,
-                        source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
-                        generated_at=export_generated_at,
+                    _render_section_header(
+                        "ยืนยันช่วงเร่งด่วน",
+                        "เปรียบเทียบค่าที่ระบบแนะนำกับช่วงเวลาที่ต้องการใช้ในรายงาน",
                     )
-                for warning in export_warnings:
-                    message = str(warning.message)
-                    if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
-                        st.warning(f"Excel COM ส่งออก Native Chart ไม่สำเร็จ ระบบใช้โหมดสำรองแบบ PNG ({message})")
-                    elif excel_com_requested and "Excel COM unavailable" in message:
-                        st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบใช้โหมดสำรองแบบ PNG ({message})")
-                if not confirmed_result.workbook_bytes:
-                    st.error("ส่งออกเสร็จแล้ว แต่ไฟล์ Excel ที่สร้างไม่มีข้อมูล")
+                    confirm_cols = st.columns(2)
+                    am_peak_label = confirm_cols[0].selectbox("เลือกช่วงเร่งด่วนเช้า", option_labels, index=am_index, key="am_peak_period_select")
+                    pm_peak_label = confirm_cols[1].selectbox("เลือกช่วงเร่งด่วนเย็น", option_labels, index=pm_index, key="pm_peak_period_select")
+                    confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
+                    confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
+                    st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
+                    st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
+                    st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
+                    st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
+                    st.caption("รายงาน Excel จะใช้ช่วงเร่งด่วนที่ยืนยันในหน้านี้")
+                    if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
+                        st.success("ยืนยันช่วงเร่งด่วนแล้ว — พร้อมส่งออก")
+
+                    peak_cols = st.columns(4)
+                    with peak_cols[0]:
+                        _render_peak_card("ช่วงเร่งด่วนเช้า (แนะนำ)", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
+                    with peak_cols[1]:
+                        _render_peak_card("ช่วงเร่งด่วนเย็น (แนะนำ)", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
+                    with peak_cols[2]:
+                        confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
+                        _render_peak_card("ช่วงเร่งด่วนเช้า (ยืนยัน)", confirmed_am_label, _interval_total_pcu(hourly_movement, confirmed_am_label), "user_confirmed")
+                    with peak_cols[3]:
+                        confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
+                        _render_peak_card("ช่วงเร่งด่วนเย็น (ยืนยัน)", confirmed_pm_label, _interval_total_pcu(hourly_movement, confirmed_pm_label), "user_confirmed")
                 else:
-                    confirmed_hourly_movement = hourly_movement_pcu(confirmed_result.normalized, mapping_df)
-                    chart_pngs = report_chart_pngs(
-                        confirmed_hourly_movement,
-                        vehicle_composition_report(confirmed_result.normalized),
-                        setup=confirmed_setup,
-                    )
-                    diagram_png = generate_four_leg_tmc_diagram(
-                        confirmed_hourly_movement,
-                        confirmed_result.peaks,
-                        DiagramConfig(
-                            tmc_id=tmc_id,
-                            tmc_name=tmc_title,
-                            survey_date_text=survey_date_text,
-                            north_label=north_label,
-                            south_label=south_label,
-                            east_label=east_label,
-                            west_label=west_label,
-                            north_road=north_road,
-                            south_road=south_road,
-                            east_road=east_road,
-                            west_road=west_road,
-                            survey_period_text=survey_period,
-                            caption_text=caption_text,
-                            show_u_turn=show_u_turn,
-                        ),
-                    )
-                    st.session_state["tmc_output"] = {
-                        "result": confirmed_result,
-                        "chart_pngs": dict(chart_pngs),
-                        "diagram_png": diagram_png,
-                        "workbook_bytes": confirmed_result.workbook_bytes,
-                        "workbook_filename": safe_workbook_filename(tmc_id),
-                        "confirmed_setup": confirmed_setup,
-                        "export_mode": export_mode,
-                        "generated_at": export_generated_at,
-                    }
-                    st.success("สร้างรายงาน Excel เสร็จแล้ว")
-            except Exception as exc:  # pragma: no cover - UI guardrail
-                st.error(f"ส่งออกไฟล์ไม่สำเร็จ: {exc}")
+                    st.warning("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak")
 
-        output = st.session_state.get("tmc_output")
-        if output:
-            _render_download_button("ดาวน์โหลดรายงาน Excel", output["workbook_bytes"], output["workbook_filename"], EXCEL_MIME)
-            session_bytes = st.session_state.get("tmc_project_session_bytes")
-            session_filename = st.session_state.get("tmc_project_session_filename", "tmc_session.tmcproj.json")
-            if not session_bytes:
-                session = _build_session_from_state(
-                    uploaded_file.name if uploaded_file is not None else None,
-                    len(file_bytes) if uploaded_file is not None else None,
-                )
-                session_bytes = session_to_json_bytes(session)
-                filename_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or (uploaded_file.name if uploaded_file is not None else None)
-                session_filename = safe_project_session_filename(filename_seed)
-                st.session_state["tmc_project_session_bytes"] = session_bytes
-                st.session_state["tmc_project_session_filename"] = session_filename
-
-            output_result = output["result"]
-            output_setup = output.get("confirmed_setup", setup)
-            summary_text = build_export_summary_text(
-                setup=output_setup,
-                source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
-                export_mode=output.get("export_mode", export_mode),
-                peaks=output_result.peaks,
-                mapping=mapping_df,
-                qc=output_result.qc,
-                workbook_filename=output["workbook_filename"],
-                pce_factors=output_result.pce_factors,
-                export_settings={
-                    "template_version": TEMPLATE_VERSION,
-                    "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
-                    "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
-                },
-                generated_at=output.get("generated_at"),
-            )
-            package_bytes = create_export_package_zip(
-                workbook_bytes=output["workbook_bytes"],
-                workbook_filename=output["workbook_filename"],
-                export_summary_text=summary_text,
-                project_session_bytes=session_bytes,
-                project_session_filename=session_filename,
-                mapping_preset_bytes=serialize_mapping_preset(
-                    build_mapping_preset(
-                        mapping_df,
-                        preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
-                    )
-                ),
-                mapping_preset_filename="mapping_preset.mapping.json",
-                mapping=mapping_df,
-                chart_pngs=output.get("chart_pngs", {}),
-                diagram_png=output.get("diagram_png"),
-            )
-            _render_download_button(
-                "ดาวน์โหลด Export Package ZIP",
-                package_bytes,
-                safe_package_filename(output["workbook_filename"]),
-                PACKAGE_MIME,
-            )
-            if session_bytes:
-                st.download_button(
-                    "ดาวน์โหลด Project Session",
-                    data=download_buffer(session_bytes),
-                    file_name=session_filename,
-                    mime=PROJECT_SESSION_MIME,
-                    key="download_project_session_export",
-                )
-            with st.expander("กราฟและ Diagram สำหรับรายงาน", expanded=False):
-                chart_pngs = output["chart_pngs"]
-                chart_cols = st.columns(2)
-                with chart_cols[0]:
-                    st.image(chart_pngs["hourly_pcu"], caption="ปริมาณจราจรรวมรายชั่วโมง")
-                    _render_download_button("ดาวน์โหลดกราฟ PCU รายชั่วโมง (PNG)", chart_pngs["hourly_pcu"], "hourly_pcu_chart.png", PNG_MIME)
-                with chart_cols[1]:
-                    st.image(chart_pngs["vehicle_composition"], caption="สัดส่วนประเภทยานพาหนะ")
-                    _render_download_button(
-                        "ดาวน์โหลดกราฟสัดส่วนยานพาหนะ (PNG)",
-                        chart_pngs["vehicle_composition"],
-                        "vehicle_composition_chart.png",
-                        PNG_MIME,
-                    )
-                st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
-                _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
-        else:
-            _render_empty_state(
-                "ยังไม่มีไฟล์ส่งออก",
-                "ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
-            )
-
-    with qa_tab:
-        st.header("ตรวจสอบข้อมูล / ขั้นสูง")
-        if uploaded_file is None:
-            _render_empty_state(
-                "ยังไม่มี Workbook สำหรับ QA",
-                "อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และตรวจสอบข้อมูล",
-            )
-        else:
-            with st.expander("รายละเอียดการอ่านไฟล์", expanded=False):
-                st.dataframe(preview_summary, width="stretch")
-                for sheet_name, preview in previews.items():
-                    st.markdown(f"**{sheet_name}**")
-                    st.dataframe(preview, width="stretch")
-            with st.expander("รายละเอียด Parser", expanded=False):
-                for sheet_name, parsed in parsed_details.items():
-                    debug = parsed.debug
-                    st.markdown(f"**{sheet_name}**")
-                    st.write(
-                        {
-                            "detected_first_data_row": debug.first_data_row,
-                            "detected_time_columns": {
-                                "time_start_col": debug.time_start_col,
-                                "time_end_col": debug.time_end_col,
-                            },
-                            "detected_vehicle_class_columns": debug.vehicle_class_columns,
-                        }
-                    )
-                    st.dataframe(parsed.data.head(10), width="stretch")
-
-        if result is not None:
-            st.markdown("#### QC summary")
-            qc_counts = _qc_severity_counts(result.qc)
-            qc_cols = st.columns(3)
-            qc_cols[0].metric("error", f"{qc_counts['error']:,}")
-            qc_cols[1].metric("warning", f"{qc_counts['warning']:,}")
-            qc_cols[2].metric("info", f"{qc_counts['info']:,}")
-            if qc_counts["error"]:
-                st.error("QC errors found. Review details before export.")
-            elif qc_counts["warning"]:
-                st.warning("QC warnings found. Export is still available, but review the notes first.")
-            elif qc_counts["info"]:
-                st.info("QC info notes are available for review.")
+                with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
+                    st.dataframe(hourly_movement, width="stretch")
+    
+    if is_single_file_mode:
+        with export_tab:
+            st.header("ส่งออกไฟล์")
+            st.markdown("#### โหมดส่งออกรายงาน")
+            if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
+                st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
+                st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
             else:
-                st.success("No QC issues found.")
-            with st.expander("QC details", expanded=False):
-                st.dataframe(result.qc, width="stretch")
-            with st.expander("Hourly summary", expanded=False):
-                st.dataframe(result.hourly, width="stretch")
-            with st.expander("Peak PHF", expanded=False):
-                st.dataframe(result.peaks, width="stretch")
-            with st.expander("ตัวอย่างข้อมูล Normalized", expanded=False):
-                st.dataframe(result.normalized.head(1000), width="stretch")
-            with st.expander("Movement Aggregation Audit", expanded=False):
-                st.caption("แสดง source stream ที่ถูกรวมเป็น movement_code สำหรับรายงาน")
-                st.dataframe(movement_aggregation_audit(result.normalized, mapping_df), width="stretch")
-        else:
-            _render_empty_state(
-                "ยังไม่มีผล QA จากการประมวลผล",
-                "ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement",
+                st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
+                st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
+
+            st.markdown("#### Excel Engine")
+            if excel_com_status.available:
+                version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
+                st.success(f"Excel COM พร้อมใช้งาน — {version_text}")
+            else:
+                st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}")
+            st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
+            with st.expander("รายละเอียด Excel COM", expanded=False):
+                _render_excel_com_status(excel_com_status)
+
+            _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
+            if result is not None:
+                _render_qc_status(result.qc)
+            confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
+            _render_readiness_checklist(
+                [
+                    ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
+                    ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
+                    ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
+                    ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
+                    (
+                        "Excel COM พร้อมใช้งาน",
+                        bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
+                        "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+                    ),
+                ]
             )
 
-        with st.expander("รายละเอียดเทมเพลต", expanded=False):
-            _render_template_audit_notes()
-        with st.expander("รายละเอียด Excel COM", expanded=False):
-            _render_excel_com_status(excel_com_status)
+            use_template_report_layout = st.checkbox(
+                "ใช้รูปแบบรายงานจาก Excel Template หากพร้อมใช้งาน",
+                key="use_template_report_layout_checkbox",
+            )
+            st.markdown("#### ดาวน์โหลดไฟล์")
+            if pce_results_stale:
+                st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
+            export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
+            if export_run:
+                excel_com_requested = bool(use_excel_com_native_charts)
+                export_excel_com_status = probe_excel_com() if excel_com_requested else None
+                excel_com_enabled = bool(export_excel_com_status and export_excel_com_status.available)
+                if excel_com_requested and export_excel_com_status is not None and not export_excel_com_status.available:
+                    st.warning(
+                        "Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG "
+                        f"สาเหตุ: {export_excel_com_status.reason}. {export_excel_com_status.detail}"
+                    )
+    
+                confirmed_setup = {
+                    **setup,
+                    "am_peak_start": confirmed_am_start,
+                    "am_peak_end": confirmed_am_end,
+                    "pm_peak_start": confirmed_pm_start,
+                    "pm_peak_end": confirmed_pm_end,
+                    "peak_selection_source": PEAK_SELECTION_USER_CONFIRMED,
+                }
+                confirmed_periods = {
+                    "AM": (confirmed_am_start, confirmed_am_end),
+                    "PM": (confirmed_pm_start, confirmed_pm_end),
+                }
+                export_generated_at = generated_timestamp_text()
+                try:
+                    raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
+                    with warnings.catch_warnings(record=True) as export_warnings:
+                        warnings.simplefilter("always", RuntimeWarning)
+                        confirmed_result = process_tmc(
+                            raw_sheets=raw_sheets,
+                            mapping=mapping_df,
+                            setup=confirmed_setup,
+                            detected_sheets=detected_sheet_names,
+                            peak_mode=peak_mode,
+                            peak_windows=peak_windows,
+                            confirmed_peak_periods=confirmed_periods,
+                            pce_factors=selected_pce_factors,
+                            generate_workbook=True,
+                            use_template_report_layout=use_template_report_layout,
+                            use_excel_com_native_charts=excel_com_enabled,
+                            export_mode=export_mode,
+                            source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                            generated_at=export_generated_at,
+                        )
+                    for warning in export_warnings:
+                        message = str(warning.message)
+                        if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
+                            st.warning(f"Excel COM ส่งออก Native Chart ไม่สำเร็จ ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                        elif excel_com_requested and "Excel COM unavailable" in message:
+                            st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                    if not confirmed_result.workbook_bytes:
+                        st.error("ส่งออกเสร็จแล้ว แต่ไฟล์ Excel ที่สร้างไม่มีข้อมูล")
+                    else:
+                        confirmed_hourly_movement = hourly_movement_pcu(confirmed_result.normalized, mapping_df)
+                        chart_pngs = report_chart_pngs(
+                            confirmed_hourly_movement,
+                            vehicle_composition_report(confirmed_result.normalized),
+                            setup=confirmed_setup,
+                        )
+                        diagram_png = generate_four_leg_tmc_diagram(
+                            confirmed_hourly_movement,
+                            confirmed_result.peaks,
+                            DiagramConfig(
+                                tmc_id=tmc_id,
+                                tmc_name=tmc_title,
+                                survey_date_text=survey_date_text,
+                                north_label=north_label,
+                                south_label=south_label,
+                                east_label=east_label,
+                                west_label=west_label,
+                                north_road=north_road,
+                                south_road=south_road,
+                                east_road=east_road,
+                                west_road=west_road,
+                                survey_period_text=survey_period,
+                                caption_text=caption_text,
+                                show_u_turn=show_u_turn,
+                            ),
+                        )
+                        st.session_state["tmc_output"] = {
+                            "result": confirmed_result,
+                            "chart_pngs": dict(chart_pngs),
+                            "diagram_png": diagram_png,
+                            "workbook_bytes": confirmed_result.workbook_bytes,
+                            "workbook_filename": safe_workbook_filename(tmc_id),
+                            "confirmed_setup": confirmed_setup,
+                            "export_mode": export_mode,
+                            "generated_at": export_generated_at,
+                        }
+                        st.success("สร้างรายงาน Excel เสร็จแล้ว")
+                except Exception as exc:  # pragma: no cover - UI guardrail
+                    st.error(f"ส่งออกไฟล์ไม่สำเร็จ: {exc}")
+    
+            output = st.session_state.get("tmc_output")
+            if output:
+                _render_download_button("ดาวน์โหลดรายงาน Excel", output["workbook_bytes"], output["workbook_filename"], EXCEL_MIME)
+                session_bytes = st.session_state.get("tmc_project_session_bytes")
+                session_filename = st.session_state.get("tmc_project_session_filename", "tmc_session.tmcproj.json")
+                if not session_bytes:
+                    session = _build_session_from_state(
+                        uploaded_file.name if uploaded_file is not None else None,
+                        len(file_bytes) if uploaded_file is not None else None,
+                    )
+                    session_bytes = session_to_json_bytes(session)
+                    filename_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or (uploaded_file.name if uploaded_file is not None else None)
+                    session_filename = safe_project_session_filename(filename_seed)
+                    st.session_state["tmc_project_session_bytes"] = session_bytes
+                    st.session_state["tmc_project_session_filename"] = session_filename
 
+                output_result = output["result"]
+                output_setup = output.get("confirmed_setup", setup)
+                summary_text = build_export_summary_text(
+                    setup=output_setup,
+                    source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                    export_mode=output.get("export_mode", export_mode),
+                    peaks=output_result.peaks,
+                    mapping=mapping_df,
+                    qc=output_result.qc,
+                    workbook_filename=output["workbook_filename"],
+                    pce_factors=output_result.pce_factors,
+                    export_settings={
+                        "template_version": TEMPLATE_VERSION,
+                        "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
+                        "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
+                    },
+                    generated_at=output.get("generated_at"),
+                )
+                package_bytes = create_export_package_zip(
+                    workbook_bytes=output["workbook_bytes"],
+                    workbook_filename=output["workbook_filename"],
+                    export_summary_text=summary_text,
+                    project_session_bytes=session_bytes,
+                    project_session_filename=session_filename,
+                    mapping_preset_bytes=serialize_mapping_preset(
+                        build_mapping_preset(
+                            mapping_df,
+                            preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
+                        )
+                    ),
+                    mapping_preset_filename="mapping_preset.mapping.json",
+                    mapping=mapping_df,
+                    chart_pngs=output.get("chart_pngs", {}),
+                    diagram_png=output.get("diagram_png"),
+                )
+                _render_download_button(
+                    "ดาวน์โหลด Export Package ZIP",
+                    package_bytes,
+                    safe_package_filename(output["workbook_filename"]),
+                    PACKAGE_MIME,
+                )
+                if session_bytes:
+                    st.download_button(
+                        "ดาวน์โหลด Project Session",
+                        data=download_buffer(session_bytes),
+                        file_name=session_filename,
+                        mime=PROJECT_SESSION_MIME,
+                        key="download_project_session_export",
+                    )
+                with st.expander("กราฟและ Diagram สำหรับรายงาน", expanded=False):
+                    chart_pngs = output["chart_pngs"]
+                    chart_cols = st.columns(2)
+                    with chart_cols[0]:
+                        st.image(chart_pngs["hourly_pcu"], caption="ปริมาณจราจรรวมรายชั่วโมง")
+                        _render_download_button("ดาวน์โหลดกราฟ PCU รายชั่วโมง (PNG)", chart_pngs["hourly_pcu"], "hourly_pcu_chart.png", PNG_MIME)
+                    with chart_cols[1]:
+                        st.image(chart_pngs["vehicle_composition"], caption="สัดส่วนประเภทยานพาหนะ")
+                        _render_download_button(
+                            "ดาวน์โหลดกราฟสัดส่วนยานพาหนะ (PNG)",
+                            chart_pngs["vehicle_composition"],
+                            "vehicle_composition_chart.png",
+                            PNG_MIME,
+                        )
+                    st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
+                    _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
+            else:
+                _render_empty_state(
+                    "ยังไม่มีไฟล์ส่งออก",
+                    "ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
+                )
 
+    if is_single_file_mode:
+        with qa_tab:
+            st.header("ตรวจสอบข้อมูล / ขั้นสูง")
+            if uploaded_file is None:
+                _render_empty_state(
+                    "ยังไม่มี Workbook สำหรับ QA",
+                    "อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และตรวจสอบข้อมูล",
+                )
+            else:
+                with st.expander("รายละเอียดการอ่านไฟล์", expanded=False):
+                    st.dataframe(preview_summary, width="stretch")
+                    for sheet_name, preview in previews.items():
+                        st.markdown(f"**{sheet_name}**")
+                        st.dataframe(preview, width="stretch")
+                with st.expander("รายละเอียด Parser", expanded=False):
+                    for sheet_name, parsed in parsed_details.items():
+                        debug = parsed.debug
+                        st.markdown(f"**{sheet_name}**")
+                        st.write(
+                            {
+                                "detected_first_data_row": debug.first_data_row,
+                                "detected_time_columns": {
+                                    "time_start_col": debug.time_start_col,
+                                    "time_end_col": debug.time_end_col,
+                                },
+                                "detected_vehicle_class_columns": debug.vehicle_class_columns,
+                            }
+                        )
+                        st.dataframe(parsed.data.head(10), width="stretch")
+
+            if result is not None:
+                st.markdown("#### QC summary")
+                qc_counts = _qc_severity_counts(result.qc)
+                qc_cols = st.columns(3)
+                qc_cols[0].metric("error", f"{qc_counts['error']:,}")
+                qc_cols[1].metric("warning", f"{qc_counts['warning']:,}")
+                qc_cols[2].metric("info", f"{qc_counts['info']:,}")
+                if qc_counts["error"]:
+                    st.error("QC errors found. Review details before export.")
+                elif qc_counts["warning"]:
+                    st.warning("QC warnings found. Export is still available, but review the notes first.")
+                elif qc_counts["info"]:
+                    st.info("QC info notes are available for review.")
+                else:
+                    st.success("No QC issues found.")
+                with st.expander("QC details", expanded=False):
+                    st.dataframe(result.qc, width="stretch")
+                with st.expander("Hourly summary", expanded=False):
+                    st.dataframe(result.hourly, width="stretch")
+                with st.expander("Peak PHF", expanded=False):
+                    st.dataframe(result.peaks, width="stretch")
+                with st.expander("ตัวอย่างข้อมูล Normalized", expanded=False):
+                    st.dataframe(result.normalized.head(1000), width="stretch")
+                with st.expander("Movement Aggregation Audit", expanded=False):
+                    st.caption("แสดง source stream ที่ถูกรวมเป็น movement_code สำหรับรายงาน")
+                    st.dataframe(movement_aggregation_audit(result.normalized, mapping_df), width="stretch")
+            else:
+                _render_empty_state(
+                    "ยังไม่มีผล QA จากการประมวลผล",
+                    "ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement",
+                )
+
+            with st.expander("รายละเอียดเทมเพลต", expanded=False):
+                _render_template_audit_notes()
+            with st.expander("รายละเอียด Excel COM", expanded=False):
+                _render_excel_com_status(excel_com_status)
+    
+    
 _run_streamlit_app()
 st.stop()
