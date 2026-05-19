@@ -209,4 +209,4 @@ Repository นี้เป็น public repository ดังนั้นไม�
 
 ## License
 
-ยังไม่ได้กำหนด license อย่างเป็นทางการ หากต้องการเผยแพร่เป็น open source ควรเลือก license ให้ชัดเจนก่อนใช้งานหรือแจกจ่ายในวงกว้าง
+This project is released under the MIT License. See LICENSE for details.
