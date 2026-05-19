@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .constants import AM_WINDOW, PM_WINDOW, PCE_FACTORS, VEHICLE_CLASSES
+from .constants import AM_WINDOW, DEFAULT_PCE_FACTORS, PM_WINDOW, VEHICLE_CLASSES
 from .mapping import clean_mapping
+from .pcu import PceFactorIssue, normalize_pce_factors
 from .time_utils import time_to_minutes
 
 
@@ -27,12 +28,29 @@ def run_qc(
     peak_windows: dict[str, tuple[str, str]] | None = None,
     pce_factors: dict[str, float] | None = None,
     raw_sheets: dict[str, pd.DataFrame] | None = None,
+    pce_factor_issues: tuple[PceFactorIssue, ...] | list[PceFactorIssue] | None = None,
 ) -> pd.DataFrame:
-    pce_factors = pce_factors or PCE_FACTORS
+    pce_factors = normalize_pce_factors(pce_factors)
     peak_windows = peak_windows or {"AM": AM_WINDOW, "PM": PM_WINDOW}
     original_mapping = mapping.copy()
     mapping = clean_mapping(mapping)
     issues: list[dict[str, str]] = []
+
+    for issue in pce_factor_issues or ():
+        issues.append(_issue(issue.check, issue.severity, issue.message, movement_code=issue.vehicle_class))
+
+    for vehicle_class in VEHICLE_CLASSES:
+        selected = pce_factors.get(vehicle_class, DEFAULT_PCE_FACTORS.get(vehicle_class))
+        default = DEFAULT_PCE_FACTORS.get(vehicle_class)
+        if selected is not None and default is not None and abs(float(selected) - float(default)) > 1e-12:
+            issues.append(
+                _issue(
+                    "pce_factor_user_override",
+                    "info",
+                    f"PCE factor override for {vehicle_class}: default {default:g}, selected {float(selected):g}.",
+                    movement_code=vehicle_class,
+                )
+            )
 
     included_mapping = mapping[mapping["include_in_report"]]
     mapped_sheets = set(included_mapping.loc[included_mapping["movement_code"].str.strip() != "", "raw_sheet"])
@@ -100,13 +118,13 @@ def run_qc(
 
     missing_vehicle = sorted(set(normalized["vehicle_class"].dropna()) - set(VEHICLE_CLASSES))
     for vehicle_class in missing_vehicle:
-        issues.append(_issue("missing_vehicle_class", "error", f"Unexpected vehicle class: {vehicle_class}"))
+        issues.append(_issue("missing_vehicle_class", "warning", f"Unexpected vehicle class: {vehicle_class}"))
 
     missing_pce = sorted(set(normalized.loc[normalized["pce_factor"].isna(), "vehicle_class"].dropna()))
     missing_pce.extend(sorted(set(normalized["vehicle_class"].dropna()) - set(pce_factors)))
     missing_pce = sorted(set(missing_pce))
     for vehicle_class in missing_pce:
-        issues.append(_issue("missing_pce_factor", "error", f"Missing PCE factor for vehicle class: {vehicle_class}"))
+        issues.append(_issue("missing_pce_factor", "warning", f"Missing PCE factor for vehicle class: {vehicle_class}"))
 
     movement_totals = normalized.groupby(["raw_sheet", "movement_code"], dropna=False, as_index=False)["count"].sum()
     for _, row in movement_totals.iterrows():

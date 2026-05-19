@@ -13,6 +13,7 @@ import pandas as pd
 
 from .constants import AM_WINDOW, DEFAULT_PEAK_MODE, MAPPING_COLUMNS, PM_WINDOW
 from .mapping import clean_mapping
+from .pcu import normalize_pce_factors, validate_pce_factors
 
 
 CURRENT_SCHEMA_VERSION = 1
@@ -148,6 +149,7 @@ def build_project_session(
     detected_sheet_names: list[str] | tuple[str, ...] | None = None,
     peak_settings: dict[str, Any] | None = None,
     export_settings: dict[str, Any] | None = None,
+    pce_factors: dict[str, Any] | None = None,
     source_file_name: str | None = None,
     source_file_size: int | None = None,
     source_file_modified_time: str | None = None,
@@ -184,6 +186,7 @@ def build_project_session(
             "detected_sheet_names": [str(name) for name in (detected_sheet_names or [])],
             "rows": _mapping_rows(mapping),
         },
+        "pce_factors": _json_safe(normalize_pce_factors(pce_factors)),
         "peaks": peak_values,
         "export": _copy_known_fields(export_settings, EXPORT_FIELDS),
     }
@@ -213,6 +216,7 @@ def normalize_project_session(raw_session: dict[str, Any]) -> dict[str, Any]:
             "detected_sheet_names": [str(name) for name in detected],
             "rows": _mapping_rows(rows),
         },
+        "pce_factors": _json_safe(normalize_pce_factors(raw_session.get("pce_factors"))),
         "peaks": _copy_known_fields(raw_session.get("peaks"), PEAK_FIELDS),
         "export": _copy_known_fields(raw_session.get("export"), EXPORT_FIELDS),
     }
@@ -250,6 +254,8 @@ def session_from_json(data: str | bytes | bytearray) -> ProjectSessionLoadResult
         warnings.append(
             f"Unsupported project session schema_version {schema_version!r}; attempting to load safe fields only."
         )
+    pce_validation = validate_pce_factors(raw.get("pce_factors"))
+    warnings.extend(pce_validation.warnings)
     return ProjectSessionLoadResult(session=normalize_project_session(raw), warnings=tuple(warnings))
 
 
@@ -325,6 +331,15 @@ def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, A
     detected = session.get("mapping", {}).get("detected_sheet_names", [])
     if detected:
         updates["tmc_session_detected_sheet_names"] = detected
+
+    pce_factors = session.get("pce_factors")
+    if isinstance(pce_factors, dict):
+        normalized_pce = normalize_pce_factors(pce_factors)
+        updates["pce_factors_table"] = [
+            {"vehicle_class": vehicle_class, "pce_factor": factor}
+            for vehicle_class, factor in normalized_pce.items()
+        ]
+        updates["pce_editor_version"] = int(state.get("pce_editor_version", 0) or 0) + 1
 
     changed: list[str] = []
     for key, value in updates.items():

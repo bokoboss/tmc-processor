@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -11,6 +11,7 @@ from .exporter import export_workbook
 from .mapping import validate_mapping_for_processing
 from .metadata import setup_with_metadata
 from .normalizer import normalize
+from .pcu import get_default_pce_factors, validate_pce_factors
 from .peaks import (
     PEAK_SELECTION_AUTO,
     PEAK_SELECTION_USER_CONFIRMED,
@@ -32,6 +33,7 @@ class ProcessingResult:
     vehicle: pd.DataFrame
     peaks: pd.DataFrame
     workbook_bytes: bytes
+    pce_factors: dict[str, float] = field(default_factory=get_default_pce_factors)
 
 
 def process_tmc(
@@ -45,6 +47,7 @@ def process_tmc(
     generate_workbook: bool = True,
     use_template_report_layout: bool = False,
     use_excel_com_native_charts: bool = False,
+    pce_factors: dict[str, float] | None = None,
 ) -> ProcessingResult:
     detected_sheets = detected_sheets or list(raw_sheets)
     mapping_issues = validate_mapping_for_processing(detected_sheets, mapping)
@@ -54,7 +57,9 @@ def process_tmc(
         )
         raise ValueError(f"Mapping is incomplete for detected raw sheets: {issue_text}")
     setup = setup_with_metadata(setup)
-    normalized = normalize(raw_sheets=raw_sheets, mapping=mapping, setup=setup)
+    pce_validation = validate_pce_factors(pce_factors)
+    selected_pce_factors = pce_validation.factors
+    normalized = normalize(raw_sheets=raw_sheets, mapping=mapping, setup=setup, pce_factors=selected_pce_factors)
     peak_windows = peak_windows or {"AM": AM_WINDOW, "PM": PM_WINDOW}
     setup = {
         **setup,
@@ -96,6 +101,8 @@ def process_tmc(
         normalized=normalized,
         peaks=peaks,
         peak_windows=peak_windows,
+        pce_factors=selected_pce_factors,
+        pce_factor_issues=pce_validation.issues,
         raw_sheets=raw_sheets,
     )
     hourly = hourly_summary(normalized)
@@ -112,7 +119,8 @@ def process_tmc(
             movement,
             vehicle,
             peaks,
+            pce_factors=selected_pce_factors,
             use_template_report_layout=use_template_report_layout,
             use_excel_com_native_charts=use_excel_com_native_charts,
         )
-    return ProcessingResult(normalized, qc, hourly, movement, vehicle, peaks, workbook_bytes)
+    return ProcessingResult(normalized, qc, hourly, movement, vehicle, peaks, workbook_bytes, selected_pce_factors)

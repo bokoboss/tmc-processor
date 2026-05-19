@@ -15,7 +15,8 @@ VEHICLE_CLASSES = [
     "STR",
 ]
 
-PCE_FACTORS = {
+DEFAULT_PCE_FACTORS = {
+    # Bicy is intentionally 0.0 to preserve the app's historical PCU output.
     "Bicy": 0.0,
     "MC": 0.333,
     "PC<7": 1.0,
@@ -29,6 +30,8 @@ PCE_FACTORS = {
     "TR": 2.5,
     "STR": 2.5,
 }
+
+PCE_FACTORS = DEFAULT_PCE_FACTORS
 
 MAPPING_COLUMNS = [
     "raw_sheet",

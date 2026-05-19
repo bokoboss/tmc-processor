@@ -47,6 +47,13 @@ from tmc_processor.metadata import (
     SetupMetadata,
 )
 from tmc_processor import metadata as setup_metadata
+from tmc_processor.pcu import (
+    get_default_pce_factors,
+    normalize_pce_factors,
+    pce_factor_traceability_frame,
+    pce_factors_equal,
+    validate_pce_factors,
+)
 from tmc_processor.peaks import PEAK_SELECTION_USER_CONFIRMED
 from tmc_processor.pipeline import process_tmc
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
@@ -577,6 +584,101 @@ def _state_value(key: str, default: object = "") -> object:
     return st.session_state.get(key, default)
 
 
+def _pce_factor_records(factors: dict[str, float] | None = None) -> list[dict[str, object]]:
+    selected = normalize_pce_factors(factors)
+    return [
+        {"vehicle_class": vehicle_class, "pce_factor": selected[vehicle_class]}
+        for vehicle_class in get_default_pce_factors()
+    ]
+
+
+def _ensure_pce_factor_state() -> None:
+    st.session_state.setdefault("pce_editor_version", 0)
+    if "pce_factors_table" not in st.session_state:
+        st.session_state["pce_factors_table"] = _pce_factor_records()
+
+
+def _current_pce_factor_input() -> object:
+    version = int(st.session_state.get("pce_editor_version", 0) or 0)
+    editor_key = f"pce_factors_editor_{version}"
+    return st.session_state.get(editor_key, st.session_state.get("pce_factors_table"))
+
+
+def _current_pce_factors_from_state() -> dict[str, float]:
+    _ensure_pce_factor_state()
+    return normalize_pce_factors(_current_pce_factor_input())
+
+
+def _mark_processed_outputs_stale_for_pce_change() -> None:
+    if "tmc_processed" in st.session_state:
+        st.session_state["tmc_pce_results_stale"] = True
+    for stale_key in [
+        "tmc_output",
+        "am_peak_period_select",
+        "pm_peak_period_select",
+        "tmc_confirmed_am_peak_start",
+        "tmc_confirmed_am_peak_end",
+        "tmc_confirmed_pm_peak_start",
+        "tmc_confirmed_pm_peak_end",
+    ]:
+        st.session_state.pop(stale_key, None)
+
+
+def _processed_pce_results_stale(processed: dict[str, object] | None, selected_pce_factors: dict[str, float]) -> bool:
+    if not processed:
+        return False
+    return bool(st.session_state.get("tmc_pce_results_stale")) or not pce_factors_equal(
+        processed.get("pce_factors"),
+        selected_pce_factors,
+    )
+
+
+def _render_pce_factor_editor() -> dict[str, float]:
+    _ensure_pce_factor_state()
+    with st.expander("ค่าเทียบเท่ารถยนต์นั่ง (PCE)", expanded=False):
+        st.caption(
+            "ค่า PCE ใช้สำหรับแปลงจำนวนยานพาหนะเป็น PCU หากไม่แก้ไข โปรแกรมจะใช้ค่าเริ่มต้นตามมาตรฐานที่กำหนดไว้"
+        )
+        if st.button("Reset PCE เป็นค่าเริ่มต้น", key="reset_pce_factors"):
+            st.session_state["pce_factors_table"] = _pce_factor_records()
+            st.session_state["pce_editor_version"] = int(st.session_state.get("pce_editor_version", 0) or 0) + 1
+            _mark_processed_outputs_stale_for_pce_change()
+            st.success("Reset PCE เป็นค่าเริ่มต้นแล้ว")
+
+        version = int(st.session_state.get("pce_editor_version", 0) or 0)
+        edited = st.data_editor(
+            pd.DataFrame(st.session_state["pce_factors_table"]),
+            key=f"pce_factors_editor_{version}",
+            hide_index=True,
+            width="stretch",
+            disabled=["vehicle_class"],
+            column_config={
+                "vehicle_class": st.column_config.TextColumn("vehicle_class"),
+                "pce_factor": st.column_config.NumberColumn("pce_factor", format="%.3f"),
+            },
+        )
+        validation = validate_pce_factors(edited)
+        selected = validation.factors
+        records = _pce_factor_records(selected)
+        if st.session_state.get("pce_factors_table") != records:
+            if "tmc_selected_pce_factors" in st.session_state and st.session_state["tmc_selected_pce_factors"] != selected:
+                _mark_processed_outputs_stale_for_pce_change()
+            st.session_state["pce_factors_table"] = records
+        st.session_state["tmc_selected_pce_factors"] = selected
+
+        for warning in validation.warnings:
+            st.warning(warning)
+
+        traceability = pce_factor_traceability_frame(selected)
+        overrides = traceability[traceability["source"] == "user_override"]
+        if not overrides.empty:
+            override_text = ", ".join(
+                f"{row.vehicle_class}={float(row.pce_factor):g}" for row in overrides.itertuples(index=False)
+            )
+            st.info(f"PCE user overrides: {override_text}")
+    return _current_pce_factors_from_state()
+
+
 def _current_mapping_for_session() -> pd.DataFrame | None:
     mapping_value = st.session_state.get("mapping_table")
     if mapping_value is None:
@@ -635,6 +737,7 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
         },
         mapping=_current_mapping_for_session(),
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
+        pce_factors=_current_pce_factors_from_state(),
         peak_settings=peak_settings,
         export_settings={
             "use_template_report_layout": bool(_state_value("use_template_report_layout_checkbox", True)),
@@ -698,7 +801,7 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
             st.write(preview)
         if st.button("ใช้ค่าจาก Session ที่โหลด", key="apply_project_session"):
             changed = apply_session_to_state(loaded_session, st.session_state)
-            for stale_key in ["tmc_processed", "tmc_output", "am_peak_period_select", "pm_peak_period_select"]:
+            for stale_key in ["tmc_processed", "tmc_output", "tmc_pce_results_stale", "am_peak_period_select", "pm_peak_period_select"]:
                 st.session_state.pop(stale_key, None)
             st.success(f"ใช้ค่า Session แล้ว อัปเดตค่าปัจจุบัน {len(changed)} รายการ")
             if changed and not compact:
@@ -882,6 +985,7 @@ def _run_streamlit_app() -> None:
     if uploaded_identity and st.session_state.get("tmc_uploaded_identity") != uploaded_identity:
         st.session_state.pop("tmc_output", None)
         st.session_state.pop("tmc_processed", None)
+        st.session_state.pop("tmc_pce_results_stale", None)
         if not st.session_state.get("tmc_mapping_table_from_session"):
             st.session_state.pop("mapping_table", None)
         for key in list(st.session_state.keys()):
@@ -920,6 +1024,7 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("use_template_report_layout_checkbox", True)
     st.session_state.setdefault("use_excel_com_native_charts_checkbox", bool(excel_com_status.available))
     st.session_state.setdefault("mapping_editor_version", 0)
+    _ensure_pce_factor_state()
 
     with st.sidebar:
         _render_project_session_section(
@@ -1049,6 +1154,8 @@ def _run_streamlit_app() -> None:
             st.markdown("#### คำบรรยายรูป Diagram")
             caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
             show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
+
+        selected_pce_factors = _render_pce_factor_editor()
 
     setup = _setup_from_inputs(
         project_name=project_name,
@@ -1197,6 +1304,7 @@ def _run_streamlit_app() -> None:
                         detected_sheets=detected_sheet_names,
                         peak_mode=peak_mode,
                         peak_windows=peak_windows,
+                        pce_factors=selected_pce_factors,
                         generate_workbook=False,
                     )
                 except Exception as exc:  # pragma: no cover - UI guardrail
@@ -1207,13 +1315,19 @@ def _run_streamlit_app() -> None:
                         "mapping": mapping,
                         "setup": setup,
                         "peak_windows": peak_windows,
+                        "pce_factors": selected_pce_factors,
                     }
                     st.session_state.pop("tmc_output", None)
+                    st.session_state.pop("tmc_pce_results_stale", None)
                     st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
 
     processed = st.session_state.get("tmc_processed")
-    result = processed["result"] if processed else None
-    mapping_df = processed["mapping"] if processed else mapping
+    pce_results_stale = _processed_pce_results_stale(processed, selected_pce_factors)
+    if pce_results_stale:
+        st.session_state["tmc_pce_results_stale"] = True
+        st.session_state.pop("tmc_output", None)
+    result = None if pce_results_stale else (processed["result"] if processed else None)
+    mapping_df = processed["mapping"] if processed and not pce_results_stale else mapping
     hourly_movement = hourly_movement_pcu(result.normalized, mapping_df) if result is not None else pd.DataFrame()
     confirmed_am_start = st.session_state.get("tmc_confirmed_am_peak_start", "")
     confirmed_am_end = st.session_state.get("tmc_confirmed_am_peak_end", "")
@@ -1222,6 +1336,8 @@ def _run_streamlit_app() -> None:
 
     with dashboard_tab:
         st.header("ตรวจสอบกราฟและช่วงเร่งด่วน")
+        if pce_results_stale:
+            st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
         if result is None:
             st.info("ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน")
         else:
@@ -1314,7 +1430,7 @@ def _run_streamlit_app() -> None:
         confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
         _readiness_item("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None)
         _readiness_item("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")))
-        _readiness_item("ประมวลผลแล้ว", result is not None)
+        _readiness_item("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else "")
         _readiness_item("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready)
         _readiness_item(
             "Excel COM พร้อมใช้งาน",
@@ -1327,7 +1443,9 @@ def _run_streamlit_app() -> None:
             key="use_template_report_layout_checkbox",
         )
         st.markdown("#### ดาวน์โหลดไฟล์")
-        export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready))
+        if pce_results_stale:
+            st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
+        export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
         if export_run:
             excel_com_requested = bool(use_excel_com_native_charts)
             export_excel_com_status = probe_excel_com() if excel_com_requested else None
@@ -1362,6 +1480,7 @@ def _run_streamlit_app() -> None:
                         peak_mode=peak_mode,
                         peak_windows=peak_windows,
                         confirmed_peak_periods=confirmed_periods,
+                        pce_factors=selected_pce_factors,
                         generate_workbook=True,
                         use_template_report_layout=use_template_report_layout,
                         use_excel_com_native_charts=excel_com_enabled,

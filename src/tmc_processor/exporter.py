@@ -19,10 +19,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 import pandas as pd
 
 from .charts import report_chart_pngs
-from .constants import DEFAULT_PEAK_MODE, VEHICLE_CLASSES
+from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
 from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
 from .metadata import setup_with_metadata
 from .mapping import clean_mapping
+from .pcu import pce_factor_traceability_frame
 from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
 from .report_template import (
     DEFAULT_TEMPLATE_MAP_PATH,
@@ -44,6 +45,7 @@ from .time_utils import hourly_interval_rows
 
 EXPORT_SHEETS = [
     "Setup",
+    "PCE_Factors",
     "Mapping",
     "Movement_Aggregation_Audit",
     "Normalized_Data",
@@ -182,6 +184,14 @@ def _report_text(normalized: pd.DataFrame, peaks: pd.DataFrame, vehicle: pd.Data
         parts = [f"{row.vehicle_class} ร้อยละ {row.count_share * 100:.1f}" for row in top.itertuples(index=False)]
         if parts:
             lines.append(f"ประเภทยานพาหนะที่มีสัดส่วนสูงสุด 3 อันดับแรก ได้แก่ {', '.join(parts)} ของจำนวนยานพาหนะทั้งหมด")
+    if {"vehicle_class", "pce_factor"}.issubset(normalized.columns):
+        overrides = []
+        for vehicle_class, factor in normalized.groupby("vehicle_class")["pce_factor"].first().dropna().items():
+            default = DEFAULT_PCE_FACTORS.get(str(vehicle_class))
+            if default is not None and abs(float(factor) - float(default)) > 1e-12:
+                overrides.append(f"{vehicle_class}={float(factor):g}")
+        if overrides:
+            lines.append(f"PCE overrides used for PCU calculations: {', '.join(overrides)}")
     return pd.DataFrame({"report_text": lines})
 
 
@@ -193,7 +203,9 @@ def _number_format(column_name: str) -> str | None:
         return "#,##0"
     if "share" in lowered or lowered.endswith("phf"):
         return "0.000"
-    if "pcu" in lowered or "pce" in lowered:
+    if "pce" in lowered:
+        return "0.000"
+    if "pcu" in lowered:
         return "#,##0"
     if column_name in {"15", "30", "45", "60", "Total"}:
         return "#,##0"
@@ -217,6 +229,7 @@ def _format_worksheet(worksheet, sheet_name: str, create_excel_tables: bool = DE
 
     widths = {
         "Setup": {"A": 28, "B": 36},
+        "PCE_Factors": {"A": 20, "B": 14, "C": 18},
         "Mapping": {"A": 24, "B": 16, "C": 18, "D": 12, "E": 12, "F": 16, "G": 18, "H": 16, "I": 18},
         "Movement_Aggregation_Audit": {"A": 20, "B": 18, "C": 18, "D": 24, "E": 18, "F": 16, "G": 20, "H": 14},
         "QC_Check": {"A": 28, "B": 14, "C": 24, "D": 56},
@@ -990,6 +1003,7 @@ def export_workbook(
     template_path: str | None = None,
     template_map_path: str | None = None,
     create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
+    pce_factors: dict[str, float] | None = None,
 ) -> bytes:
     original_setup = dict(setup)
     setup = setup_with_metadata(setup)
@@ -1000,6 +1014,7 @@ def export_workbook(
     vehicle_composition_for_report = vehicle_composition_report(normalized)
     sheets = {
         "Setup": _setup_frame(setup),
+        "PCE_Factors": pce_factor_traceability_frame(pce_factors),
         "Mapping": mapping,
         "Movement_Aggregation_Audit": movement_aggregation_audit(normalized, mapping),
         "Normalized_Data": normalized,
