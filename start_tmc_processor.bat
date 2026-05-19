@@ -8,7 +8,7 @@ echo TMC Processor
 echo =============
 echo.
 
-if exist ".venv\Scripts\python.exe" goto RUN_APP
+if exist ".venv\" goto CHECK_VENV
 
 echo First-time setup is required.
 echo This may take several minutes. Please keep this window open.
@@ -81,6 +81,14 @@ echo.
 echo First-time setup complete.
 echo.
 
+:CHECK_VENV
+if not exist ".venv\Scripts\python.exe" (
+    echo.
+    echo The .venv folder exists, but .venv\Scripts\python.exe was not found.
+    echo Delete the .venv folder and run this file again.
+    goto ERROR_END
+)
+
 :RUN_APP
 if not exist ".venv\Scripts\python.exe" (
     echo.
@@ -89,6 +97,28 @@ if not exist ".venv\Scripts\python.exe" (
     goto ERROR_END
 )
 
+echo.
+echo Startup diagnostics
+echo -------------------
+echo Current directory: %CD%
+for %%I in (".venv\Scripts\python.exe") do echo Venv python path: %%~fI
+echo Python executable:
+".venv\Scripts\python.exe" -c "import sys; print(sys.executable)"
+if errorlevel 1 (
+    echo.
+    echo The venv Python could not be started.
+    goto ERROR_END
+)
+
+echo Import check:
+".venv\Scripts\python.exe" -c "import tmc_processor; print(tmc_processor.__file__)"
+if errorlevel 1 (
+    echo.
+    echo The tmc_processor import check failed.
+    goto ERROR_END
+)
+
+echo.
 echo Starting TMC Processor ...
 echo A browser window should open automatically.
 echo To stop the app, return to this window and press Ctrl+C.
@@ -104,13 +134,13 @@ if errorlevel 1 (
 exit /b 0
 
 :FIND_PYTHON
-where python >nul 2>nul
+python --version >nul 2>nul
 if not errorlevel 1 (
     set "PYTHON_CMD=python"
     exit /b 0
 )
 
-where py >nul 2>nul
+py -3 --version >nul 2>nul
 if not errorlevel 1 (
     set "PYTHON_CMD=py -3"
     exit /b 0
