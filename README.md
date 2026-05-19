@@ -38,6 +38,17 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 6. สร้างรายงาน Excel
 7. ดาวน์โหลดรายงาน หรือบันทึก Project Session ไว้ใช้ต่อ
 
+## ทดลองใช้งานด้วยไฟล์ Demo
+
+ไฟล์ใน `samples/demo/` เป็นข้อมูลสังเคราะห์ทั้งหมด ใช้สำหรับทดลองโปรแกรมโดยไม่ต้องมีไฟล์สำรวจจริง
+
+1. Run `start_tmc_processor.bat`
+2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx`
+3. Load `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`
+4. Process
+5. Review Peak
+6. Generate Excel Report
+
 ## วิธีเปิดแบบง่ายที่สุดสำหรับ Windows
 
 ส่วนนี้เขียนสำหรับผู้ใช้ทั่วไปที่ยังไม่คุ้นกับ Python หรือ command line มาก่อน

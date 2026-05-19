@@ -1,0 +1,124 @@
+{
+  "created_at": "2026-01-01T00:00:00Z",
+  "directions": {
+    "caption_text": "Synthetic demo TMC volumes, PCU/12 hr (07:00-19:00)",
+    "east_label": "Demo East",
+    "east_road": "Demo East Road",
+    "north_label": "Demo North",
+    "north_road": "Demo North Road",
+    "south_label": "Demo South",
+    "south_road": "Demo South Road",
+    "west_label": "Demo West",
+    "west_road": "Demo West Road"
+  },
+  "export": {
+    "template_map_name": "",
+    "template_map_path": "",
+    "template_name": "",
+    "template_path": "",
+    "use_excel_com_native_charts": false,
+    "use_template_report_layout": false
+  },
+  "mapping": {
+    "detected_sheet_names": [
+      "ทิศ 1",
+      "ทิศ 2",
+      "ทิศ 3",
+      "ทิศ 4"
+    ],
+    "rows": [
+      {
+        "aggregation_method": "sum",
+        "facility_type": "at_grade",
+        "from_leg": "N",
+        "include_in_peak": true,
+        "include_in_report": true,
+        "movement_code": "NS",
+        "raw_direction": "1",
+        "raw_movement_label": "Demo northbound through - mainline",
+        "raw_sheet": "ทิศ 1",
+        "source_stream": "mainline",
+        "to_leg": "S",
+        "turn_type": "through"
+      },
+      {
+        "aggregation_method": "sum",
+        "facility_type": "frontage",
+        "from_leg": "N",
+        "include_in_peak": true,
+        "include_in_report": true,
+        "movement_code": "NS",
+        "raw_direction": "2",
+        "raw_movement_label": "Demo northbound through - frontage",
+        "raw_sheet": "ทิศ 2",
+        "source_stream": "frontage",
+        "to_leg": "S",
+        "turn_type": "through"
+      },
+      {
+        "aggregation_method": "sum",
+        "facility_type": "at_grade",
+        "from_leg": "W",
+        "include_in_peak": true,
+        "include_in_report": true,
+        "movement_code": "WE",
+        "raw_direction": "3",
+        "raw_movement_label": "Demo westbound through",
+        "raw_sheet": "ทิศ 3",
+        "source_stream": "mainline",
+        "to_leg": "E",
+        "turn_type": "through"
+      },
+      {
+        "aggregation_method": "sum",
+        "facility_type": "at_grade",
+        "from_leg": "E",
+        "include_in_peak": true,
+        "include_in_report": true,
+        "movement_code": "EW",
+        "raw_direction": "4",
+        "raw_movement_label": "Demo eastbound through",
+        "raw_sheet": "ทิศ 4",
+        "source_stream": "mainline",
+        "to_leg": "W",
+        "turn_type": "through"
+      }
+    ]
+  },
+  "metadata": {
+    "project_name": "Synthetic Demo Project",
+    "responsible_party": "Synthetic Demo Team",
+    "survey_date_text": "2026-01-01",
+    "survey_period": "07:00-19:00",
+    "survey_point": "Synthetic Four-Leg Demo Point",
+    "tmc_id": "DEMO-TMC1",
+    "tmc_title": "Synthetic Four-Leg Demo Intersection",
+    "weather": "Synthetic clear weather"
+  },
+  "pce_factors": {
+    "Bicy": 0.0,
+    "HB": 2.1,
+    "HT": 2.5,
+    "LB": 1.5,
+    "LT": 1.0,
+    "MB": 1.5,
+    "MC": 0.333,
+    "MT": 2.1,
+    "PC<7": 1.0,
+    "PC>7": 1.0,
+    "STR": 2.5,
+    "TR": 2.5
+  },
+  "peaks": {
+    "am_peak_window_end": "12:00",
+    "am_peak_window_start": "07:00",
+    "peak_mode": "fixed_hourly",
+    "pm_peak_window_end": "19:00",
+    "pm_peak_window_start": "15:00"
+  },
+  "schema_version": 1,
+  "source_file_modified_time": "",
+  "source_file_name": "DEMO_TMC1_FourLeg.xlsx",
+  "source_file_size": 20664,
+  "updated_at": "2026-01-01T00:00:00Z"
+}
