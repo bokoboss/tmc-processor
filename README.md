@@ -52,11 +52,12 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 
 Batch demo:
 
-1. Open the `ประมวลผลหลายไฟล์` tab.
-2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx` and `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
-3. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
-4. Click Process Batch.
-5. Download the Batch ZIP.
+1. Open the app with `start_tmc_processor.bat`.
+2. Go to the `ประมวลผลหลายไฟล์` tab.
+3. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx` and `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
+4. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
+5. Click Process Batch.
+6. Download the Batch ZIP.
 
 ## วิธีเปิดแบบง่ายที่สุดสำหรับ Windows
 

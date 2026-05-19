@@ -6,7 +6,13 @@ from zipfile import ZipFile
 
 from openpyxl import load_workbook
 
-from tmc_processor.batch import BatchItem, process_batch_files
+from tmc_processor.batch import (
+    BATCH_SUMMARY_COLUMNS,
+    BatchItem,
+    batch_inputs_ready,
+    batch_zip_contents_preview,
+    process_batch_files,
+)
 from tmc_processor.mapping_preset import load_mapping_preset
 
 
@@ -59,6 +65,13 @@ def test_processes_two_demo_workbooks_with_one_mapping_preset() -> None:
     assert all(row.QC_errors >= 0 and row.QC_warnings >= 0 and row.QC_info >= 0 for row in result.summary_rows)
 
 
+def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
+    assert batch_inputs_ready(uploaded_workbook_count=2, mapping_available=True, pce_factors_ready=True)
+    assert not batch_inputs_ready(uploaded_workbook_count=0, mapping_available=True, pce_factors_ready=True)
+    assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=False, pce_factors_ready=True)
+    assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=True, pce_factors_ready=False)
+
+
 def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_inputs() -> None:
     result = process_batch_files(
         _demo_items(),
@@ -81,6 +94,24 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
     assert DAY1.name not in names
     assert DAY2.name not in names
     assert all(not name.endswith(".xlsm") and name not in {DAY1.name, DAY2.name} for name in names)
+
+
+def test_batch_zip_contents_preview_lists_expected_artifacts() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    preview = batch_zip_contents_preview(result.summary_rows)
+
+    assert preview[0] == "batch_summary.xlsx"
+    assert "file_01_DEMO_TMC1_FourLeg/report.xlsx" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/export_summary.txt" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/session.tmcproj.json" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/mapping_preset.mapping.json" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/charts/" in preview
 
 
 def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failure_rows() -> None:
@@ -111,5 +142,28 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
     records = [dict(zip(headers, row)) for row in rows[1:]]
 
     assert [record["status"] for record in records] == ["success", "failed"]
+    assert headers == BATCH_SUMMARY_COLUMNS
     assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(headers)
     assert records[1]["notes"]
+
+
+def test_batch_summary_workbook_has_metadata_sheet() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        mapping_preset_name="Demo preset",
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    metadata_rows = list(workbook["metadata"].iter_rows(values_only=True))
+    metadata = {row[0]: row[1] for row in metadata_rows[1:]}
+
+    assert metadata["app_version"]
+    assert metadata["template_version"] == "four_leg_v1"
+    assert metadata["generated_at"] == "2026-05-19T10:00:00Z"
+    assert metadata["mapping_preset_name"] == "Demo preset"

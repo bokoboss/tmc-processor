@@ -36,8 +36,8 @@ workbook, but the workbook plus either mapping file is enough for the basic demo
 
 ## Batch Demo Workflow
 
-1. Start the app with `start_tmc_processor.bat`.
-2. Open the `ประมวลผลหลายไฟล์` tab.
+1. Open the app with `start_tmc_processor.bat`.
+2. Go to the `ประมวลผลหลายไฟล์` tab.
 3. Upload both `samples/demo/DEMO_TMC1_FourLeg.xlsx` and
    `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
 4. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json` as the shared Mapping

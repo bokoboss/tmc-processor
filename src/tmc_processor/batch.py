@@ -30,6 +30,20 @@ from .summaries import hourly_movement_pcu, vehicle_composition_report
 
 BATCH_PACKAGE_MIME = "application/zip"
 SAFE_BATCH_EXPORT_MODE = "Safe PNG Export Mode - Batch v1"
+BATCH_SUMMARY_COLUMNS = [
+    "file_name",
+    "folder_name",
+    "status",
+    "AM_peak",
+    "PM_peak",
+    "total_vehicles",
+    "total_PCU",
+    "QC_errors",
+    "QC_warnings",
+    "QC_info",
+    "export_file",
+    "notes",
+]
 
 
 @dataclass(frozen=True)
@@ -62,6 +76,10 @@ class BatchResult:
     package_bytes: bytes = b""
     generated_at: str = ""
 
+    @property
+    def has_failures(self) -> bool:
+        return any(row.status == "failed" for row in self.summary_rows)
+
 
 @dataclass
 class _BatchFileArtifacts:
@@ -86,6 +104,40 @@ def safe_batch_name(name: str | None, default: str = "file") -> str:
 def batch_package_filename(name: str | None = None) -> str:
     cleaned = safe_batch_name(name or "tmc_batch", "tmc_batch")
     return f"{cleaned}_batch_package.zip"
+
+
+def batch_inputs_ready(
+    *,
+    uploaded_workbook_count: int,
+    mapping_available: bool,
+    pce_factors_ready: bool = True,
+) -> bool:
+    """Return whether Basic Batch v1 has the required inputs to start."""
+
+    return uploaded_workbook_count > 0 and mapping_available and pce_factors_ready
+
+
+def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[str]:
+    """Return a compact expected ZIP content outline for UI display."""
+
+    rows = list(summary_rows)
+    success_folders = [row.folder_name for row in rows if row.status == "success"]
+    preview = ["batch_summary.xlsx"]
+    if success_folders:
+        for folder in success_folders:
+            preview.extend(
+                [
+                    f"{folder}/",
+                    f"{folder}/report.xlsx",
+                    f"{folder}/export_summary.txt",
+                    f"{folder}/session.tmcproj.json",
+                    f"{folder}/mapping_preset.mapping.json",
+                    f"{folder}/charts/",
+                ]
+            )
+    else:
+        preview.append("(no successful file folders)")
+    return preview
 
 
 def _time_text(value: Any) -> str:
@@ -140,7 +192,7 @@ def _batch_summary_workbook(
     generated_at: str,
     mapping_preset_name: str,
 ) -> bytes:
-    summary = pd.DataFrame([row.__dict__ for row in rows])
+    summary = pd.DataFrame([row.__dict__ for row in rows], columns=BATCH_SUMMARY_COLUMNS)
     metadata = pd.DataFrame(
         [
             {"field": "app_version", "value": APP_VERSION},

@@ -16,7 +16,9 @@ import streamlit as st
 from tmc_processor.batch import (
     BATCH_PACKAGE_MIME,
     BatchItem,
+    batch_inputs_ready,
     batch_package_filename,
+    batch_zip_contents_preview,
     process_batch_files,
 )
 from tmc_processor.charts import report_chart_pngs
@@ -1714,16 +1716,19 @@ def _run_streamlit_app() -> None:
     with batch_tab:
         st.header("ประมวลผลหลายไฟล์")
         st.info("Batch v1 เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+        st.caption("ไฟล์ Excel ต้นฉบับจะไม่ถูกใส่ลงใน Batch ZIP เพื่อป้องกันข้อมูลดิบและลดขนาดไฟล์")
         batch_uploads = st.file_uploader(
-            "อัปโหลดไฟล์ TMC Excel หลายไฟล์",
+            "Upload multiple TMC Excel files",
             type=["xlsx", "xlsm", "xls"],
             accept_multiple_files=True,
             key="batch_raw_tmc_uploads",
+            help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
         )
         batch_preset_upload = st.file_uploader(
-            "โหลด Mapping Preset สำหรับทุกไฟล์",
+            "Load one Mapping Preset for all files",
             type=["json"],
             key="batch_mapping_preset_upload",
+            help="Batch v1 ใช้ Mapping Preset เดียวกันกับทุกไฟล์ ไม่รองรับการเลือก Mapping แยกต่อไฟล์",
         )
         use_current_mapping_for_batch = False
         if st.session_state.get("mapping_table"):
@@ -1749,8 +1754,42 @@ def _run_streamlit_app() -> None:
             batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
             batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
 
-        batch_ready = bool(batch_uploads) and (batch_mapping is not None or loaded_batch_preset is not None)
+        uploaded_ready = bool(batch_uploads)
+        mapping_ready = batch_mapping is not None or loaded_batch_preset is not None
+        pce_ready = bool(selected_pce_factors)
+        export_ready = True
+        batch_ready = batch_inputs_ready(
+            uploaded_workbook_count=len(batch_uploads or []),
+            mapping_available=mapping_ready,
+            pce_factors_ready=pce_ready,
+        ) and export_ready
         st.caption("Batch v1 จะใช้ค่า Setup, PCE factors และช่วงค้นหา Peak ร่วมกัน แล้วใช้ Peak ที่ระบบแนะนำเป็น Peak ที่ยืนยันของแต่ละไฟล์")
+        _render_readiness_checklist(
+            [
+                (
+                    "อัปโหลด raw workbooks",
+                    uploaded_ready,
+                    f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel",
+                ),
+                (
+                    "Mapping Preset / current mapping",
+                    mapping_ready,
+                    "พร้อมใช้" if mapping_ready else "โหลด Mapping Preset หนึ่งไฟล์ หรือใช้ Mapping ปัจจุบัน",
+                ),
+                (
+                    "PCE factors",
+                    pce_ready,
+                    "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า",
+                ),
+                (
+                    "Export mode",
+                    export_ready,
+                    "Batch ใช้ Safe PNG Export Mode เสมอ",
+                ),
+            ]
+        )
+        if not batch_ready:
+            st.warning("กรุณาอัปโหลด raw workbooks และโหลด Mapping Preset ก่อน Process Batch")
         run_batch = st.button("Process Batch", type="primary", disabled=not batch_ready, key="run_batch_processing")
         if run_batch:
             items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
@@ -1773,22 +1812,33 @@ def _run_streamlit_app() -> None:
         if batch_result:
             batch_table = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
             display_columns = {
-                "file_name": "file_name",
-                "status": "status",
+                "file_name": "ชื่อไฟล์",
+                "status": "สถานะ",
                 "AM_peak": "AM peak",
                 "PM_peak": "PM peak",
-                "total_PCU": "total PCU",
+                "total_PCU": "PCU รวม",
+                "QC_errors": "QC errors",
                 "QC_warnings": "QC warnings",
                 "QC_info": "QC info",
-                "notes": "notes",
+                "notes": "หมายเหตุ",
             }
-            st.dataframe(batch_table[list(display_columns)].rename(columns=display_columns), width="stretch")
+            display_table = batch_table[list(display_columns)].rename(columns=display_columns)
+            status_labels = {"success": "สำเร็จ", "failed": "ไม่สำเร็จ"}
+            if "สถานะ" in display_table:
+                display_table["สถานะ"] = display_table["สถานะ"].map(lambda value: status_labels.get(str(value), str(value)))
+            st.dataframe(display_table, width="stretch")
+            if batch_result.has_failures:
+                st.warning("บางไฟล์ประมวลผลไม่สำเร็จ กรุณาตรวจสอบ batch_summary.xlsx")
+            with st.expander("ตัวอย่างโครงสร้าง Batch ZIP", expanded=True):
+                st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
+                st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
             st.download_button(
                 "Download Batch ZIP",
                 data=download_buffer(batch_result.package_bytes),
                 file_name=batch_package_filename(batch_preset_name or "tmc_batch"),
                 mime=BATCH_PACKAGE_MIME,
                 key="download_batch_zip",
+                help="ดาวน์โหลด ZIP ที่มี batch_summary.xlsx และผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ",
             )
 
     processed = st.session_state.get("tmc_processed")
