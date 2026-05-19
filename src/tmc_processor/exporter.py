@@ -6,7 +6,7 @@ import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from io import BytesIO
-from datetime import time
+from datetime import datetime, time
 from typing import Any
 
 from openpyxl import load_workbook
@@ -21,7 +21,7 @@ import pandas as pd
 from .charts import report_chart_pngs
 from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
 from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
-from .metadata import setup_with_metadata
+from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
 from .pcu import pce_factor_traceability_frame
 from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
@@ -44,6 +44,7 @@ from .time_utils import hourly_interval_rows
 
 
 EXPORT_SHEETS = [
+    "Export_Metadata",
     "Setup",
     "PCE_Factors",
     "Mapping",
@@ -67,6 +68,27 @@ DIAGRAM_DATA_SHEET_NAME = "Diagram_Data"
 TMC_REPORT_SHEET_NAME = "TMC_Report"
 DIAGRAM_SHEET_NAME = "Diagram"
 DEFAULT_CREATE_EXCEL_TABLES = False
+
+
+def _export_metadata_frame(
+    setup: dict[str, Any],
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    template_version: str = TEMPLATE_VERSION,
+) -> pd.DataFrame:
+    metadata_values = metadata_cell_values(setup)
+    rows = [
+        ("app_version", APP_VERSION),
+        ("template_version", template_version),
+        ("generated_at", generated_timestamp_text(generated_at)),
+        ("export_mode", export_mode or ""),
+        ("source_file_name", Path(str(source_file_name or "")).name),
+        ("report_title", metadata_values.get("report_title", "")),
+        ("survey_point", metadata_values.get("survey_point", "")),
+    ]
+    return pd.DataFrame(rows, columns=["field", "value"])
 
 
 class _WorkbookAdapter:
@@ -228,6 +250,7 @@ def _format_worksheet(worksheet, sheet_name: str, create_excel_tables: bool = DE
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     widths = {
+        "Export_Metadata": {"A": 24, "B": 72},
         "Setup": {"A": 28, "B": 36},
         "PCE_Factors": {"A": 20, "B": 14, "C": 18},
         "Mapping": {"A": 24, "B": 16, "C": 18, "D": 12, "E": 12, "F": 16, "G": 18, "H": 16, "I": 18},
@@ -1004,6 +1027,10 @@ def export_workbook(
     template_map_path: str | None = None,
     create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
     pce_factors: dict[str, float] | None = None,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
     original_setup = dict(setup)
     setup = setup_with_metadata(setup)
@@ -1013,6 +1040,13 @@ def export_workbook(
     hourly_movement = hourly_movement_pcu(normalized, mapping)
     vehicle_composition_for_report = vehicle_composition_report(normalized)
     sheets = {
+        "Export_Metadata": _export_metadata_frame(
+            setup,
+            export_mode=export_mode,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
+            template_version=template_version,
+        ),
         "Setup": _setup_frame(setup),
         "PCE_Factors": pce_factor_traceability_frame(pce_factors),
         "Mapping": mapping,

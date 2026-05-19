@@ -84,7 +84,7 @@ def main() -> int:
     if not result.workbook_bytes:
         raise AssertionError("Export workbook bytes were not generated")
     workbook = load_workbook(BytesIO(result.workbook_bytes), read_only=True)
-    required_sheets = {"Setup", "Mapping", "Normalized_Data", "Peak_PHF", "TMC_Report"}
+    required_sheets = {"Export_Metadata", "Setup", "Mapping", "Normalized_Data", "Peak_PHF", "TMC_Report"}
     missing = required_sheets - set(workbook.sheetnames)
     if missing:
         raise AssertionError(f"Export workbook missing sheets: {sorted(missing)}")

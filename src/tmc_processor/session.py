@@ -13,6 +13,7 @@ import pandas as pd
 
 from .constants import AM_WINDOW, DEFAULT_PEAK_MODE, MAPPING_COLUMNS, PM_WINDOW
 from .mapping import clean_mapping
+from .metadata import APP_VERSION, TEMPLATE_VERSION
 from .pcu import normalize_pce_factors, validate_pce_factors
 
 
@@ -61,6 +62,7 @@ PEAK_FIELDS = (
 EXPORT_FIELDS = (
     "use_template_report_layout",
     "use_excel_com_native_charts",
+    "template_version",
     "template_name",
     "template_path",
     "template_map_name",
@@ -175,6 +177,8 @@ def build_project_session(
 
     return {
         "schema_version": CURRENT_SCHEMA_VERSION,
+        "app_version": APP_VERSION,
+        "template_version": TEMPLATE_VERSION,
         "created_at": created_at or now,
         "updated_at": updated_at or now,
         "source_file_name": source_file_name or "",
@@ -205,6 +209,8 @@ def normalize_project_session(raw_session: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "schema_version": raw_session.get("schema_version", CURRENT_SCHEMA_VERSION),
+        "app_version": str(raw_session.get("app_version") or ""),
+        "template_version": str(raw_session.get("template_version") or ""),
         "created_at": str(raw_session.get("created_at") or ""),
         "updated_at": str(raw_session.get("updated_at") or ""),
         "source_file_name": str(raw_session.get("source_file_name") or ""),

@@ -47,11 +47,14 @@ from tmc_processor.mapping import (
     validate_mapping_for_processing,
 )
 from tmc_processor.metadata import (
+    APP_VERSION,
     DEFAULT_CAPTION_TEXT,
     DEFAULT_RESPONSIBLE_PARTY,
     DEFAULT_SURVEY_PERIOD,
     DEFAULT_WEATHER,
     SetupMetadata,
+    TEMPLATE_VERSION,
+    generated_timestamp_text,
 )
 from tmc_processor import metadata as setup_metadata
 from tmc_processor.pcu import (
@@ -685,6 +688,12 @@ def _inject_global_css() -> None:
         }
         .tmc-sidebar-badge-success { border-left: 3px solid var(--tmc-success); }
         .tmc-sidebar-badge-warning { border-left: 3px solid var(--tmc-warning); }
+        .tmc-version-stamp {
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-xs);
+            line-height: 1.35;
+            margin-top: var(--tmc-space-3);
+        }
         div[data-testid="stAlert"] {
             border-radius: var(--tmc-radius-md);
         }
@@ -770,6 +779,16 @@ def _render_sidebar_badge(title: str, detail: str, *, ready: bool) -> None:
         f'<div class="tmc-sidebar-badge {badge_class}">'
         f"<strong>{escape(title)}</strong><br>"
         f"<span>{escape(detail)}</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_version_stamp() -> None:
+    st.markdown(
+        f'<div class="tmc-version-stamp">'
+        f"TMC Processor v{escape(APP_VERSION)}<br>"
+        f"Template: {escape(TEMPLATE_VERSION)}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -981,6 +1000,7 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
         export_settings={
             "use_template_report_layout": bool(_state_value("use_template_report_layout_checkbox", True)),
             "use_excel_com_native_charts": bool(_state_value("use_excel_com_native_charts_checkbox", False)),
+            "template_version": TEMPLATE_VERSION,
             "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
             "template_path": str(DEFAULT_TEMPLATE_PATH),
             "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
@@ -1331,6 +1351,7 @@ def _run_streamlit_app() -> None:
             st.caption(detail)
         with st.expander("รายละเอียด Excel COM", expanded=False):
             _render_excel_com_status(excel_com_status)
+        _render_version_stamp()
 
     st.markdown(
         """
@@ -1743,6 +1764,7 @@ def _run_streamlit_app() -> None:
                 "AM": (confirmed_am_start, confirmed_am_end),
                 "PM": (confirmed_pm_start, confirmed_pm_end),
             }
+            export_generated_at = generated_timestamp_text()
             try:
                 raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
                 with warnings.catch_warnings(record=True) as export_warnings:
@@ -1759,6 +1781,9 @@ def _run_streamlit_app() -> None:
                         generate_workbook=True,
                         use_template_report_layout=use_template_report_layout,
                         use_excel_com_native_charts=excel_com_enabled,
+                        export_mode=export_mode,
+                        source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                        generated_at=export_generated_at,
                     )
                 for warning in export_warnings:
                     message = str(warning.message)
@@ -1803,6 +1828,7 @@ def _run_streamlit_app() -> None:
                         "workbook_filename": safe_workbook_filename(tmc_id),
                         "confirmed_setup": confirmed_setup,
                         "export_mode": export_mode,
+                        "generated_at": export_generated_at,
                     }
                     st.success("สร้างรายงาน Excel เสร็จแล้ว")
             except Exception as exc:  # pragma: no cover - UI guardrail
@@ -1836,9 +1862,11 @@ def _run_streamlit_app() -> None:
                 workbook_filename=output["workbook_filename"],
                 pce_factors=output_result.pce_factors,
                 export_settings={
+                    "template_version": TEMPLATE_VERSION,
                     "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
                     "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
                 },
+                generated_at=output.get("generated_at"),
             )
             package_bytes = create_export_package_zip(
                 workbook_bytes=output["workbook_bytes"],

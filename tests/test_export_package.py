@@ -6,6 +6,13 @@ from zipfile import ZipFile
 import pandas as pd
 
 from tmc_processor.export_package import build_export_summary_text, create_export_package_zip
+from tmc_processor.metadata import APP_VERSION, TEMPLATE_VERSION, get_app_version
+
+
+def test_app_version_is_available_from_central_metadata() -> None:
+    assert get_app_version() == APP_VERSION
+    assert APP_VERSION
+    assert TEMPLATE_VERSION == "four_leg_v1"
 
 
 def _mapping(aggregate: bool = False) -> pd.DataFrame:
@@ -75,9 +82,9 @@ def test_export_summary_content_includes_traceability_fields() -> None:
         generated_at="2026-05-19T10:00:00Z",
     )
 
-    assert "App version:" in summary
-    assert "Template version: TMC_Template.xlsx" in summary
-    assert "Generated timestamp: 2026-05-19T10:00:00Z" in summary
+    assert f"App version: {APP_VERSION}" in summary
+    assert f"Template version: {TEMPLATE_VERSION}" in summary
+    assert "Generated at: 2026-05-19T10:00:00Z" in summary
     assert "Source file name: raw_input.xlsx" in summary
     assert "Survey point / TMC title: Main & 1st" in summary
     assert "Export mode: Safe PNG Export Mode" in summary
@@ -118,10 +125,11 @@ def test_export_summary_includes_aggregation_summary_when_present() -> None:
 
 
 def test_export_package_zip_contains_expected_files() -> None:
+    summary_text = build_export_summary_text(generated_at="2026-05-19T10:00:00Z")
     package = create_export_package_zip(
         workbook_bytes=b"workbook",
         workbook_filename="TMC01_output.xlsx",
-        export_summary_text="summary",
+        export_summary_text=summary_text,
         project_session_bytes=b'{"schema_version":1}',
         project_session_filename="TMC01_session.tmcproj.json",
         mapping=_mapping(),
@@ -131,6 +139,7 @@ def test_export_package_zip_contains_expected_files() -> None:
 
     with ZipFile(BytesIO(package)) as archive:
         names = set(archive.namelist())
+        summary = archive.read("export_summary.txt").decode("utf-8")
 
     assert "TMC01_output.xlsx" in names
     assert "export_summary.txt" in names
@@ -139,6 +148,8 @@ def test_export_package_zip_contains_expected_files() -> None:
     assert "charts/hourly_pcu.png" in names
     assert "charts/vehicle_composition.png" in names
     assert "charts/tmc_movement_diagram.png" in names
+    assert f"App version: {APP_VERSION}" in summary
+    assert f"Template version: {TEMPLATE_VERSION}" in summary
 
 
 def test_export_package_zip_does_not_contain_raw_excel_input() -> None:

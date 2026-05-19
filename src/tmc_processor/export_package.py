@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from importlib import metadata
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 import re
@@ -13,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
+from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, get_app_version
 from .pcu import pce_factor_traceability_frame
 
 
@@ -20,23 +20,13 @@ PACKAGE_MIME = "application/zip"
 
 
 def app_version() -> str:
-    """Return the installed package version, falling back for editable local runs."""
+    """Return the application version from the central metadata helper."""
 
-    try:
-        return metadata.version("tmc-processor")
-    except metadata.PackageNotFoundError:
-        return "0.1.0"
+    return get_app_version()
 
 
 def _timestamp_text(generated_at: datetime | str | None = None) -> str:
-    if generated_at is None:
-        return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    if isinstance(generated_at, datetime):
-        value = generated_at
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    return str(generated_at)
+    return generated_timestamp_text(generated_at)
 
 
 def _safe_member_name(name: str | None, default: str) -> str:
@@ -77,7 +67,7 @@ def _template_version(template_version: str | None, export_settings: dict[str, A
     if template_version:
         return str(template_version)
     export_settings = export_settings or {}
-    return str(export_settings.get("template_version") or export_settings.get("template_name") or "")
+    return str(export_settings.get("template_version") or TEMPLATE_VERSION)
 
 
 def _mapping_summary(mapping: pd.DataFrame | None) -> list[str]:
@@ -137,9 +127,9 @@ def build_export_summary_text(
     lines = [
         "TMC Processor Export Summary",
         "",
-        f"App version: {app_version()}",
+        f"App version: {APP_VERSION}",
         f"Template version: {_template_version(template_version, export_settings)}",
-        f"Generated timestamp: {_timestamp_text(generated_at)}",
+        f"Generated at: {_timestamp_text(generated_at)}",
         f"Source file name: {Path(str(source_file_name or '')).name}",
         f"Survey point / TMC title: {survey_title}",
         f"Export mode: {export_mode or ''}",

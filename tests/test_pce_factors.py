@@ -9,6 +9,7 @@ import pandas as pd
 from tmc_processor.constants import DEFAULT_PCE_FACTORS
 from tmc_processor.diagram import movement_diagram_values
 from tmc_processor.exporter import export_workbook
+from tmc_processor.metadata import APP_VERSION, TEMPLATE_VERSION
 from tmc_processor.normalizer import normalize
 from tmc_processor.pcu import get_default_pce_factors, normalize_pce_factors, pce_factors_equal, validate_pce_factors
 from tmc_processor.pipeline import process_tmc
@@ -152,6 +153,15 @@ def test_pce_factors_round_trip_through_project_session() -> None:
 
     older_session = session_from_json(b'{"schema_version": 1}')
     assert older_session.session["pce_factors"]["MC"] == DEFAULT_PCE_FACTORS["MC"]
+    assert older_session.session["app_version"] == ""
+    assert older_session.session["template_version"] == ""
+
+
+def test_project_session_includes_version_metadata() -> None:
+    session = build_project_session(pce_factors={"MC": 0.75})
+
+    assert session["app_version"] == APP_VERSION
+    assert session["template_version"] == TEMPLATE_VERSION
 
 
 def test_export_workbook_includes_pce_factor_traceability() -> None:
@@ -175,3 +185,66 @@ def test_export_workbook_includes_pce_factor_traceability() -> None:
     rows = list(workbook["PCE_Factors"].iter_rows(min_row=2, values_only=True))
     assert ("MC", 0.75, "user_override") in rows
     assert ("PC<7", DEFAULT_PCE_FACTORS["PC<7"], "default") in rows
+
+
+def test_export_workbook_includes_export_metadata() -> None:
+    result = _process(pce_factors={"MC": 0.75})
+    workbook_bytes = export_workbook(
+        {"project_name": "Metadata export", "survey_point": "Main & 1st", "tmc_title": "TMC-01"},
+        _mapping(),
+        result.normalized,
+        result.qc,
+        result.hourly,
+        result.movement,
+        result.vehicle,
+        result.peaks,
+        include_charts=False,
+        include_diagram=False,
+        export_mode="Safe PNG Export Mode",
+        source_file_name=r"C:\private\raw_input.xlsx",
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    assert "Export_Metadata" in workbook.sheetnames
+    metadata = {
+        row[0]: row[1]
+        for row in workbook["Export_Metadata"].iter_rows(min_row=2, values_only=True)
+        if row[0]
+    }
+    assert metadata["app_version"] == APP_VERSION
+    assert metadata["template_version"] == TEMPLATE_VERSION
+    assert metadata["generated_at"] == "2026-05-19T10:00:00Z"
+    assert metadata["export_mode"] == "Safe PNG Export Mode"
+    assert metadata["source_file_name"] == "raw_input.xlsx"
+    assert metadata["survey_point"] == "Main & 1st"
+
+
+def test_template_layout_export_includes_export_metadata() -> None:
+    result = _process(pce_factors={"MC": 0.75})
+    workbook_bytes = export_workbook(
+        {"project_name": "Template metadata export", "survey_point": "Template Point"},
+        _mapping(),
+        result.normalized,
+        result.qc,
+        result.hourly,
+        result.movement,
+        result.vehicle,
+        result.peaks,
+        include_charts=False,
+        include_diagram=False,
+        use_template_report_layout=True,
+        export_mode="Excel Template Mode",
+        source_file_name="template_input.xlsx",
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    metadata = {
+        row[0]: row[1]
+        for row in workbook["Export_Metadata"].iter_rows(min_row=2, values_only=True)
+        if row[0]
+    }
+    assert metadata["app_version"] == APP_VERSION
+    assert metadata["template_version"] == TEMPLATE_VERSION
+    assert metadata["export_mode"] == "Excel Template Mode"

@@ -48,6 +48,9 @@ def process_tmc(
     use_template_report_layout: bool = False,
     use_excel_com_native_charts: bool = False,
     pce_factors: dict[str, float] | None = None,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: str | None = None,
 ) -> ProcessingResult:
     detected_sheets = detected_sheets or list(raw_sheets)
     mapping_issues = validate_mapping_for_processing(detected_sheets, mapping)
@@ -122,5 +125,8 @@ def process_tmc(
             pce_factors=selected_pce_factors,
             use_template_report_layout=use_template_report_layout,
             use_excel_com_native_charts=use_excel_com_native_charts,
+            export_mode=export_mode,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
         )
     return ProcessingResult(normalized, qc, hourly, movement, vehicle, peaks, workbook_bytes, selected_pce_factors)

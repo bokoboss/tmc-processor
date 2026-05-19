@@ -3,9 +3,48 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from importlib import metadata as package_metadata
+from pathlib import Path
+import tomllib
 from typing import Any, Mapping
 
 import pandas as pd
+
+
+PACKAGE_NAME = "tmc-processor"
+TEMPLATE_VERSION = "four_leg_v1"
+
+
+def get_app_version() -> str:
+    """Return the application version from installed metadata or pyproject.toml."""
+
+    try:
+        return package_metadata.version(PACKAGE_NAME)
+    except package_metadata.PackageNotFoundError:
+        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        try:
+            with pyproject_path.open("rb") as handle:
+                pyproject = tomllib.load(handle)
+        except OSError:
+            return "unknown"
+        return str(pyproject.get("project", {}).get("version") or "unknown")
+
+
+APP_VERSION = get_app_version()
+
+
+def generated_timestamp_text(generated_at: datetime | str | None = None) -> str:
+    """Return an ISO 8601 UTC timestamp for exported artifacts."""
+
+    if generated_at is None:
+        return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if isinstance(generated_at, datetime):
+        value = generated_at
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(generated_at)
 
 
 METADATA_FIELDS = (
