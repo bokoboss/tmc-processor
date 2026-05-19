@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import time
 import hashlib
+from html import escape
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -250,105 +251,227 @@ def _inject_global_css() -> None:
         """
         <style>
         :root {
-            --tmc-bg: #f7f8fa;
-            --tmc-surface: #ffffff;
-            --tmc-border: #e5e7eb;
-            --tmc-border-strong: #cbd5e1;
-            --tmc-text: #1f2937;
-            --tmc-muted: #6b7280;
             --tmc-primary: #1f3a5f;
-            --tmc-primary-soft: #eef3f8;
-            --tmc-accent: #3b5b7a;
-            --tmc-success: #15803d;
-            --tmc-warning: #b45309;
-            --tmc-error: #b91c1c;
+            --tmc-primary-dark: #0f2340;
+            --tmc-primary-soft: #e8f0f8;
+            --tmc-bg: #f8fafc;
+            --tmc-surface: #ffffff;
+            --tmc-surface-muted: #f1f5f9;
+            --tmc-border: #e2e8f0;
+            --tmc-border-strong: #cbd5e1;
+            --tmc-text: #0f172a;
+            --tmc-muted: #64748b;
+            --tmc-success: #166534;
+            --tmc-warning: #92400e;
+            --tmc-error: #991b1b;
+            --tmc-slate: #475569;
+
+            --tmc-font-family: "Prompt", "Sarabun", "Segoe UI", Tahoma, sans-serif;
+            --tmc-font-xs: 0.75rem;
+            --tmc-font-sm: 0.86rem;
+            --tmc-font-md: 0.95rem;
+            --tmc-font-lg: 1.08rem;
+            --tmc-font-xl: 1.9rem;
+
+            --tmc-space-1: 0.25rem;
+            --tmc-space-2: 0.5rem;
+            --tmc-space-3: 0.75rem;
+            --tmc-space-4: 1rem;
+            --tmc-space-5: 1.25rem;
+            --tmc-space-6: 1.5rem;
+
+            --tmc-radius-sm: 6px;
+            --tmc-radius-md: 8px;
+            --tmc-radius-lg: 10px;
+            --tmc-shadow-subtle: 0 1px 2px rgba(15, 23, 42, 0.04);
+            --tmc-shadow-card: 0 8px 22px rgba(15, 23, 42, 0.06);
+        }
+        html, body, [class*="css"] {
+            font-family: var(--tmc-font-family);
         }
         .stApp {
             background: var(--tmc-bg);
             color: var(--tmc-text);
+            font-family: var(--tmc-font-family);
         }
         .block-container {
             max-width: 1320px;
-            padding-top: 1.1rem;
+            padding-top: var(--tmc-space-5);
             padding-bottom: 2.5rem;
         }
         .tmc-header {
-            padding: 0.2rem 0 0.75rem 0;
+            padding: var(--tmc-space-1) 0 var(--tmc-space-4) 0;
         }
         .tmc-title {
             color: var(--tmc-text);
-            font-size: 1.9rem;
+            font-size: var(--tmc-font-xl);
             font-weight: 720;
             letter-spacing: 0;
             margin: 0;
         }
         .tmc-subtitle {
-            color: #475569;
-            font-size: 0.98rem;
-            margin-top: 0.2rem;
+            color: var(--tmc-slate);
+            font-size: var(--tmc-font-md);
+            margin-top: var(--tmc-space-1);
         }
         .tmc-workflow {
             color: var(--tmc-muted);
-            font-size: 0.86rem;
-            margin-top: 0.45rem;
+            font-size: var(--tmc-font-sm);
+            margin-top: var(--tmc-space-2);
+        }
+        .tmc-status-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-5) 0;
         }
         .tmc-card {
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: 8px;
-            padding: 0.58rem 0.72rem;
-            height: 72px;
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-3) var(--tmc-space-4);
             box-sizing: border-box;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-status-card {
+            min-height: 78px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.12rem;
         }
         .tmc-card-label {
             color: var(--tmc-muted);
-            font-size: 0.72rem;
-            font-weight: 640;
+            font-size: var(--tmc-font-xs);
+            font-weight: 650;
             letter-spacing: 0;
-            margin-bottom: 0.18rem;
+            line-height: 1.25;
         }
         .tmc-card-value {
             color: var(--tmc-text);
-            font-size: 0.95rem;
-            font-weight: 680;
-            line-height: 1.25;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            font-size: var(--tmc-font-md);
+            font-weight: 700;
+            line-height: 1.28;
+            overflow-wrap: anywhere;
         }
         .tmc-card-note {
             color: var(--tmc-muted);
-            font-size: 0.72rem;
-            margin-top: 0.18rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            font-size: var(--tmc-font-xs);
+            line-height: 1.25;
+            overflow-wrap: anywhere;
         }
-        .tmc-status-gray { border-top: 3px solid #9ca3af; }
-        .tmc-status-blue { border-top: 3px solid var(--tmc-accent); }
-        .tmc-status-green { border-top: 3px solid var(--tmc-success); }
-        .tmc-status-amber { border-top: 3px solid var(--tmc-warning); }
-        .tmc-status-red { border-top: 3px solid var(--tmc-error); }
-        .tmc-section {
-            background: var(--tmc-surface);
-            border: 1px solid var(--tmc-border);
-            border-radius: 8px;
-            padding: 0.9rem 1rem;
-            margin: 0.75rem 0 1rem 0;
+        .tmc-status-gray { border-left: 3px solid var(--tmc-border-strong); }
+        .tmc-status-blue { border-left: 3px solid var(--tmc-primary); }
+        .tmc-status-green { border-left: 3px solid var(--tmc-success); }
+        .tmc-status-amber { border-left: 3px solid var(--tmc-warning); }
+        .tmc-status-red { border-left: 3px solid var(--tmc-error); }
+
+        .tmc-section-header {
+            display: flex;
+            gap: var(--tmc-space-3);
+            align-items: flex-start;
+            margin: var(--tmc-space-1) 0 var(--tmc-space-4) 0;
+        }
+        .tmc-section-accent {
+            width: 4px;
+            min-height: 2.1rem;
+            border-radius: 999px;
+            background: var(--tmc-primary);
+            margin-top: 0.08rem;
         }
         .tmc-section-title {
             color: var(--tmc-text);
-            font-size: 1rem;
+            font-size: var(--tmc-font-lg);
+            font-weight: 720;
+            line-height: 1.25;
+            margin: 0;
+        }
+        .tmc-section-description {
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.35;
+            margin-top: 0.18rem;
+        }
+        .tmc-section {
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-4);
+            margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
+        }
+        .tmc-empty-state {
+            background: var(--tmc-surface);
+            border: 1px dashed var(--tmc-border-strong);
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-5);
+            color: var(--tmc-muted);
+            margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
+        }
+        .tmc-empty-title {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-md);
             font-weight: 700;
-            margin-bottom: 0.65rem;
+            margin-bottom: var(--tmc-space-1);
+        }
+        .tmc-empty-description {
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.45;
+        }
+        .tmc-peak-card {
+            min-height: 116px;
+            border-top: 3px solid var(--tmc-slate);
+        }
+        .tmc-peak-suggested {
+            border-top-color: var(--tmc-slate);
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        }
+        .tmc-peak-confirmed {
+            border-top-color: var(--tmc-primary);
+            background: linear-gradient(180deg, #ffffff 0%, var(--tmc-primary-soft) 100%);
+        }
+        .tmc-peak-topline {
+            display: flex;
+            justify-content: space-between;
+            gap: var(--tmc-space-2);
+            align-items: flex-start;
+            margin-bottom: var(--tmc-space-2);
+        }
+        .tmc-peak-badge {
+            border-radius: 999px;
+            padding: 0.1rem 0.48rem;
+            font-size: 0.68rem;
+            font-weight: 700;
+            line-height: 1.4;
+            white-space: nowrap;
+        }
+        .tmc-peak-suggested .tmc-peak-badge {
+            color: var(--tmc-slate);
+            background: var(--tmc-surface-muted);
+        }
+        .tmc-peak-confirmed .tmc-peak-badge {
+            color: var(--tmc-primary-dark);
+            background: var(--tmc-primary-soft);
+            border: 1px solid #d2e3f3;
+        }
+        .tmc-peak-time {
+            color: var(--tmc-text);
+            font-size: 1.32rem;
+            font-weight: 760;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+        .tmc-peak-pcu {
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-sm);
+            margin-top: var(--tmc-space-1);
         }
         div[data-testid="stMetric"] {
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: 8px;
-            padding: 0.75rem 0.9rem;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-3) var(--tmc-space-4);
+            box-shadow: var(--tmc-shadow-subtle);
         }
         section[data-testid="stSidebar"] {
             background: #f3f6f9;
@@ -360,33 +483,35 @@ def _inject_global_css() -> None:
             letter-spacing: 0;
         }
         section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-            color: #475569;
+            color: var(--tmc-muted);
+            line-height: 1.45;
         }
         div[data-testid="stVerticalBlockBorderWrapper"] {
             border-color: var(--tmc-border);
-            border-radius: 10px;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+            border-radius: var(--tmc-radius-lg);
+            box-shadow: var(--tmc-shadow-subtle);
         }
         div[data-testid="stTabs"] [data-baseweb="tab-list"] {
-            gap: 0.25rem;
+            gap: var(--tmc-space-1);
             border-bottom: 1px solid var(--tmc-border);
         }
         div[data-testid="stTabs"] [data-baseweb="tab"] {
             color: var(--tmc-muted);
-            border-radius: 8px 8px 0 0;
-            padding: 0.35rem 0.85rem;
+            border-radius: var(--tmc-radius-md) var(--tmc-radius-md) 0 0;
+            padding: 0.42rem 0.95rem;
             margin-bottom: -1px;
             border-bottom: 3px solid transparent;
+            font-weight: 650;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {
-            color: var(--tmc-primary);
+            color: var(--tmc-primary-dark);
             background: var(--tmc-primary-soft);
             border-bottom-color: var(--tmc-primary);
-            font-weight: 700;
+            font-weight: 760;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"]:hover {
             color: var(--tmc-primary);
-            background: #f8fafc;
+            background: var(--tmc-surface-muted);
         }
         div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
             background-color: transparent;
@@ -402,7 +527,7 @@ def _inject_global_css() -> None:
         div[data-baseweb="input"],
         div[data-baseweb="select"],
         div[data-baseweb="base-input"] {
-            border-radius: 7px;
+            border-radius: var(--tmc-radius-sm);
         }
         div[data-baseweb="input"] input,
         div[data-baseweb="base-input"] input {
@@ -414,11 +539,11 @@ def _inject_global_css() -> None:
         div[data-testid="stFileUploader"] label,
         div[data-testid="stRadio"] label {
             color: #334155;
-            font-weight: 600;
+            font-weight: 650;
         }
         div.stButton > button,
         div.stDownloadButton > button {
-            border-radius: 7px;
+            border-radius: var(--tmc-radius-sm);
             border-color: var(--tmc-border-strong);
             color: var(--tmc-text);
             min-height: 2.35rem;
@@ -426,7 +551,7 @@ def _inject_global_css() -> None:
         }
         div.stButton > button:hover,
         div.stDownloadButton > button:hover {
-            border-color: var(--tmc-accent);
+            border-color: var(--tmc-primary);
             color: var(--tmc-primary);
         }
         div.stButton > button[kind="primary"],
@@ -437,55 +562,89 @@ def _inject_global_css() -> None:
         }
         div.stButton > button[kind="primary"]:hover,
         button[data-testid="stBaseButton-primary"]:hover {
-            background: #243b53;
-            border-color: #243b53;
+            background: var(--tmc-primary-dark);
+            border-color: var(--tmc-primary-dark);
             color: #ffffff;
         }
         div.stButton > button:disabled,
         div.stDownloadButton > button:disabled,
         button[data-testid="stBaseButton-primary"]:disabled {
-            background: #e5e7eb !important;
-            border-color: #e5e7eb !important;
+            background: var(--tmc-border) !important;
+            border-color: var(--tmc-border) !important;
             color: #94a3b8 !important;
             box-shadow: none;
         }
         .tmc-checklist {
             display: grid;
-            gap: 0.45rem;
-            margin: 0.5rem 0 1rem 0;
+            gap: var(--tmc-space-2);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
         }
         .tmc-check-item {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
+            gap: var(--tmc-space-3);
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: 8px;
-            padding: 0.55rem 0.7rem;
-            color: #374151;
-            font-size: 0.9rem;
+            border-radius: var(--tmc-radius-md);
+            padding: 0.58rem var(--tmc-space-3);
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            box-shadow: var(--tmc-shadow-subtle);
+            margin-bottom: var(--tmc-space-2);
         }
         .tmc-check-ready { border-left: 3px solid var(--tmc-success); }
         .tmc-check-warn { border-left: 3px solid var(--tmc-warning); }
+        .tmc-check-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.35rem;
+            height: 1.35rem;
+            border-radius: 999px;
+            flex: 0 0 auto;
+            font-weight: 800;
+            font-size: 0.82rem;
+        }
+        .tmc-check-ready .tmc-check-icon {
+            color: var(--tmc-success);
+            background: #ecfdf5;
+        }
+        .tmc-check-warn .tmc-check-icon {
+            color: var(--tmc-warning);
+            background: #fffbeb;
+        }
+        .tmc-check-body {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .tmc-check-label {
+            font-weight: 650;
+            line-height: 1.3;
+        }
+        .tmc-check-status {
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-xs);
+            line-height: 1.3;
+        }
         .tmc-check-detail {
             color: var(--tmc-muted);
-            font-size: 0.78rem;
-            text-align: right;
+            font-size: var(--tmc-font-xs);
+            line-height: 1.35;
         }
         .tmc-mode-note {
-            color: #4b5563;
-            font-size: 0.9rem;
-            margin-bottom: 0.6rem;
+            color: var(--tmc-muted);
+            font-size: var(--tmc-font-sm);
+            margin-bottom: var(--tmc-space-3);
         }
         .tmc-sidebar-badge {
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: 8px;
-            padding: 0.5rem 0.65rem;
-            margin: 0.35rem 0 0.6rem 0;
-            font-size: 0.84rem;
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-2) var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-3) 0;
+            font-size: var(--tmc-font-sm);
             color: var(--tmc-text);
+            box-shadow: var(--tmc-shadow-subtle);
         }
         .tmc-sidebar-badge strong {
             color: var(--tmc-primary);
@@ -493,10 +652,52 @@ def _inject_global_css() -> None:
         .tmc-sidebar-badge-success { border-left: 3px solid var(--tmc-success); }
         .tmc-sidebar-badge-warning { border-left: 3px solid var(--tmc-warning); }
         div[data-testid="stAlert"] {
-            border-radius: 8px;
+            border-radius: var(--tmc-radius-md);
+        }
+        @media (max-width: 900px) {
+            .tmc-status-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 640px) {
+            .tmc-status-grid {
+                grid-template-columns: 1fr;
+            }
+            .tmc-title {
+                font-size: 1.55rem;
+            }
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section_header(title: str, description: str = "") -> None:
+    description_html = (
+        f'<div class="tmc-section-description">{escape(description)}</div>' if description else ""
+    )
+    st.markdown(
+        '<div class="tmc-section-header">'
+        '<div class="tmc-section-accent"></div>'
+        '<div>'
+        f'<div class="tmc-section-title">{escape(title)}</div>'
+        f"{description_html}"
+        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_empty_state(title: str, description: str = "") -> None:
+    description_html = (
+        f'<div class="tmc-empty-description">{escape(description)}</div>' if description else ""
+    )
+    st.markdown(
+        '<div class="tmc-empty-state">'
+        f'<div class="tmc-empty-title">{escape(title)}</div>'
+        f"{description_html}"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -510,16 +711,21 @@ def _status_tone(status: str) -> str:
     return "gray"
 
 
-def _render_status_card(label: str, status: str, note: str = "") -> None:
+def _status_card_html(label: str, status: str, note: str = "") -> str:
     tone = _status_tone(status)
+    note_html = f'<div class="tmc-card-note">{escape(note)}</div>' if note else '<div class="tmc-card-note">&nbsp;</div>'
+    return (
+        f'<div class="tmc-card tmc-status-card tmc-status-{tone}">'
+        f'<div class="tmc-card-label">{escape(label)}</div>'
+        f'<div class="tmc-card-value">{escape(status)}</div>'
+        f"{note_html}"
+        "</div>"
+    )
+
+
+def _render_status_card(label: str, status: str, note: str = "") -> None:
     st.markdown(
-        f"""
-        <div class="tmc-card tmc-status-{tone}">
-            <div class="tmc-card-label">{label}</div>
-            <div class="tmc-card-value">{status}</div>
-            <div class="tmc-card-note">{note}</div>
-        </div>
-        """,
+        _status_card_html(label, status, note),
         unsafe_allow_html=True,
     )
 
@@ -527,12 +733,10 @@ def _render_status_card(label: str, status: str, note: str = "") -> None:
 def _render_sidebar_badge(title: str, detail: str, *, ready: bool) -> None:
     badge_class = "tmc-sidebar-badge-success" if ready else "tmc-sidebar-badge-warning"
     st.markdown(
-        f"""
-        <div class="tmc-sidebar-badge {badge_class}">
-            <strong>{title}</strong><br>
-            <span>{detail}</span>
-        </div>
-        """,
+        f'<div class="tmc-sidebar-badge {badge_class}">'
+        f"<strong>{escape(title)}</strong><br>"
+        f"<span>{escape(detail)}</span>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -558,19 +762,20 @@ def _render_status_cards(
     ) else ("ต้องตรวจสอบ" if processed else "ยังไม่ได้โหลด")
     export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "ยืนยันแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
 
-    cards = st.columns(6)
-    with cards[0]:
-        _render_status_card("ไฟล์สำรวจ", raw_status, uploaded_name or "")
-    with cards[1]:
-        _render_status_card("Project Session", session_status, st.session_state.get("tmc_loaded_source_file_name", ""))
-    with cards[2]:
-        _render_status_card("การกำหนดทิศทาง", mapping_status, f"{mapping_rows:,} แถว" if mapping_rows else "")
-    with cards[3]:
-        _render_status_card("การประมวลผล", processing_status, "พร้อมตรวจสอบกราฟ" if processed else "")
-    with cards[4]:
-        _render_status_card("ช่วงเร่งด่วน", peak_status, "")
-    with cards[5]:
-        _render_status_card("ความพร้อมส่งออก", export_status, "Excel COM" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "PNG fallback")
+    card_items = [
+        ("ไฟล์สำรวจ", raw_status, uploaded_name or ""),
+        ("Project Session", session_status, st.session_state.get("tmc_loaded_source_file_name", "")),
+        ("การกำหนดทิศทาง", mapping_status, f"{mapping_rows:,} แถว" if mapping_rows else ""),
+        ("การประมวลผล", processing_status, "พร้อมตรวจสอบกราฟ" if processed else ""),
+        ("ช่วงเร่งด่วน", peak_status, ""),
+        ("ความพร้อมส่งออก", export_status, "Excel COM" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "PNG fallback"),
+    ]
+    st.markdown(
+        '<div class="tmc-status-grid">'
+        + "".join(_status_card_html(label, status, note) for label, status, note in card_items)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
@@ -636,6 +841,10 @@ def _processed_pce_results_stale(processed: dict[str, object] | None, selected_p
 def _render_pce_factor_editor() -> dict[str, float]:
     _ensure_pce_factor_state()
     with st.expander("ค่าเทียบเท่ารถยนต์นั่ง (PCE)", expanded=False):
+        _render_section_header(
+            "ค่าเทียบเท่ารถยนต์นั่ง (PCE)",
+            "ตรวจและปรับค่า PCU conversion เฉพาะเมื่อจำเป็น",
+        )
         st.caption(
             "ค่า PCE ใช้สำหรับแปลงจำนวนยานพาหนะเป็น PCU หากไม่แก้ไข โปรแกรมจะใช้ค่าเริ่มต้นตามมาตรฐานที่กำหนดไว้"
         )
@@ -863,14 +1072,19 @@ def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
 
 
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
+    is_confirmed = source == "user_confirmed"
+    card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
+    badge = "ยืนยันแล้ว" if is_confirmed else "แนะนำ"
+    pcu_text = f"{pcu} PCU" if pcu else "ไม่มีข้อมูล PCU"
     st.markdown(
-        f"""
-        <div class="tmc-card tmc-status-blue">
-            <div class="tmc-card-label">{title}</div>
-            <div class="tmc-card-value">{period_label or "ไม่มีข้อมูล"}</div>
-            <div class="tmc-card-note">{pcu + " PCU" if pcu else "ไม่มีข้อมูล PCU"} - {source}</div>
-        </div>
-        """,
+        f'<div class="tmc-card tmc-peak-card {card_class}">'
+        '<div class="tmc-peak-topline">'
+        f'<div class="tmc-card-label">{escape(title)}</div>'
+        f'<div class="tmc-peak-badge">{badge}</div>'
+        "</div>"
+        f'<div class="tmc-peak-time">{escape(period_label or "ไม่มีข้อมูล")}</div>'
+        f'<div class="tmc-peak-pcu">{escape(pcu_text)}</div>'
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -878,15 +1092,17 @@ def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> N
 def _readiness_item(label: str, ready: bool, detail: str = "") -> None:
     status = "พร้อม" if ready else "ต้องตรวจสอบ"
     css_class = "tmc-check-ready" if ready else "tmc-check-warn"
-    detail_text = f"<span class=\"tmc-check-detail\">{detail}</span>" if detail else ""
+    icon = "✓" if ready else "!"
+    detail_text = f'<div class="tmc-check-detail">{escape(detail)}</div>' if detail else ""
     st.markdown(
-        f"""
-        <div class="tmc-check-item {css_class}">
-            <span>{label}</span>
-            <span>{status}</span>
-            {detail_text}
-        </div>
-        """,
+        f'<div class="tmc-check-item {css_class}">'
+        f'<span class="tmc-check-icon">{icon}</span>'
+        '<span class="tmc-check-body">'
+        f'<div class="tmc-check-label">{escape(label)}</div>'
+        f'<div class="tmc-check-status">{status}</div>'
+        f"{detail_text}"
+        "</span>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1032,6 +1248,7 @@ def _run_streamlit_app() -> None:
             len(file_bytes) if uploaded_file is not None else None,
             compact=True,
         )
+        st.divider()
         st.subheader("โหมดส่งออกรายงาน")
         if excel_com_status.available:
             export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
@@ -1048,11 +1265,12 @@ def _run_streamlit_app() -> None:
         use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
         st.session_state["use_excel_com_native_charts_checkbox"] = use_excel_com_native_charts
         st.caption(
-            "ใช้ Microsoft Excel เพื่อรักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต"
+            "ใช้ Excel Template เมื่อ COM พร้อมใช้งาน"
             if use_excel_com_native_charts
-            else "ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้"
+            else "โหมดสำรองใช้กราฟ PNG แบบคงที่"
         )
 
+        st.divider()
         st.subheader("Excel Engine")
         previous_excel_com_available = bool(excel_com_status.available)
         if st.button("ทดสอบ Excel COM", key="test_excel_com"):
@@ -1106,13 +1324,13 @@ def _run_streamlit_app() -> None:
             st.stop()
 
     setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
-        ["ตั้งค่างาน", "กำหนดทิศทาง", "ตรวจสอบกราฟและช่วงเร่งด่วน", "ส่งออกไฟล์", "ตรวจสอบข้อมูล / ขั้นสูง"]
+        ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "QA / ขั้นสูง"]
     )
 
     with setup_tab:
         st.header("ตั้งค่างาน")
         with st.container(border=True):
-            st.markdown("#### ข้อมูลรายงาน")
+            _render_section_header("ข้อมูลรายงาน", "ข้อมูลหลักที่จะใช้ในหน้าแรกของรายงาน")
             report_cols = st.columns(3)
             project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
             tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
@@ -1124,7 +1342,7 @@ def _run_streamlit_app() -> None:
             responsible_party = info_cols[3].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
 
         with st.container(border=True):
-            st.markdown("#### ค่าเริ่มต้นช่วงเร่งด่วน")
+            _render_section_header("ค่าเริ่มต้นช่วงเร่งด่วน", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
             period_row_1 = st.columns(4)
             period_row_2 = st.columns(4)
             survey_period = period_row_1[0].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
@@ -1137,7 +1355,7 @@ def _run_streamlit_app() -> None:
             pm_peak_window_end = period_row_2[1].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
 
         with st.container(border=True):
-            st.markdown("#### ป้ายปลายทาง")
+            _render_section_header("ป้ายปลายทาง", "ข้อความปลายทางของแต่ละขาเข้า-ออก")
             direction_cols = st.columns(4)
             north_label = direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
             south_label = direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
@@ -1145,7 +1363,7 @@ def _run_streamlit_app() -> None:
             west_label = direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
 
         with st.container(border=True):
-            st.markdown("#### ชื่อถนน / ทางหลวง")
+            _render_section_header("ชื่อถนน / ทางหลวง", "ชื่อถนนที่จะแสดงในแผนภาพและรายงาน")
             road_cols = st.columns(4)
             north_road = road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
             south_road = road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
@@ -1192,14 +1410,19 @@ def _run_streamlit_app() -> None:
     with mapping_tab:
         st.header("กำหนดทิศทาง")
         if uploaded_file is None:
-            st.info("อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ")
+            _render_empty_state(
+                "ยังไม่มีไฟล์สำรวจ",
+                "อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ",
+            )
         elif not detected_sheet_names:
             st.warning('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"')
         else:
             st.markdown("#### Sheet ทิศทางที่ตรวจพบ")
             st.dataframe(preview_summary, width="stretch")
-            st.markdown("#### ตารางกำหนดทิศทาง")
-            st.caption("ตรวจสอบแต่ละทิศทางจากไฟล์สำรวจ และกำหนด movement สำหรับรายงาน")
+            _render_section_header(
+                "ตารางกำหนดทิศทาง",
+                "ตรวจสอบ Sheet สำรวจและกำหนด movement สำหรับรายงาน",
+            )
             st.caption("หลายแถวสามารถ map ไปยัง movement เดียวกันได้ เช่น ทางหลักตรง + ทางคู่ขนานตรง → NS")
             default_mapping = default_mapping_for_sheets(detected_sheet_names)
             if st.session_state.get("mapping_table") is not None:
@@ -1339,7 +1562,10 @@ def _run_streamlit_app() -> None:
         if pce_results_stale:
             st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
         if result is None:
-            st.info("ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน")
+            _render_empty_state(
+                "ยังไม่มีผลประมวลผล",
+                "ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน",
+            )
         else:
             st.markdown("#### สรุปผลการประมวลผล")
             metric_cols = st.columns(4)
@@ -1355,7 +1581,7 @@ def _run_streamlit_app() -> None:
                 if "Total" in chart_frame:
                     st.line_chart(chart_frame.set_index(time_column)[["Total"]], width="stretch")
             else:
-                st.info("ไม่มีข้อมูล PCU รายชั่วโมงสำหรับแสดงกราฟ")
+                _render_empty_state("ไม่มีข้อมูล PCU รายชั่วโมง", "ยังไม่มีข้อมูลที่เพียงพอสำหรับแสดงกราฟ")
 
             am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
             pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
@@ -1376,7 +1602,10 @@ def _run_streamlit_app() -> None:
                 am_index = option_labels.index(am_default) if am_default in option_labels else 0
                 pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
 
-                st.markdown("#### ยืนยันช่วงเร่งด่วน")
+                _render_section_header(
+                    "ยืนยันช่วงเร่งด่วน",
+                    "เปรียบเทียบค่าที่ระบบแนะนำกับช่วงเวลาที่ต้องการใช้ในรายงาน",
+                )
                 confirm_cols = st.columns(2)
                 am_peak_label = confirm_cols[0].selectbox("เลือกช่วงเร่งด่วนเช้า", option_labels, index=am_index, key="am_peak_period_select")
                 pm_peak_label = confirm_cols[1].selectbox("เลือกช่วงเร่งด่วนเย็น", option_labels, index=pm_index, key="pm_peak_period_select")
@@ -1409,10 +1638,10 @@ def _run_streamlit_app() -> None:
         st.header("ส่งออกไฟล์")
         st.markdown("#### โหมดส่งออกรายงาน")
         if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-            st.success("Excel Template Mode — แนะนำ")
-            st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง โดยรักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel")
+            st.markdown('<div class="tmc-mode-note"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
+            st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
         else:
-            st.warning("Safe PNG Export Mode — โหมดสำรอง")
+            st.markdown('<div class="tmc-mode-note"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
             st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
 
         st.markdown("#### Excel Engine")
@@ -1426,7 +1655,7 @@ def _run_streamlit_app() -> None:
         with st.expander("รายละเอียด Excel COM", expanded=False):
             _render_excel_com_status(excel_com_status)
 
-        st.markdown("#### ความพร้อมก่อนส่งออก")
+        _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
         confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
         _readiness_item("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None)
         _readiness_item("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")))
@@ -1561,12 +1790,18 @@ def _run_streamlit_app() -> None:
                 st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
                 _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
         else:
-            st.info("ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม")
+            _render_empty_state(
+                "ยังไม่มีไฟล์ส่งออก",
+                "ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
+            )
 
     with qa_tab:
         st.header("ตรวจสอบข้อมูล / ขั้นสูง")
         if uploaded_file is None:
-            st.info("อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และ QA")
+            _render_empty_state(
+                "ยังไม่มี Workbook สำหรับ QA",
+                "อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และตรวจสอบข้อมูล",
+            )
         else:
             with st.expander("รายละเอียดการอ่านไฟล์", expanded=False):
                 st.dataframe(preview_summary, width="stretch")
@@ -1602,7 +1837,10 @@ def _run_streamlit_app() -> None:
                 st.caption("แสดง source stream ที่ถูกรวมเป็น movement_code สำหรับรายงาน")
                 st.dataframe(movement_aggregation_audit(result.normalized, mapping_df), width="stretch")
         else:
-            st.info("ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement")
+            _render_empty_state(
+                "ยังไม่มีผล QA จากการประมวลผล",
+                "ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement",
+            )
 
         with st.expander("รายละเอียดเทมเพลต", expanded=False):
             _render_template_audit_notes()
