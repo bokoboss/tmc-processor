@@ -339,6 +339,8 @@ def _inject_global_css() -> None:
             flex-direction: column;
             justify-content: center;
             gap: 0.12rem;
+            overflow: hidden;
+            min-width: 0;
         }
         .tmc-card-label {
             color: var(--tmc-muted);
@@ -359,6 +361,14 @@ def _inject_global_css() -> None:
             font-size: var(--tmc-font-xs);
             line-height: 1.25;
             overflow-wrap: anywhere;
+        }
+        .tmc-status-card .tmc-card-label,
+        .tmc-status-card .tmc-card-value,
+        .tmc-status-card .tmc-card-note {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .tmc-status-gray { border-left: 3px solid var(--tmc-border-strong); }
         .tmc-status-blue { border-left: 3px solid var(--tmc-primary); }
@@ -575,22 +585,25 @@ def _inject_global_css() -> None:
             box-shadow: none;
         }
         .tmc-checklist {
-            display: grid;
-            gap: var(--tmc-space-2);
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-md);
+            box-shadow: var(--tmc-shadow-subtle);
             margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
+            overflow: hidden;
         }
         .tmc-check-item {
             display: flex;
             align-items: center;
-            gap: var(--tmc-space-3);
-            background: var(--tmc-surface);
-            border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
-            padding: 0.58rem var(--tmc-space-3);
+            gap: var(--tmc-space-2);
+            background: transparent;
+            border-bottom: 1px solid var(--tmc-border);
+            padding: 0.44rem var(--tmc-space-3);
             color: var(--tmc-text);
             font-size: var(--tmc-font-sm);
-            box-shadow: var(--tmc-shadow-subtle);
-            margin-bottom: var(--tmc-space-2);
+        }
+        .tmc-check-item:last-child {
+            border-bottom: 0;
         }
         .tmc-check-ready { border-left: 3px solid var(--tmc-success); }
         .tmc-check-warn { border-left: 3px solid var(--tmc-warning); }
@@ -598,12 +611,12 @@ def _inject_global_css() -> None:
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 1.35rem;
-            height: 1.35rem;
+            width: 1.15rem;
+            height: 1.15rem;
             border-radius: 999px;
             flex: 0 0 auto;
             font-weight: 800;
-            font-size: 0.82rem;
+            font-size: 0.72rem;
         }
         .tmc-check-ready .tmc-check-icon {
             color: var(--tmc-success);
@@ -634,7 +647,22 @@ def _inject_global_css() -> None:
         .tmc-mode-note {
             color: var(--tmc-muted);
             font-size: var(--tmc-font-sm);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-md);
+            padding: var(--tmc-space-2) var(--tmc-space-3);
             margin-bottom: var(--tmc-space-3);
+        }
+        .tmc-mode-note-success {
+            color: var(--tmc-primary-dark);
+            background: var(--tmc-primary-soft);
+            border-color: #d2e3f3;
+            border-left: 3px solid var(--tmc-primary);
+        }
+        .tmc-mode-note-warning {
+            color: var(--tmc-warning);
+            background: #fffbeb;
+            border-color: #fde68a;
+            border-left: 3px solid var(--tmc-warning);
         }
         .tmc-sidebar-badge {
             background: var(--tmc-surface);
@@ -841,10 +869,6 @@ def _processed_pce_results_stale(processed: dict[str, object] | None, selected_p
 def _render_pce_factor_editor() -> dict[str, float]:
     _ensure_pce_factor_state()
     with st.expander("ค่าเทียบเท่ารถยนต์นั่ง (PCE)", expanded=False):
-        _render_section_header(
-            "ค่าเทียบเท่ารถยนต์นั่ง (PCE)",
-            "ตรวจและปรับค่า PCU conversion เฉพาะเมื่อจำเป็น",
-        )
         st.caption(
             "ค่า PCE ใช้สำหรับแปลงจำนวนยานพาหนะเป็น PCU หากไม่แก้ไข โปรแกรมจะใช้ค่าเริ่มต้นตามมาตรฐานที่กำหนดไว้"
         )
@@ -1090,11 +1114,15 @@ def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> N
 
 
 def _readiness_item(label: str, ready: bool, detail: str = "") -> None:
+    st.markdown(_readiness_item_html(label, ready, detail), unsafe_allow_html=True)
+
+
+def _readiness_item_html(label: str, ready: bool, detail: str = "") -> str:
     status = "พร้อม" if ready else "ต้องตรวจสอบ"
     css_class = "tmc-check-ready" if ready else "tmc-check-warn"
     icon = "✓" if ready else "!"
     detail_text = f'<div class="tmc-check-detail">{escape(detail)}</div>' if detail else ""
-    st.markdown(
+    return (
         f'<div class="tmc-check-item {css_class}">'
         f'<span class="tmc-check-icon">{icon}</span>'
         '<span class="tmc-check-body">'
@@ -1102,7 +1130,15 @@ def _readiness_item(label: str, ready: bool, detail: str = "") -> None:
         f'<div class="tmc-check-status">{status}</div>'
         f"{detail_text}"
         "</span>"
-        "</div>",
+        "</div>"
+    )
+
+
+def _render_readiness_checklist(items: list[tuple[str, bool, str]]) -> None:
+    st.markdown(
+        '<div class="tmc-checklist">'
+        + "".join(_readiness_item_html(label, ready, detail) for label, ready, detail in items)
+        + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1638,10 +1674,10 @@ def _run_streamlit_app() -> None:
         st.header("ส่งออกไฟล์")
         st.markdown("#### โหมดส่งออกรายงาน")
         if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-            st.markdown('<div class="tmc-mode-note"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
+            st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
             st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
         else:
-            st.markdown('<div class="tmc-mode-note"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
+            st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
             st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
 
         st.markdown("#### Excel Engine")
@@ -1657,14 +1693,18 @@ def _run_streamlit_app() -> None:
 
         _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
         confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
-        _readiness_item("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None)
-        _readiness_item("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")))
-        _readiness_item("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else "")
-        _readiness_item("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready)
-        _readiness_item(
-            "Excel COM พร้อมใช้งาน",
-            bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-            "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+        _render_readiness_checklist(
+            [
+                ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
+                ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
+                ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
+                ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
+                (
+                    "Excel COM พร้อมใช้งาน",
+                    bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
+                    "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+                ),
+            ]
         )
 
         use_template_report_layout = st.checkbox(
