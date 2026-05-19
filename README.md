@@ -38,7 +38,7 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 6. สร้างรายงาน Excel
 7. ดาวน์โหลดรายงาน หรือบันทึก Project Session ไว้ใช้ต่อ
 
-## วิธีติดตั้งแบบง่ายสำหรับ Windows
+## วิธีเปิดแบบง่ายที่สุดสำหรับ Windows
 
 ส่วนนี้เขียนสำหรับผู้ใช้ทั่วไปที่ยังไม่คุ้นกับ Python หรือ command line มาก่อน
 
@@ -48,7 +48,7 @@ TMC Processor เป็นเครื่องมือบน Streamlit สำ�
 2. **Python** แนะนำเวอร์ชัน 3.11 หรือ 3.12
 3. **Microsoft Excel** ถ้าต้องการใช้โหมดรายงานตามเทมเพลต Excel และ Native Chart
 
-> ตอนติดตั้ง Python ให้เลือกตัวเลือก **Add python.exe to PATH** ด้วย เพื่อให้เรียกคำสั่ง `python` ได้จาก PowerShell
+> ตอนติดตั้ง Python ให้เลือกตัวเลือก **Add python.exe to PATH** ด้วย
 
 ### ขั้นตอนที่ 1: ดาวน์โหลดโปรแกรม
 
@@ -70,104 +70,23 @@ git clone https://github.com/bokoboss/tmc-processor.git
 cd tmc-processor
 ```
 
-### ขั้นตอนที่ 2: เปิด PowerShell ในโฟลเดอร์โปรแกรม
+### ขั้นตอนที่ 2: เปิดโปรแกรม
 
-เปิด PowerShell แล้วเข้าไปที่โฟลเดอร์โปรแกรม เช่น:
+ดับเบิลคลิก `start_tmc_processor.bat`
 
-```powershell
-cd "C:\MyRD\tmc-processor"
-```
+ครั้งแรกอาจใช้เวลาหลายนาที เพราะไฟล์นี้จะสร้าง `.venv` ติดตั้ง package ที่จำเป็น ติดตั้ง `pywin32` และทดสอบ Excel COM แบบไม่บังคับให้โดยอัตโนมัติ ครั้งต่อไปจะเปิดเร็วขึ้น เพราะจะข้ามขั้นตอนติดตั้งเมื่อพบ `.venv` แล้ว
 
-ถ้าแตก ZIP ไว้คนละที่ ให้เปลี่ยน path ให้ตรงกับเครื่องของคุณ
+เมื่อโปรแกรมเปิดแล้ว ให้ใช้งานผ่านหน้าต่างเว็บเบราว์เซอร์ที่เปิดขึ้นมาอัตโนมัติ หากต้องการปิดโปรแกรม ให้กลับมาที่หน้าต่างสีดำแล้วกด `Ctrl+C`
 
-### ขั้นตอนที่ 3: ตรวจว่า Python ใช้งานได้
+ถ้าต้องการแยกขั้นตอนติดตั้งและเปิดโปรแกรมเอง ยังสามารถใช้ `setup_windows.bat` เพื่อติดตั้งก่อน แล้วใช้ `run_app.bat` เพื่อเปิดโปรแกรมในครั้งต่อไปได้
 
-```powershell
-python --version
-```
-
-ถ้าเห็นเวอร์ชัน เช่น `Python 3.11.x` หรือ `Python 3.12.x` แปลว่าใช้ได้
-
-ถ้าขึ้นว่าไม่รู้จักคำสั่ง `python` ให้ติดตั้ง Python ใหม่ และอย่าลืมเลือก **Add python.exe to PATH**
-
-### ขั้นตอนที่ 4: สร้างพื้นที่ติดตั้งของโปรแกรม
-
-รันคำสั่งนี้ครั้งแรกครั้งเดียว:
-
-```powershell
-python -m venv .venv
-```
-
-จากนั้นเปิดใช้งานพื้นที่ติดตั้ง:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-ถ้า PowerShell ไม่ยอมให้ activate และขึ้นข้อความเกี่ยวกับ execution policy ให้รันคำสั่งนี้ก่อน แล้วลอง activate อีกครั้ง:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-```
-
-เมื่อ activate สำเร็จ จะเห็น `(.venv)` อยู่หน้าบรรทัดคำสั่ง
-
-### ขั้นตอนที่ 5: ติดตั้ง package ที่โปรแกรมต้องใช้
-
-```powershell
-python -m pip install -U pip
-python -m pip install -e ".[dev]"
-```
-
-ขั้นตอนนี้อาจใช้เวลาสักครู่
-
-### ขั้นตอนที่ 6: ติดตั้ง Excel COM สำหรับโหมดรายงานหลัก
-
-ถ้าต้องการใช้ **Excel Template Mode** ซึ่งเป็นโหมดที่แนะนำ ให้ติดตั้ง `pywin32` เพิ่ม:
-
-```powershell
-python -m pip install pywin32
-```
-
-จากนั้นทดสอบว่า Python เรียก Microsoft Excel ได้หรือไม่:
-
-```powershell
-python scripts\export_with_excel_com_smoke_test.py
-```
-
-ถ้าเห็นข้อความประมาณนี้ แปลว่าใช้งานได้:
-
-```text
-COM_AVAILABLE: Excel version 16.0
-EXPORT_OK
-```
-
-ถ้าใช้ไม่ได้ โปรแกรมยังสามารถใช้ **Safe PNG Export Mode** ได้ แต่กราฟในรายงานจะเป็น PNG แบบคงที่แทน Native Chart ของ Excel
-
-### ขั้นตอนที่ 7: เปิดโปรแกรม
-
-```powershell
-python -m streamlit run app.py
-```
-
-หลังรันคำสั่งนี้ โปรแกรมจะเปิดในเว็บเบราว์เซอร์ ถ้าไม่เปิดเอง ให้ดู URL ใน PowerShell แล้วเปิดตาม เช่น:
-
-```text
-http://localhost:8501
-```
+อย่านำไฟล์ข้อมูลดิบของโครงการจริง ไฟล์ผลลัพธ์ Excel ไฟล์ `.tmcproj.json` หรือข้อมูลส่วนตัวขึ้น GitHub ให้เก็บไฟล์งานจริงไว้ในเครื่องของผู้ใช้เท่านั้น
 
 ## วิธีเปิดโปรแกรมครั้งถัดไป
 
-หลังจากติดตั้งครั้งแรกแล้ว ครั้งต่อไปทำแค่ 3 ขั้นตอนนี้:
+หลังจากติดตั้งครั้งแรกแล้ว ครั้งต่อไปให้ดับเบิลคลิก `start_tmc_processor.bat` ได้เลย โปรแกรมจะข้ามขั้นตอนติดตั้งและเปิดเร็วขึ้น
 
-```powershell
-cd "C:\MyRD\tmc-processor"
-.\.venv\Scripts\Activate.ps1
-python -m streamlit run app.py
-```
-
-ถ้าโฟลเดอร์โปรแกรมอยู่คนละที่ ให้เปลี่ยน path ให้ตรงกับเครื่องของคุณ
+ถ้าใช้วิธีแยกขั้นตอน สามารถดับเบิลคลิก `run_app.bat` หลังจากเคยรัน `setup_windows.bat` แล้ว
 
 ## สรุปปัญหาที่พบบ่อยตอนติดตั้ง
 
@@ -182,25 +101,9 @@ python -m streamlit run app.py
 - ปิด PowerShell แล้วเปิดใหม่
 - ลอง `python --version` อีกครั้ง
 
-### 2. Activate `.venv` ไม่ได้
+### 2. ใช้ Excel Template Mode ไม่ได้
 
-ลองรัน:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-```
-
-คำสั่งนี้มีผลเฉพาะหน้าต่าง PowerShell ที่เปิดอยู่เท่านั้น
-
-### 3. ใช้ Excel Template Mode ไม่ได้
-
-ตรวจว่าเครื่องมี Microsoft Excel แบบ desktop app และติดตั้ง `pywin32` แล้ว:
-
-```powershell
-python -m pip install pywin32
-python scripts\export_with_excel_com_smoke_test.py
-```
+ตรวจว่าเครื่องมี Microsoft Excel แบบ desktop app แล้วเปิด `start_tmc_processor.bat` อีกครั้ง โปรแกรมจะติดตั้ง `pywin32` และทดสอบ Excel COM ให้แบบไม่บังคับในครั้งแรก
 
 ถ้ายังใช้ไม่ได้ ให้ใช้ Safe PNG Export Mode ไปก่อน
 
@@ -276,36 +179,12 @@ Workbook ที่ export จะมี sheet สำหรับตรวจส�
 
 ชื่อ sheet อาจเปลี่ยนได้ตามเวอร์ชันของโปรแกรมและการตั้งค่า export
 
-## Validation และ QA
+## การตรวจสอบสำหรับผู้พัฒนา
 
-สร้างหรือปรับปรุง baseline expected results:
-
-```powershell
-python scripts\create_expected_results.py
-```
-
-ตรวจสอบผลกับ baseline:
+ชุดทดสอบและสคริปต์ QA ภายในไม่ได้รวมอยู่ใน public release นี้ หากเพิ่มชุดทดสอบใน branch สำหรับพัฒนา สามารถติดตั้ง dependency เสริมได้ด้วย:
 
 ```powershell
-python scripts\validate_expected_results.py
-```
-
-Audit template:
-
-```powershell
-python scripts\audit_template.py
-```
-
-Smoke test สำหรับ Excel COM:
-
-```powershell
-python scripts\export_with_excel_com_smoke_test.py
-```
-
-## การทดสอบสำหรับผู้พัฒนา
-
-```powershell
-python -m pytest
+python -m pip install -e ".[dev]"
 ```
 
 ## ข้อจำกัดปัจจุบัน
