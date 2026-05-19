@@ -255,7 +255,7 @@ def _format_worksheet(worksheet, sheet_name: str, create_excel_tables: bool = DE
         "PCE_Factors": {"A": 20, "B": 14, "C": 18},
         "Mapping": {"A": 24, "B": 16, "C": 18, "D": 12, "E": 12, "F": 16, "G": 18, "H": 16, "I": 18},
         "Movement_Aggregation_Audit": {"A": 20, "B": 18, "C": 18, "D": 24, "E": 18, "F": 16, "G": 20, "H": 14},
-        "QC_Check": {"A": 28, "B": 14, "C": 24, "D": 56},
+        "QC_Check": {"A": 14, "B": 24, "C": 30, "D": 56, "E": 64, "F": 20, "G": 24, "H": 18},
         "Hourly_Summary": {"A": 14, "B": 14, "C": 14, "D": 14},
         "Movement_Summary": {"A": 18, "B": 12, "C": 12, "D": 16, "E": 18, "F": 16, "G": 18, "H": 14, "I": 14},
         "Vehicle_Composition": {"A": 20, "B": 14, "C": 14, "D": 16},

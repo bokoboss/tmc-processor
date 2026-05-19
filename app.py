@@ -754,8 +754,8 @@ def _status_tone(status: str) -> str:
     return "gray"
 
 
-def _status_card_html(label: str, status: str, note: str = "") -> str:
-    tone = _status_tone(status)
+def _status_card_html(label: str, status: str, note: str = "", tone: str | None = None) -> str:
+    tone = tone or _status_tone(status)
     note_html = f'<div class="tmc-card-note">{escape(note)}</div>' if note else '<div class="tmc-card-note">&nbsp;</div>'
     return (
         f'<div class="tmc-card tmc-status-card tmc-status-{tone}">'
@@ -1167,6 +1167,30 @@ def _render_readiness_checklist(items: list[tuple[str, bool, str]]) -> None:
         + "</div>",
         unsafe_allow_html=True,
     )
+
+
+def _qc_severity_counts(qc: pd.DataFrame | None) -> dict[str, int]:
+    counts = {"error": 0, "warning": 0, "info": 0}
+    if qc is None or qc.empty or "severity" not in qc.columns:
+        return counts
+    severity_counts = qc["severity"].fillna("").astype(str).str.casefold().value_counts()
+    for severity in counts:
+        counts[severity] = int(severity_counts.get(severity, 0))
+    return counts
+
+
+def _qc_status_text(qc: pd.DataFrame | None) -> tuple[str, str, str]:
+    counts = _qc_severity_counts(qc)
+    if counts["error"]:
+        return "Errors found", f"{counts['error']} errors / {counts['warning']} warnings / {counts['info']} info", "red"
+    if counts["warning"] or counts["info"]:
+        return f"{counts['warning']} warnings / {counts['info']} info", "Non-blocking QC notes", "amber"
+    return "No QC issues", "Ready for export review", "green"
+
+
+def _render_qc_status(qc: pd.DataFrame | None, label: str = "QC status") -> None:
+    status, note, tone = _qc_status_text(qc)
+    st.markdown(_status_card_html(label, status, note, tone=tone), unsafe_allow_html=True)
 
 
 def _mapping_issue_display(issues: pd.DataFrame) -> pd.DataFrame:
@@ -1637,6 +1661,8 @@ def _run_streamlit_app() -> None:
             metric_cols[2].metric("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0")
             metric_cols[3].metric("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}")
 
+            _render_qc_status(result.qc)
+
             chart_frame = hourly_interval_rows(hourly_movement)
             st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
             if not chart_frame.empty:
@@ -1719,6 +1745,8 @@ def _run_streamlit_app() -> None:
             _render_excel_com_status(excel_com_status)
 
         _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
+        if result is not None:
+            _render_qc_status(result.qc)
         confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
         _render_readiness_checklist(
             [
@@ -1944,7 +1972,21 @@ def _run_streamlit_app() -> None:
                     st.dataframe(parsed.data.head(10), width="stretch")
 
         if result is not None:
-            with st.expander("ประเด็น QC", expanded=False):
+            st.markdown("#### QC summary")
+            qc_counts = _qc_severity_counts(result.qc)
+            qc_cols = st.columns(3)
+            qc_cols[0].metric("error", f"{qc_counts['error']:,}")
+            qc_cols[1].metric("warning", f"{qc_counts['warning']:,}")
+            qc_cols[2].metric("info", f"{qc_counts['info']:,}")
+            if qc_counts["error"]:
+                st.error("QC errors found. Review details before export.")
+            elif qc_counts["warning"]:
+                st.warning("QC warnings found. Export is still available, but review the notes first.")
+            elif qc_counts["info"]:
+                st.info("QC info notes are available for review.")
+            else:
+                st.success("No QC issues found.")
+            with st.expander("QC details", expanded=False):
                 st.dataframe(result.qc, width="stretch")
             with st.expander("Hourly summary", expanded=False):
                 st.dataframe(result.hourly, width="stretch")
