@@ -7,6 +7,8 @@ from zipfile import ZipFile
 from openpyxl import load_workbook
 
 from tmc_processor.batch import (
+    BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
+    BATCH_SAFE_PNG_EXPORT_MODE,
     BATCH_SUMMARY_COLUMNS,
     BatchItem,
     analyze_batch_files,
@@ -90,6 +92,8 @@ def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
         assert item.confirmed_PM_peak == item.suggested_PM_peak
         assert item.suggested_AM_peak in item.hourly_period_options
         assert item.suggested_PM_peak in item.hourly_period_options
+        assert not item.hourly_movement_pcu.empty
+        assert "Total" in item.hourly_movement_pcu.columns
 
 
 def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_inputs() -> None:
@@ -114,6 +118,57 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
     assert DAY1.name not in names
     assert DAY2.name not in names
     assert all(not name.endswith(".xlsm") and name not in {DAY1.name, DAY2.name} for name in names)
+
+
+def test_batch_safe_png_export_records_export_mode_in_summaries() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    first_record = dict(zip(rows[0], rows[1]))
+
+    assert first_record["export_mode_requested"] == BATCH_SAFE_PNG_EXPORT_MODE
+    assert first_record["export_mode_used"] == BATCH_SAFE_PNG_EXPORT_MODE
+    assert first_record["export_status"] == "success"
+    assert "export_mode_requested: Safe PNG Export Mode" in summary_text
+    assert "export_mode_used: Safe PNG Export Mode" in summary_text
+    assert "export_status: success" in summary_text
+
+
+def test_batch_excel_template_mode_records_requested_and_used_mode() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
+        use_excel_com_native_charts=False,
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    first_record = dict(zip(rows[0], rows[1]))
+
+    assert first_record["export_mode_requested"] == BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+    assert first_record["export_mode_used"] == BATCH_SAFE_PNG_EXPORT_MODE
+    assert first_record["export_status"] == "success"
+    assert first_record["notes"]
+    assert "export_mode_requested: Excel Template Mode" in summary_text
+    assert "export_mode_used: Safe PNG Export Mode" in summary_text
 
 
 def test_batch_zip_contents_preview_lists_expected_artifacts() -> None:
@@ -197,6 +252,10 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
     assert [record["status"] for record in records] == ["success", "failed"]
     assert headers == BATCH_SUMMARY_COLUMNS
     assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(headers)
+    assert {"export_mode_requested", "export_mode_used", "export_status", "export_error"}.issubset(headers)
+    assert records[0]["export_status"] == "success"
+    assert records[1]["export_status"] == "failed"
+    assert records[1]["export_error"]
     assert records[1]["notes"]
 
 

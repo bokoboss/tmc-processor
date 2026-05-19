@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from tmc_processor.batch import (
+    BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
     BATCH_PACKAGE_MIME,
     BatchItem,
     analyze_batch_files,
@@ -107,6 +108,8 @@ from tmc_processor.time_utils import (
 
 EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode — แนะนำ"
 SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode — โหมดสำรอง"
+BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = "Excel Template Mode — แนะนำสำหรับรายงานฉบับใช้งานจริง"
+BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอง"
 
 
 def _default_text_from_filename(filename: str | None) -> str:
@@ -1175,6 +1178,20 @@ def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
     return f"{value:,.0f}" if pd.notna(value) else ""
 
 
+def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame) -> None:
+    chart_frame = hourly_interval_rows(hourly_movement)
+    if chart_frame.empty:
+        _render_empty_state("No hourly PCU data", "Analyze the workbook before reviewing the hourly PCU chart.")
+        return
+    time_column = chart_frame.columns[0]
+    if "Total" in chart_frame.columns:
+        st.line_chart(chart_frame.set_index(time_column)[["Total"]], width="stretch")
+    else:
+        value_columns = [column for column in chart_frame.columns if column != time_column]
+        fallback = chart_frame.set_index(time_column)[value_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1)
+        st.line_chart(fallback.rename("Total"), width="stretch")
+
+
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
@@ -1327,7 +1344,8 @@ def _run_streamlit_app() -> None:
     excel_com_status = _probe_excel_com_for_ui()
 
     with st.sidebar:
-        st.header("ข้อมูลนำเข้า")
+        st.header("Single-file controls")
+        st.caption("Batch controls are self-contained inside the Batch tab. This upload is only for the single-file workflow.")
         uploaded_file = st.file_uploader(
             "อัปโหลดไฟล์ TMC Excel",
             type=["xlsx", "xlsm", "xls"],
@@ -1380,6 +1398,10 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("use_template_report_layout_checkbox", True)
     st.session_state.setdefault("use_excel_com_native_charts_checkbox", bool(excel_com_status.available))
     st.session_state.setdefault("mapping_editor_version", 0)
+    st.session_state.setdefault("tmc_batch_analysis", None)
+    st.session_state.setdefault("tmc_batch_selected_review_file", "")
+    st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+    st.session_state.setdefault("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
     _ensure_pce_factor_state()
 
     with st.sidebar:
@@ -1389,7 +1411,7 @@ def _run_streamlit_app() -> None:
             compact=True,
         )
         st.divider()
-        st.subheader("โหมดส่งออกรายงาน")
+        st.subheader("Single-file export mode")
         if excel_com_status.available:
             export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
             if st.session_state.get("report_export_mode_radio") not in export_mode_options:
@@ -1816,6 +1838,23 @@ def _run_streamlit_app() -> None:
                 batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
                 batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
 
+            st.markdown("#### Batch export mode")
+            batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
+            if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
+                st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
+            batch_export_mode = st.radio(
+                "Batch export mode",
+                options=batch_export_options,
+                key="tmc_batch_export_mode",
+                help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
+            )
+            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+                st.success("Excel Template Mode selected for Batch. Native Excel chart export will be attempted per file.")
+            else:
+                st.warning("Safe PNG Export Mode selected for Batch. Reports will use static PNG charts.")
+            if not excel_com_status.available:
+                st.warning(f"Excel COM is unavailable, so Batch Excel Template Mode is disabled. Reason: {excel_com_status.reason}")
+
             uploaded_ready = bool(batch_uploads)
             mapping_ready = batch_mapping is not None or loaded_batch_preset is not None
             pce_ready = bool(selected_pce_factors)
@@ -1944,6 +1983,56 @@ def _run_streamlit_app() -> None:
                     analyzed_item.confirmed_AM_peak = stored_peaks.get("AM", analyzed_item.confirmed_AM_peak)
                     analyzed_item.confirmed_PM_peak = stored_peaks.get("PM", analyzed_item.confirmed_PM_peak)
 
+                successful_items = batch_analysis.successful_items
+                if successful_items:
+                    st.markdown("#### Per-file Peak Review")
+                    review_labels = {f"{item.file_name} ({item.folder_name})": item.folder_name for item in successful_items}
+                    label_by_folder = {folder: label for label, folder in review_labels.items()}
+                    selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
+                    selected_label = label_by_folder.get(selected_folder, next(iter(review_labels)))
+                    selected_review_label = st.selectbox(
+                        "Choose file for Peak Review",
+                        options=list(review_labels),
+                        index=list(review_labels).index(selected_label),
+                        key="tmc_batch_selected_review_label",
+                    )
+                    selected_folder = review_labels[selected_review_label]
+                    st.session_state["tmc_batch_selected_review_file"] = selected_folder
+                    selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
+                    _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
+                    review_peak_cols = st.columns(4)
+                    review_peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
+                    review_peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
+                    option_labels = selected_item.hourly_period_options or [
+                        value for value in [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak] if value
+                    ]
+                    stored_peaks = batch_confirmed_peaks.setdefault(
+                        selected_item.folder_name,
+                        {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak},
+                    )
+                    am_default = stored_peaks.get("AM") or selected_item.confirmed_AM_peak
+                    pm_default = stored_peaks.get("PM") or selected_item.confirmed_PM_peak
+                    for value in [am_default, pm_default]:
+                        if value and value not in option_labels:
+                            option_labels = [value, *option_labels]
+                    option_labels = list(dict.fromkeys(option_labels))
+                    if option_labels:
+                        selected_am = review_peak_cols[2].selectbox(
+                            "Confirmed AM",
+                            options=option_labels,
+                            index=option_labels.index(am_default) if am_default in option_labels else 0,
+                            key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
+                        )
+                        selected_pm = review_peak_cols[3].selectbox(
+                            "Confirmed PM",
+                            options=option_labels,
+                            index=option_labels.index(pm_default) if pm_default in option_labels else 0,
+                            key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
+                        )
+                        batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
+                        selected_item.confirmed_AM_peak = selected_am
+                        selected_item.confirmed_PM_peak = selected_pm
+
                 if batch_analysis.has_failures:
                     st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้จะอยู่ใน batch_summary.xlsx และไม่ต้องยืนยัน Peak")
             else:
@@ -1990,7 +2079,9 @@ def _run_streamlit_app() -> None:
                         pce_factors=selected_pce_factors,
                         peak_mode=peak_mode,
                         peak_windows=peak_windows,
+                        export_mode=batch_export_mode,
                         use_template_report_layout=True,
+                        use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
                     )
                 st.session_state["tmc_batch_result"] = batch_result
                 st.success("สร้าง Batch ZIP เสร็จแล้ว")
@@ -2000,6 +2091,9 @@ def _run_streamlit_app() -> None:
                 display_columns = {
                     "file_name": "file_name",
                     "status": "status",
+                    "export_mode_requested": "mode requested",
+                    "export_mode_used": "mode used",
+                    "export_status": "export status",
                     "suggested_AM_peak": "AM suggested",
                     "suggested_PM_peak": "PM suggested",
                     "confirmed_AM_peak": "AM confirmed",
@@ -2058,14 +2152,8 @@ def _run_streamlit_app() -> None:
 
             _render_qc_status(result.qc)
 
-            chart_frame = hourly_interval_rows(hourly_movement)
             st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
-            if not chart_frame.empty:
-                time_column = chart_frame.columns[0]
-                if "Total" in chart_frame:
-                    st.line_chart(chart_frame.set_index(time_column)[["Total"]], width="stretch")
-            else:
-                _render_empty_state("ไม่มีข้อมูล PCU รายชั่วโมง", "ยังไม่มีข้อมูลที่เพียงพอสำหรับแสดงกราฟ")
+            _render_hourly_pcu_line_chart(hourly_movement)
 
             am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
             pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")

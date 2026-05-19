@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 import re
+import warnings
 from typing import Any, Iterable
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -30,10 +31,16 @@ from .time_utils import hourly_interval_options
 
 BATCH_PACKAGE_MIME = "application/zip"
 SAFE_BATCH_EXPORT_MODE = "Safe PNG Export Mode - Batch v1"
+BATCH_EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
+BATCH_SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
 BATCH_SUMMARY_COLUMNS = [
     "file_name",
     "folder_name",
     "status",
+    "export_mode_requested",
+    "export_mode_used",
+    "export_status",
+    "export_error",
     "suggested_AM_peak",
     "suggested_PM_peak",
     "confirmed_AM_peak",
@@ -63,6 +70,10 @@ class BatchSummaryRow:
     file_name: str
     folder_name: str
     status: str
+    export_mode_requested: str = ""
+    export_mode_used: str = ""
+    export_status: str = ""
+    export_error: str = ""
     suggested_AM_peak: str = ""
     suggested_PM_peak: str = ""
     confirmed_AM_peak: str = ""
@@ -103,6 +114,7 @@ class BatchAnalysisItem:
     confirmed_AM_peak: str = ""
     confirmed_PM_peak: str = ""
     hourly_period_options: list[str] = field(default_factory=list)
+    hourly_movement_pcu: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     total_vehicles: float = 0.0
     total_PCU: float = 0.0
     QC_errors: int = 0
@@ -241,6 +253,30 @@ def _confirmed_periods_from_labels(am_peak: str | None, pm_peak: str | None) -> 
     return periods
 
 
+def _base_export_mode_label(value: str | None) -> str:
+    text = str(value or "").strip()
+    if text.casefold().startswith("excel template mode"):
+        return BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+    if text.casefold().startswith("safe png export mode"):
+        return BATCH_SAFE_PNG_EXPORT_MODE
+    return text
+
+
+def _export_used_from_warnings(requested_mode: str, export_warnings: Iterable[warnings.WarningMessage]) -> tuple[str, str]:
+    requested = _base_export_mode_label(requested_mode)
+    messages = [str(warning.message) for warning in export_warnings]
+    fallback_markers = (
+        "Excel COM unavailable",
+        "Excel COM native-chart export failed",
+        "falling back to safe openpyxl export with PNG charts",
+    )
+    if requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE and any(
+        marker in message for message in messages for marker in fallback_markers
+    ):
+        return BATCH_SAFE_PNG_EXPORT_MODE, "; ".join(messages)
+    return requested, "; ".join(messages)
+
+
 def _qc_counts(qc: pd.DataFrame) -> dict[str, int]:
     if qc.empty or "severity" not in qc.columns:
         return {"error": 0, "warning": 0, "info": 0}
@@ -342,6 +378,7 @@ def _process_one_file(
     export_mode: str,
     generated_at: str,
     use_template_report_layout: bool,
+    use_excel_com_native_charts: bool,
     confirmed_peak_periods: dict[str, tuple[str, str]] | None = None,
     suggested_am_peak: str = "",
     suggested_pm_peak: str = "",
@@ -379,22 +416,30 @@ def _process_one_file(
     if "PM" in confirmed_periods:
         confirmed_setup["pm_peak_start"], confirmed_setup["pm_peak_end"] = confirmed_periods["PM"]
 
-    result: ProcessingResult = process_tmc(
-        raw_sheets=raw_sheets,
-        mapping=active_mapping,
-        setup=confirmed_setup,
-        detected_sheets=detected_sheets,
-        peak_mode=peak_mode,
-        peak_windows=peak_windows,
-        confirmed_peak_periods=confirmed_periods,
-        pce_factors=pce_factors,
-        generate_workbook=True,
-        use_template_report_layout=use_template_report_layout,
-        use_excel_com_native_charts=False,
-        export_mode=export_mode,
-        source_file_name=item.file_name,
-        generated_at=generated_at,
-    )
+    with warnings.catch_warnings(record=True) as export_warnings:
+        warnings.simplefilter("always", RuntimeWarning)
+        result: ProcessingResult = process_tmc(
+            raw_sheets=raw_sheets,
+            mapping=active_mapping,
+            setup=confirmed_setup,
+            detected_sheets=detected_sheets,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
+            confirmed_peak_periods=confirmed_periods,
+            pce_factors=pce_factors,
+            generate_workbook=True,
+            use_template_report_layout=use_template_report_layout,
+            use_excel_com_native_charts=use_excel_com_native_charts,
+            export_mode=export_mode,
+            source_file_name=item.file_name,
+            generated_at=generated_at,
+        )
+    export_mode_requested = _base_export_mode_label(export_mode)
+    if export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE and not use_excel_com_native_charts:
+        export_mode_used = BATCH_SAFE_PNG_EXPORT_MODE
+        export_warning_text = "Excel COM native chart export was not enabled; used Safe PNG Export Mode."
+    else:
+        export_mode_used, export_warning_text = _export_used_from_warnings(export_mode, export_warnings)
     hourly_movement = hourly_movement_pcu(result.normalized, active_mapping)
     chart_pngs = dict(
         report_chart_pngs(
@@ -415,8 +460,10 @@ def _process_one_file(
         peak_settings=confirmed_setup,
         export_settings={
             "use_template_report_layout": use_template_report_layout,
-            "use_excel_com_native_charts": False,
+            "use_excel_com_native_charts": use_excel_com_native_charts,
             "template_version": TEMPLATE_VERSION,
+            "export_mode_requested": export_mode_requested,
+            "export_mode_used": export_mode_used,
         },
         pce_factors=result.pce_factors,
         source_file_name=Path(item.file_name).name,
@@ -432,14 +479,34 @@ def _process_one_file(
         qc=result.qc,
         workbook_filename="report.xlsx",
         pce_factors=result.pce_factors,
-        export_settings={"template_version": TEMPLATE_VERSION},
+        export_settings={
+            "template_version": TEMPLATE_VERSION,
+            "export_mode_requested": export_mode_requested,
+            "export_mode_used": export_mode_used,
+            "export_status": "success",
+            "export_error": "",
+        },
         generated_at=generated_at,
+    )
+    summary_text = "\n".join(
+        [
+            summary_text.rstrip(),
+            f"export_mode_requested: {export_mode_requested}",
+            f"export_mode_used: {export_mode_used}",
+            "export_status: success",
+            "export_error: ",
+            "",
+        ]
     )
     counts = _qc_counts(result.qc)
     row = BatchSummaryRow(
         file_name=Path(item.file_name).name,
         folder_name=folder_name,
         status="success",
+        export_mode_requested=export_mode_requested,
+        export_mode_used=export_mode_used,
+        export_status="success",
+        export_error="",
         suggested_AM_peak=suggested_am_peak,
         suggested_PM_peak=suggested_pm_peak,
         confirmed_AM_peak=_peak_text(result.peaks, "AM"),
@@ -452,7 +519,7 @@ def _process_one_file(
         QC_warnings=counts["warning"],
         QC_info=counts["info"],
         export_file=f"{folder_name}/report.xlsx",
-        notes="Auto/suggested peaks confirmed by Batch v1.",
+        notes=export_warning_text or "Auto/suggested peaks confirmed by Batch v1.",
     )
     artifact = _BatchFileArtifacts(
         folder_name=folder_name,
@@ -533,6 +600,7 @@ def analyze_batch_files(
                     confirmed_AM_peak=suggested_am,
                     confirmed_PM_peak=suggested_pm,
                     hourly_period_options=options,
+                    hourly_movement_pcu=hourly_movement,
                     total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
                     total_PCU=float(result.normalized["pcu"].sum()) if "pcu" in result.normalized else 0.0,
                     QC_errors=counts["error"],
@@ -572,12 +640,14 @@ def generate_batch_zip_from_reviewed_peaks(
     peak_windows: dict[str, tuple[str, str]] | None = None,
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,
+    use_excel_com_native_charts: bool = False,
 ) -> BatchResult:
     """Generate the final Batch ZIP using reviewed per-file peak selections."""
 
     rows: list[BatchSummaryRow] = []
     artifacts: list[_BatchFileArtifacts] = []
     setup = dict(setup or {})
+    export_mode_requested = _base_export_mode_label(export_mode)
     for item in analysis.items:
         if item.status != "success":
             rows.append(
@@ -585,6 +655,10 @@ def generate_batch_zip_from_reviewed_peaks(
                     file_name=Path(item.file_name).name,
                     folder_name=item.folder_name,
                     status="failed",
+                    export_mode_requested=export_mode_requested,
+                    export_mode_used="",
+                    export_status="failed",
+                    export_error=item.notes,
                     notes=item.notes,
                 )
             )
@@ -597,6 +671,10 @@ def generate_batch_zip_from_reviewed_peaks(
                     file_name=Path(item.file_name).name,
                     folder_name=item.folder_name,
                     status="failed",
+                    export_mode_requested=export_mode_requested,
+                    export_mode_used="",
+                    export_status="failed",
+                    export_error="Confirmed AM/PM peak is missing.",
                     suggested_AM_peak=item.suggested_AM_peak,
                     suggested_PM_peak=item.suggested_PM_peak,
                     notes="Confirmed AM/PM peak is missing.",
@@ -616,6 +694,7 @@ def generate_batch_zip_from_reviewed_peaks(
                 export_mode=export_mode,
                 generated_at=analysis.generated_at,
                 use_template_report_layout=use_template_report_layout,
+                use_excel_com_native_charts=use_excel_com_native_charts,
                 confirmed_peak_periods=confirmed_periods,
                 suggested_am_peak=item.suggested_AM_peak,
                 suggested_pm_peak=item.suggested_PM_peak,
@@ -628,6 +707,10 @@ def generate_batch_zip_from_reviewed_peaks(
                     file_name=Path(item.file_name).name,
                     folder_name=item.folder_name,
                     status="failed",
+                    export_mode_requested=export_mode_requested,
+                    export_mode_used="",
+                    export_status="failed",
+                    export_error=str(exc),
                     suggested_AM_peak=item.suggested_AM_peak,
                     suggested_PM_peak=item.suggested_PM_peak,
                     confirmed_AM_peak=item.confirmed_AM_peak,
@@ -656,6 +739,7 @@ def process_batch_files(
     peak_windows: dict[str, tuple[str, str]] | None = None,
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,
+    use_excel_com_native_charts: bool = False,
     mapping_preset_name: str = "",
     generated_at: str | None = None,
 ) -> BatchResult:
@@ -681,4 +765,5 @@ def process_batch_files(
         peak_windows=peak_windows,
         export_mode=export_mode,
         use_template_report_layout=use_template_report_layout,
+        use_excel_com_native_charts=use_excel_com_native_charts,
     )
