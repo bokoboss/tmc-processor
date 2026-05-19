@@ -16,10 +16,13 @@ import streamlit as st
 from tmc_processor.batch import (
     BATCH_PACKAGE_MIME,
     BatchItem,
+    analyze_batch_files,
     batch_inputs_ready,
     batch_package_filename,
     batch_zip_contents_preview,
+    generate_batch_zip_from_reviewed_peaks,
     process_batch_files,
+    reviewed_peak_values_complete,
 )
 from tmc_processor.charts import report_chart_pngs
 from tmc_processor.constants import (
@@ -1790,11 +1793,11 @@ def _run_streamlit_app() -> None:
         )
         if not batch_ready:
             st.warning("กรุณาอัปโหลด raw workbooks และโหลด Mapping Preset ก่อน Process Batch")
-        run_batch = st.button("Process Batch", type="primary", disabled=not batch_ready, key="run_batch_processing")
-        if run_batch:
+        analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
+        if analyze_batch:
             items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
-            with st.spinner("กำลังประมวลผล Batch..."):
-                batch_result = process_batch_files(
+            with st.spinner("กำลังวิเคราะห์ Batch..."):
+                batch_analysis = analyze_batch_files(
                     items,
                     mapping=batch_mapping,
                     mapping_preset=loaded_batch_preset,
@@ -1802,11 +1805,106 @@ def _run_streamlit_app() -> None:
                     pce_factors=selected_pce_factors,
                     peak_mode=peak_mode,
                     peak_windows=peak_windows,
-                    use_template_report_layout=True,
                     mapping_preset_name=batch_preset_name,
                 )
-            st.session_state["tmc_batch_result"] = batch_result
-            st.success("ประมวลผล Batch เสร็จแล้ว")
+            st.session_state["tmc_batch_analysis"] = batch_analysis
+            st.session_state["tmc_batch_preset_name"] = batch_preset_name
+            st.session_state.pop("tmc_batch_result", None)
+            for analyzed_item in batch_analysis.successful_items:
+                st.session_state[f"batch_confirmed_am_{analyzed_item.folder_name}"] = analyzed_item.confirmed_AM_peak
+                st.session_state[f"batch_confirmed_pm_{analyzed_item.folder_name}"] = analyzed_item.confirmed_PM_peak
+            st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
+
+        batch_analysis = st.session_state.get("tmc_batch_analysis")
+        if batch_analysis:
+            st.markdown("#### ตารางตรวจสอบ Peak รายไฟล์")
+            st.info("ระบบจะใช้ช่วงเร่งด่วนที่ยืนยันในตารางนี้สำหรับการสร้างรายงาน Batch")
+            review_header = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
+            for column, label in zip(
+                review_header,
+                ["ชื่อไฟล์", "สถานะ", "AM suggested", "PM suggested", "AM confirmed", "PM confirmed", "QC errors", "QC warnings", "QC info", "หมายเหตุ"],
+            ):
+                column.markdown(f"**{label}**")
+            for analyzed_item in batch_analysis.items:
+                row_cols = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
+                row_cols[0].write(analyzed_item.file_name)
+                row_cols[1].write("สำเร็จ" if analyzed_item.status == "success" else "ไม่สำเร็จ")
+                row_cols[2].write(analyzed_item.suggested_AM_peak or "-")
+                row_cols[3].write(analyzed_item.suggested_PM_peak or "-")
+                if analyzed_item.status == "success":
+                    options = analyzed_item.hourly_period_options or [
+                        value
+                        for value in [analyzed_item.suggested_AM_peak, analyzed_item.suggested_PM_peak]
+                        if value
+                    ]
+                    am_key = f"batch_confirmed_am_{analyzed_item.folder_name}"
+                    pm_key = f"batch_confirmed_pm_{analyzed_item.folder_name}"
+                    am_default = st.session_state.get(am_key) or analyzed_item.confirmed_AM_peak
+                    pm_default = st.session_state.get(pm_key) or analyzed_item.confirmed_PM_peak
+                    if am_default and am_default not in options:
+                        options = [am_default, *options]
+                    if pm_default and pm_default not in options:
+                        options = [pm_default, *options]
+                    options = list(dict.fromkeys(options))
+                    row_cols[4].selectbox(
+                        "AM confirmed",
+                        options=options,
+                        index=options.index(am_default) if am_default in options else 0,
+                        key=am_key,
+                        label_visibility="collapsed",
+                    )
+                    row_cols[5].selectbox(
+                        "PM confirmed",
+                        options=options,
+                        index=options.index(pm_default) if pm_default in options else 0,
+                        key=pm_key,
+                        label_visibility="collapsed",
+                    )
+                else:
+                    row_cols[4].write("-")
+                    row_cols[5].write("-")
+                row_cols[6].write(f"{analyzed_item.QC_errors:,}")
+                row_cols[7].write(f"{analyzed_item.QC_warnings:,}")
+                row_cols[8].write(f"{analyzed_item.QC_info:,}")
+                row_cols[9].write(analyzed_item.notes or "")
+
+            for analyzed_item in batch_analysis.successful_items:
+                analyzed_item.confirmed_AM_peak = st.session_state.get(
+                    f"batch_confirmed_am_{analyzed_item.folder_name}",
+                    analyzed_item.confirmed_AM_peak,
+                )
+                analyzed_item.confirmed_PM_peak = st.session_state.get(
+                    f"batch_confirmed_pm_{analyzed_item.folder_name}",
+                    analyzed_item.confirmed_PM_peak,
+                )
+
+            if batch_analysis.has_failures:
+                st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้จะอยู่ใน batch_summary.xlsx และไม่ต้องยืนยัน Peak")
+            no_successful_files = not batch_analysis.successful_items
+            peaks_ready = reviewed_peak_values_complete(batch_analysis)
+            if no_successful_files:
+                st.warning("ยังไม่มีไฟล์ที่วิเคราะห์สำเร็จ จึงยังสร้าง Batch ZIP ไม่ได้")
+            elif not peaks_ready:
+                st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
+
+            generate_batch = st.button(
+                "Generate Batch ZIP",
+                type="primary",
+                disabled=no_successful_files or not peaks_ready,
+                key="generate_batch_zip",
+            )
+            if generate_batch:
+                with st.spinner("กำลังสร้าง Batch ZIP..."):
+                    batch_result = generate_batch_zip_from_reviewed_peaks(
+                        batch_analysis,
+                        setup=setup,
+                        pce_factors=selected_pce_factors,
+                        peak_mode=peak_mode,
+                        peak_windows=peak_windows,
+                        use_template_report_layout=True,
+                    )
+                st.session_state["tmc_batch_result"] = batch_result
+                st.success("สร้าง Batch ZIP เสร็จแล้ว")
 
         batch_result = st.session_state.get("tmc_batch_result")
         if batch_result:
@@ -1814,8 +1912,10 @@ def _run_streamlit_app() -> None:
             display_columns = {
                 "file_name": "ชื่อไฟล์",
                 "status": "สถานะ",
-                "AM_peak": "AM peak",
-                "PM_peak": "PM peak",
+                "suggested_AM_peak": "AM suggested",
+                "suggested_PM_peak": "PM suggested",
+                "confirmed_AM_peak": "AM confirmed",
+                "confirmed_PM_peak": "PM confirmed",
                 "total_PCU": "PCU รวม",
                 "QC_errors": "QC errors",
                 "QC_warnings": "QC warnings",
@@ -1835,7 +1935,7 @@ def _run_streamlit_app() -> None:
             st.download_button(
                 "Download Batch ZIP",
                 data=download_buffer(batch_result.package_bytes),
-                file_name=batch_package_filename(batch_preset_name or "tmc_batch"),
+                file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
                 mime=BATCH_PACKAGE_MIME,
                 key="download_batch_zip",
                 help="ดาวน์โหลด ZIP ที่มี batch_summary.xlsx และผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ",

@@ -9,8 +9,10 @@ from openpyxl import load_workbook
 from tmc_processor.batch import (
     BATCH_SUMMARY_COLUMNS,
     BatchItem,
+    analyze_batch_files,
     batch_inputs_ready,
     batch_zip_contents_preview,
+    generate_batch_zip_from_reviewed_peaks,
     process_batch_files,
 )
 from tmc_processor.mapping_preset import load_mapping_preset
@@ -72,6 +74,24 @@ def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
     assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=True, pce_factors_ready=False)
 
 
+def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert [item.status for item in analysis.items] == ["success", "success"]
+    for item in analysis.successful_items:
+        assert item.suggested_AM_peak
+        assert item.suggested_PM_peak
+        assert item.confirmed_AM_peak == item.suggested_AM_peak
+        assert item.confirmed_PM_peak == item.suggested_PM_peak
+        assert item.suggested_AM_peak in item.hourly_period_options
+        assert item.suggested_PM_peak in item.hourly_period_options
+
+
 def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_inputs() -> None:
     result = process_batch_files(
         _demo_items(),
@@ -114,6 +134,39 @@ def test_batch_zip_contents_preview_lists_expected_artifacts() -> None:
     assert "file_01_DEMO_TMC1_FourLeg/charts/" in preview
 
 
+def test_custom_confirmed_peak_overrides_suggested_in_final_zip() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        mapping_preset_name="Demo preset",
+        generated_at="2026-05-19T10:00:00Z",
+    )
+    first = analysis.successful_items[0]
+    custom_am = next(option for option in first.hourly_period_options if option != first.suggested_AM_peak)
+    first.confirmed_AM_peak = custom_am
+
+    result = generate_batch_zip_from_reviewed_peaks(
+        analysis,
+        setup=_setup(),
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    records = [dict(zip(rows[0], row)) for row in rows[1:]]
+    first_record = records[0]
+
+    assert first_record["suggested_AM_peak"] == first.suggested_AM_peak
+    assert first_record["confirmed_AM_peak"] == custom_am
+    assert first_record["AM_peak"] == custom_am
+    assert f"AM peak period: {custom_am}" in summary_text
+    assert "Peak selection source: user_confirmed_batch" in summary_text
+
+
 def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failure_rows() -> None:
     items = [
         BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes()),
@@ -144,6 +197,36 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
     assert [record["status"] for record in records] == ["success", "failed"]
     assert headers == BATCH_SUMMARY_COLUMNS
     assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(headers)
+    assert records[1]["notes"]
+
+
+def test_failed_analysis_item_does_not_block_reviewed_batch_zip() -> None:
+    items = [
+        BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes()),
+        BatchItem(file_name="broken_input.xlsx", workbook_bytes=b"not an excel workbook"),
+    ]
+    analysis = analyze_batch_files(
+        items,
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert [item.status for item in analysis.items] == ["success", "failed"]
+
+    result = generate_batch_zip_from_reviewed_peaks(analysis, setup=_setup())
+
+    assert [row.status for row in result.summary_rows] == ["success", "failed"]
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        names = set(archive.namelist())
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    assert "file_01_DEMO_TMC1_FourLeg/report.xlsx" in names
+    assert "file_02_broken_input/report.xlsx" not in names
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    records = [dict(zip(rows[0], row)) for row in rows[1:]]
+    assert records[1]["status"] == "failed"
     assert records[1]["notes"]
 
 

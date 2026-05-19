@@ -22,10 +22,10 @@ from .mapping_preset import (
     serialize_mapping_preset,
 )
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, setup_with_metadata
-from .peaks import PEAK_SELECTION_USER_CONFIRMED
 from .pipeline import ProcessingResult, process_tmc
 from .session import build_project_session, session_to_json_bytes
 from .summaries import hourly_movement_pcu, vehicle_composition_report
+from .time_utils import hourly_interval_options
 
 
 BATCH_PACKAGE_MIME = "application/zip"
@@ -34,6 +34,10 @@ BATCH_SUMMARY_COLUMNS = [
     "file_name",
     "folder_name",
     "status",
+    "suggested_AM_peak",
+    "suggested_PM_peak",
+    "confirmed_AM_peak",
+    "confirmed_PM_peak",
     "AM_peak",
     "PM_peak",
     "total_vehicles",
@@ -59,6 +63,10 @@ class BatchSummaryRow:
     file_name: str
     folder_name: str
     status: str
+    suggested_AM_peak: str = ""
+    suggested_PM_peak: str = ""
+    confirmed_AM_peak: str = ""
+    confirmed_PM_peak: str = ""
     AM_peak: str = ""
     PM_peak: str = ""
     total_vehicles: float = 0.0
@@ -79,6 +87,43 @@ class BatchResult:
     @property
     def has_failures(self) -> bool:
         return any(row.status == "failed" for row in self.summary_rows)
+
+
+@dataclass
+class BatchAnalysisItem:
+    """Per-file analysis output used for Batch v1.1 peak review."""
+
+    file_name: str
+    folder_name: str
+    status: str
+    workbook_bytes: bytes = field(default=b"", repr=False)
+    mapping: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    suggested_AM_peak: str = ""
+    suggested_PM_peak: str = ""
+    confirmed_AM_peak: str = ""
+    confirmed_PM_peak: str = ""
+    hourly_period_options: list[str] = field(default_factory=list)
+    total_vehicles: float = 0.0
+    total_PCU: float = 0.0
+    QC_errors: int = 0
+    QC_warnings: int = 0
+    QC_info: int = 0
+    notes: str = ""
+
+
+@dataclass
+class BatchAnalysisResult:
+    items: list[BatchAnalysisItem] = field(default_factory=list)
+    generated_at: str = ""
+    mapping_preset_name: str = ""
+
+    @property
+    def successful_items(self) -> list[BatchAnalysisItem]:
+        return [item for item in self.items if item.status == "success"]
+
+    @property
+    def has_failures(self) -> bool:
+        return any(item.status == "failed" for item in self.items)
 
 
 @dataclass
@@ -172,6 +217,27 @@ def _confirmed_periods_from_peaks(peaks: pd.DataFrame) -> dict[str, tuple[str, s
         end = _time_text(row.get("peak_end"))
         if start and end:
             periods[period] = (start, end)
+    return periods
+
+
+def _period_text_to_tuple(value: str | None) -> tuple[str, str] | None:
+    text = str(value or "").strip()
+    if "-" not in text:
+        return None
+    start, end = [part.strip() for part in text.split("-", 1)]
+    if not start or not end:
+        return None
+    return start[:5], end[:5]
+
+
+def _confirmed_periods_from_labels(am_peak: str | None, pm_peak: str | None) -> dict[str, tuple[str, str]]:
+    periods: dict[str, tuple[str, str]] = {}
+    am_period = _period_text_to_tuple(am_peak)
+    pm_period = _period_text_to_tuple(pm_peak)
+    if am_period:
+        periods["AM"] = am_period
+    if pm_period:
+        periods["PM"] = pm_period
     return periods
 
 
@@ -276,6 +342,9 @@ def _process_one_file(
     export_mode: str,
     generated_at: str,
     use_template_report_layout: bool,
+    confirmed_peak_periods: dict[str, tuple[str, str]] | None = None,
+    suggested_am_peak: str = "",
+    suggested_pm_peak: str = "",
 ) -> tuple[BatchSummaryRow, _BatchFileArtifacts]:
     raw_sheets = load_detected_sheets(BytesIO(item.workbook_bytes))
     detected_sheets = list(raw_sheets)
@@ -285,20 +354,25 @@ def _process_one_file(
     )
     active_mapping = apply_result.mapping
 
-    suggested = process_tmc(
-        raw_sheets=raw_sheets,
-        mapping=active_mapping,
-        setup=setup,
-        detected_sheets=detected_sheets,
-        peak_mode=peak_mode,
-        peak_windows=peak_windows,
-        pce_factors=pce_factors,
-        generate_workbook=False,
-    )
-    confirmed_periods = _confirmed_periods_from_peaks(suggested.peaks)
+    if confirmed_peak_periods is None:
+        suggested = process_tmc(
+            raw_sheets=raw_sheets,
+            mapping=active_mapping,
+            setup=setup,
+            detected_sheets=detected_sheets,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
+            pce_factors=pce_factors,
+            generate_workbook=False,
+        )
+        confirmed_periods = _confirmed_periods_from_peaks(suggested.peaks)
+        suggested_am_peak = suggested_am_peak or _peak_text(suggested.peaks, "AM")
+        suggested_pm_peak = suggested_pm_peak or _peak_text(suggested.peaks, "PM")
+    else:
+        confirmed_periods = confirmed_peak_periods
     confirmed_setup = {
         **setup,
-        "peak_selection_source": PEAK_SELECTION_USER_CONFIRMED,
+        "peak_selection_source": "user_confirmed_batch",
     }
     if "AM" in confirmed_periods:
         confirmed_setup["am_peak_start"], confirmed_setup["am_peak_end"] = confirmed_periods["AM"]
@@ -366,6 +440,10 @@ def _process_one_file(
         file_name=Path(item.file_name).name,
         folder_name=folder_name,
         status="success",
+        suggested_AM_peak=suggested_am_peak,
+        suggested_PM_peak=suggested_pm_peak,
+        confirmed_AM_peak=_peak_text(result.peaks, "AM"),
+        confirmed_PM_peak=_peak_text(result.peaks, "PM"),
         AM_peak=_peak_text(result.peaks, "AM"),
         PM_peak=_peak_text(result.peaks, "PM"),
         total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
@@ -386,6 +464,185 @@ def _process_one_file(
         diagram_png=diagram_png,
     )
     return row, artifact
+
+
+def analyze_batch_files(
+    items: Iterable[BatchItem],
+    *,
+    mapping: pd.DataFrame | None = None,
+    mapping_preset: dict[str, Any] | None = None,
+    setup: dict[str, Any] | None = None,
+    pce_factors: dict[str, float] | None = None,
+    peak_mode: str = "rolling_60min",
+    peak_windows: dict[str, tuple[str, str]] | None = None,
+    mapping_preset_name: str = "",
+    generated_at: str | None = None,
+) -> BatchAnalysisResult:
+    """Analyze batch files enough for per-file peak confirmation."""
+
+    generated_at = generated_at or generated_timestamp_text()
+    setup = dict(setup or {})
+    source_mapping = clean_mapping(mapping if mapping is not None else pd.DataFrame())
+    if source_mapping.empty and mapping_preset:
+        source_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, []).mapping
+
+    analysis_items: list[BatchAnalysisItem] = []
+    for index, item in enumerate(items, start=1):
+        safe_stem = safe_batch_name(item.file_name, f"file_{index:02d}")
+        folder_name = f"file_{index:02d}_{safe_stem}"
+        try:
+            raw_sheets = load_detected_sheets(BytesIO(item.workbook_bytes))
+            detected_sheets = list(raw_sheets)
+            active_mapping = (
+                apply_mapping_preset_to_detected_sheets(mapping_preset, detected_sheets).mapping
+                if source_mapping.empty and mapping_preset
+                else source_mapping
+            )
+            apply_result = apply_mapping_preset_to_detected_sheets(
+                build_mapping_preset(active_mapping, preset_name="Batch Mapping Preset"),
+                detected_sheets,
+            )
+            active_mapping = apply_result.mapping
+            result = process_tmc(
+                raw_sheets=raw_sheets,
+                mapping=active_mapping,
+                setup=setup,
+                detected_sheets=detected_sheets,
+                peak_mode=peak_mode,
+                peak_windows=peak_windows,
+                pce_factors=pce_factors,
+                generate_workbook=False,
+            )
+            counts = _qc_counts(result.qc)
+            hourly_movement = hourly_movement_pcu(result.normalized, active_mapping)
+            options = [option[0] for option in hourly_interval_options(hourly_movement)]
+            suggested_am = _peak_text(result.peaks, "AM")
+            suggested_pm = _peak_text(result.peaks, "PM")
+            for suggested in (suggested_am, suggested_pm):
+                if suggested and suggested not in options:
+                    options.append(suggested)
+            analysis_items.append(
+                BatchAnalysisItem(
+                    file_name=Path(item.file_name).name,
+                    folder_name=folder_name,
+                    status="success",
+                    workbook_bytes=item.workbook_bytes,
+                    mapping=active_mapping,
+                    suggested_AM_peak=suggested_am,
+                    suggested_PM_peak=suggested_pm,
+                    confirmed_AM_peak=suggested_am,
+                    confirmed_PM_peak=suggested_pm,
+                    hourly_period_options=options,
+                    total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
+                    total_PCU=float(result.normalized["pcu"].sum()) if "pcu" in result.normalized else 0.0,
+                    QC_errors=counts["error"],
+                    QC_warnings=counts["warning"],
+                    QC_info=counts["info"],
+                    notes="Suggested peaks are ready for review.",
+                )
+            )
+        except Exception as exc:
+            analysis_items.append(
+                BatchAnalysisItem(
+                    file_name=Path(item.file_name).name,
+                    folder_name=folder_name,
+                    status="failed",
+                    notes=str(exc),
+                )
+            )
+    return BatchAnalysisResult(
+        items=analysis_items,
+        generated_at=generated_at,
+        mapping_preset_name=mapping_preset_name,
+    )
+
+
+def reviewed_peak_values_complete(analysis: BatchAnalysisResult) -> bool:
+    """Return whether all successful analyzed files have confirmed AM/PM peaks."""
+
+    return all(item.confirmed_AM_peak and item.confirmed_PM_peak for item in analysis.successful_items)
+
+
+def generate_batch_zip_from_reviewed_peaks(
+    analysis: BatchAnalysisResult,
+    *,
+    setup: dict[str, Any] | None = None,
+    pce_factors: dict[str, float] | None = None,
+    peak_mode: str = "rolling_60min",
+    peak_windows: dict[str, tuple[str, str]] | None = None,
+    export_mode: str = SAFE_BATCH_EXPORT_MODE,
+    use_template_report_layout: bool = True,
+) -> BatchResult:
+    """Generate the final Batch ZIP using reviewed per-file peak selections."""
+
+    rows: list[BatchSummaryRow] = []
+    artifacts: list[_BatchFileArtifacts] = []
+    setup = dict(setup or {})
+    for item in analysis.items:
+        if item.status != "success":
+            rows.append(
+                BatchSummaryRow(
+                    file_name=Path(item.file_name).name,
+                    folder_name=item.folder_name,
+                    status="failed",
+                    notes=item.notes,
+                )
+            )
+            continue
+
+        confirmed_periods = _confirmed_periods_from_labels(item.confirmed_AM_peak, item.confirmed_PM_peak)
+        if "AM" not in confirmed_periods or "PM" not in confirmed_periods:
+            rows.append(
+                BatchSummaryRow(
+                    file_name=Path(item.file_name).name,
+                    folder_name=item.folder_name,
+                    status="failed",
+                    suggested_AM_peak=item.suggested_AM_peak,
+                    suggested_PM_peak=item.suggested_PM_peak,
+                    notes="Confirmed AM/PM peak is missing.",
+                )
+            )
+            continue
+
+        try:
+            row, artifact = _process_one_file(
+                BatchItem(file_name=item.file_name, workbook_bytes=item.workbook_bytes),
+                folder_name=item.folder_name,
+                mapping=item.mapping,
+                setup=setup,
+                pce_factors=pce_factors,
+                peak_mode=peak_mode,
+                peak_windows=peak_windows,
+                export_mode=export_mode,
+                generated_at=analysis.generated_at,
+                use_template_report_layout=use_template_report_layout,
+                confirmed_peak_periods=confirmed_periods,
+                suggested_am_peak=item.suggested_AM_peak,
+                suggested_pm_peak=item.suggested_PM_peak,
+            )
+            rows.append(row)
+            artifacts.append(artifact)
+        except Exception as exc:
+            rows.append(
+                BatchSummaryRow(
+                    file_name=Path(item.file_name).name,
+                    folder_name=item.folder_name,
+                    status="failed",
+                    suggested_AM_peak=item.suggested_AM_peak,
+                    suggested_PM_peak=item.suggested_PM_peak,
+                    confirmed_AM_peak=item.confirmed_AM_peak,
+                    confirmed_PM_peak=item.confirmed_PM_peak,
+                    notes=str(exc),
+                )
+            )
+
+    package = create_batch_package_zip(
+        summary_rows=rows,
+        file_artifacts=artifacts,
+        generated_at=analysis.generated_at,
+        mapping_preset_name=analysis.mapping_preset_name,
+    )
+    return BatchResult(summary_rows=rows, package_bytes=package, generated_at=analysis.generated_at)
 
 
 def process_batch_files(
