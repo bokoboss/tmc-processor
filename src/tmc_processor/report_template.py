@@ -177,23 +177,6 @@ def _survey_point(setup: dict[str, Any]) -> str:
 
 def _metadata_values(setup: dict[str, Any]) -> dict[str, Any]:
     return metadata_cell_values(setup)
-    survey_point = _survey_point(setup)
-    survey_date = setup.get("survey_date_text") or _date_text(setup.get("survey_date"))
-    title = _first_present(setup, "report_title", "tmc_title")
-    intersection_name = _first_present(setup, "intersection_name")
-    if not title and intersection_name:
-        title = f"ข้อมูลปริมาณจราจรบริเวณทางแยก (Turning Movement Count)\nจุดนับรถที่ {intersection_name}"
-    if not title and survey_point:
-        title = f"ข้อมูลปริมาณจราจรบริเวณทางแยก (Turning Movement Count)\nจุดนับรถที่ {survey_point}"
-    return {
-        "report_title": _blank_if_missing(title),
-        "project": _blank_if_missing(_first_present(setup, "project_name", "project")),
-        "survey_point": survey_point,
-        "survey_date": survey_date,
-        "weather": _blank_if_missing(setup.get("weather")),
-        "responsible_party": _blank_if_missing(setup.get("responsible_party")),
-        "survey_period": _blank_if_missing(_first_present(setup, "survey_period", "survey_period_text")),
-    }
 
 
 def _first_data_column(dataframe: pd.DataFrame) -> str | None:
@@ -334,16 +317,6 @@ def _write_metadata(worksheet, mapping: dict[str, Any], setup: dict[str, Any]) -
 
 def _direction_label_value(setup: dict[str, Any], direction: str) -> str:
     return direction_label_value(setup, direction)
-    explicit = _first_present(setup, f"{direction}_label", direction)
-    if explicit:
-        return str(explicit)
-    if direction == "south_or_west":
-        south = _first_present(setup, "south_label")
-        west = _first_present(setup, "west_label")
-        if south and west and str(south) != str(west):
-            return f"{south} / {west}"
-        return str(south or west or "")
-    return ""
 
 
 def _mapped_label_value(setup: dict[str, Any], label_key: str) -> str:

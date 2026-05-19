@@ -250,3 +250,21 @@ def test_batch_summary_workbook_has_metadata_sheet() -> None:
     assert metadata["template_version"] == "four_leg_v1"
     assert metadata["generated_at"] == "2026-05-19T10:00:00Z"
     assert metadata["mapping_preset_name"] == "Demo preset"
+
+
+def test_batch_summary_workbook_has_confirmed_peak_columns() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    headers = [cell.value for cell in next(workbook["batch_summary"].iter_rows(max_row=1))]
+
+    assert "confirmed_AM_peak" in headers
+    assert "confirmed_PM_peak" in headers

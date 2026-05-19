@@ -662,50 +662,23 @@ def process_batch_files(
     """Process many uploaded workbooks with one shared mapping and settings."""
 
     generated_at = generated_at or generated_timestamp_text()
-    setup = dict(setup or {})
-    source_mapping = clean_mapping(mapping if mapping is not None else pd.DataFrame())
-    if source_mapping.empty and mapping_preset:
-        source_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, []).mapping
-
-    rows: list[BatchSummaryRow] = []
-    artifacts: list[_BatchFileArtifacts] = []
-    for index, item in enumerate(items, start=1):
-        safe_stem = safe_batch_name(item.file_name, f"file_{index:02d}")
-        folder_name = f"file_{index:02d}_{safe_stem}"
-        try:
-            if source_mapping.empty and mapping_preset:
-                detected = load_detected_sheets(BytesIO(item.workbook_bytes))
-                active_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, list(detected)).mapping
-            else:
-                active_mapping = source_mapping
-            row, artifact = _process_one_file(
-                item,
-                folder_name=folder_name,
-                mapping=active_mapping,
-                setup=setup,
-                pce_factors=pce_factors,
-                peak_mode=peak_mode,
-                peak_windows=peak_windows,
-                export_mode=export_mode,
-                generated_at=generated_at,
-                use_template_report_layout=use_template_report_layout,
-            )
-            rows.append(row)
-            artifacts.append(artifact)
-        except Exception as exc:
-            rows.append(
-                BatchSummaryRow(
-                    file_name=Path(item.file_name).name,
-                    folder_name=folder_name,
-                    status="failed",
-                    notes=str(exc),
-                )
-            )
-
-    package = create_batch_package_zip(
-        summary_rows=rows,
-        file_artifacts=artifacts,
-        generated_at=generated_at,
+    analysis = analyze_batch_files(
+        items,
+        mapping=mapping,
+        mapping_preset=mapping_preset,
+        setup=setup,
+        pce_factors=pce_factors,
+        peak_mode=peak_mode,
+        peak_windows=peak_windows,
         mapping_preset_name=mapping_preset_name,
+        generated_at=generated_at,
     )
-    return BatchResult(summary_rows=rows, package_bytes=package, generated_at=generated_at)
+    return generate_batch_zip_from_reviewed_peaks(
+        analysis,
+        setup=setup,
+        pce_factors=pce_factors,
+        peak_mode=peak_mode,
+        peak_windows=peak_windows,
+        export_mode=export_mode,
+        use_template_report_layout=use_template_report_layout,
+    )
