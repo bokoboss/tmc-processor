@@ -35,6 +35,8 @@ BATCH_EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 BATCH_SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
 BATCH_SUMMARY_COLUMNS = [
     "file_name",
+    "survey_date_text",
+    "output_stem",
     "folder_name",
     "status",
     "export_mode_requested",
@@ -63,11 +65,22 @@ class BatchItem:
 
     file_name: str
     workbook_bytes: bytes
+    survey_date_text: str = ""
+    output_stem: str = ""
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.survey_date_text:
+            object.__setattr__(self, "survey_date_text", derive_survey_date_text_from_filename(self.file_name))
+        if not self.output_stem:
+            object.__setattr__(self, "output_stem", safe_output_stem(self.file_name))
 
 
 @dataclass(frozen=True)
 class BatchSummaryRow:
     file_name: str
+    survey_date_text: str
+    output_stem: str
     folder_name: str
     status: str
     export_mode_requested: str = ""
@@ -105,6 +118,8 @@ class BatchAnalysisItem:
     """Per-file analysis output used for Batch v1.1 peak review."""
 
     file_name: str
+    survey_date_text: str
+    output_stem: str
     folder_name: str
     status: str
     workbook_bytes: bytes = field(default=b"", repr=False)
@@ -120,6 +135,11 @@ class BatchAnalysisItem:
     QC_errors: int = 0
     QC_warnings: int = 0
     QC_info: int = 0
+    mapping_status: str = ""
+    matched_sheet_count: int = 0
+    missing_detected_sheet_count: int = 0
+    extra_preset_row_count: int = 0
+    detected_sheets: list[str] = field(default_factory=list)
     notes: str = ""
 
 
@@ -141,6 +161,7 @@ class BatchAnalysisResult:
 @dataclass
 class _BatchFileArtifacts:
     folder_name: str
+    output_stem: str
     workbook_bytes: bytes
     export_summary_text: str
     session_bytes: bytes
@@ -156,6 +177,41 @@ def safe_batch_name(name: str | None, default: str = "file") -> str:
     stem = Path(base).stem if "." in base else base
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
     return (cleaned or default)[:80]
+
+
+def safe_output_stem(name: str | None, default: str = "file") -> str:
+    """Return a safe user-editable output stem for ZIP file names."""
+
+    return safe_batch_name(name, default)
+
+
+def derive_survey_date_text_from_filename(filename: str | None) -> str:
+    """Extract a practical survey date from common filename patterns."""
+
+    stem = Path(str(filename or "")).stem
+    patterns = [
+        (r"(?<!\d)(20\d{2})[-_. ]?(0[1-9]|1[0-2])[-_. ]?([0-2]\d|3[01])(?!\d)", "{0}-{1}-{2}"),
+        (r"(?<!\d)([0-2]\d|3[01])[-_. ](0[1-9]|1[0-2])[-_. ](20\d{2})(?!\d)", "{2}-{1}-{0}"),
+    ]
+    for pattern, template in patterns:
+        match = re.search(pattern, stem)
+        if match:
+            return template.format(*match.groups())
+    return ""
+
+
+def batch_file_metadata_defaults(file_names: Iterable[str]) -> list[dict[str, str]]:
+    """Build default UI metadata rows without raw paths."""
+
+    return [
+        {
+            "file_name": Path(str(file_name)).name,
+            "survey_date_text": derive_survey_date_text_from_filename(file_name),
+            "output_stem": safe_output_stem(file_name, f"file_{index:02d}"),
+            "notes": "",
+        }
+        for index, file_name in enumerate(file_names, start=1)
+    ]
 
 
 def batch_package_filename(name: str | None = None) -> str:
@@ -174,6 +230,12 @@ def batch_inputs_ready(
     return uploaded_workbook_count > 0 and mapping_available and pce_factors_ready
 
 
+def batch_change_invalidates(previous: object, current: object, has_analysis: bool) -> bool:
+    """Return whether changed Batch inputs should stale prior analysis/export."""
+
+    return previous is not None and previous != current and has_analysis
+
+
 def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[str]:
     """Return a compact expected ZIP content outline for UI display."""
 
@@ -181,13 +243,17 @@ def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[
     success_folders = [row.folder_name for row in rows if row.status == "success"]
     preview = ["batch_summary.xlsx"]
     if success_folders:
-        for folder in success_folders:
+        for row in rows:
+            if row.status != "success":
+                continue
+            folder = row.folder_name
+            stem = safe_output_stem(row.output_stem or row.folder_name, "report")
             preview.extend(
                 [
                     f"{folder}/",
-                    f"{folder}/report.xlsx",
-                    f"{folder}/export_summary.txt",
-                    f"{folder}/session.tmcproj.json",
+                    f"{folder}/{stem}.xlsx",
+                    f"{folder}/{stem}_export_summary.txt",
+                    f"{folder}/{stem}_session.tmcproj.json",
                     f"{folder}/mapping_preset.mapping.json",
                     f"{folder}/charts/",
                 ]
@@ -334,9 +400,10 @@ def create_batch_package_zip(
         archive.writestr("batch_summary.xlsx", summary_bytes)
         for artifact in file_artifacts:
             folder = safe_batch_name(artifact.folder_name, "file")
-            archive.writestr(f"{folder}/report.xlsx", bytes(artifact.workbook_bytes))
-            archive.writestr(f"{folder}/export_summary.txt", artifact.export_summary_text.encode("utf-8"))
-            archive.writestr(f"{folder}/session.tmcproj.json", bytes(artifact.session_bytes))
+            stem = safe_output_stem(artifact.output_stem, folder)
+            archive.writestr(f"{folder}/{stem}.xlsx", bytes(artifact.workbook_bytes))
+            archive.writestr(f"{folder}/{stem}_export_summary.txt", artifact.export_summary_text.encode("utf-8"))
+            archive.writestr(f"{folder}/{stem}_session.tmcproj.json", bytes(artifact.session_bytes))
             archive.writestr(f"{folder}/mapping_preset.mapping.json", bytes(artifact.mapping_preset_bytes))
             for chart_name, png_bytes in sorted(artifact.chart_pngs.items()):
                 if png_bytes:
@@ -383,6 +450,11 @@ def _process_one_file(
     suggested_am_peak: str = "",
     suggested_pm_peak: str = "",
 ) -> tuple[BatchSummaryRow, _BatchFileArtifacts]:
+    output_stem = safe_output_stem(item.output_stem or item.file_name, folder_name)
+    per_file_setup = {
+        **setup,
+        "survey_date_text": item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+    }
     raw_sheets = load_detected_sheets(BytesIO(item.workbook_bytes))
     detected_sheets = list(raw_sheets)
     apply_result = apply_mapping_preset_to_detected_sheets(
@@ -395,7 +467,7 @@ def _process_one_file(
         suggested = process_tmc(
             raw_sheets=raw_sheets,
             mapping=active_mapping,
-            setup=setup,
+            setup=per_file_setup,
             detected_sheets=detected_sheets,
             peak_mode=peak_mode,
             peak_windows=peak_windows,
@@ -408,7 +480,7 @@ def _process_one_file(
     else:
         confirmed_periods = confirmed_peak_periods
     confirmed_setup = {
-        **setup,
+        **per_file_setup,
         "peak_selection_source": "user_confirmed_batch",
     }
     if "AM" in confirmed_periods:
@@ -477,7 +549,7 @@ def _process_one_file(
         peaks=result.peaks,
         mapping=active_mapping,
         qc=result.qc,
-        workbook_filename="report.xlsx",
+        workbook_filename=f"{output_stem}.xlsx",
         pce_factors=result.pce_factors,
         export_settings={
             "template_version": TEMPLATE_VERSION,
@@ -491,6 +563,8 @@ def _process_one_file(
     summary_text = "\n".join(
         [
             summary_text.rstrip(),
+            f"survey_date_text: {confirmed_setup.get('survey_date_text', '')}",
+            f"output_stem: {output_stem}",
             f"export_mode_requested: {export_mode_requested}",
             f"export_mode_used: {export_mode_used}",
             "export_status: success",
@@ -501,6 +575,8 @@ def _process_one_file(
     counts = _qc_counts(result.qc)
     row = BatchSummaryRow(
         file_name=Path(item.file_name).name,
+        survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+        output_stem=output_stem,
         folder_name=folder_name,
         status="success",
         export_mode_requested=export_mode_requested,
@@ -518,11 +594,12 @@ def _process_one_file(
         QC_errors=counts["error"],
         QC_warnings=counts["warning"],
         QC_info=counts["info"],
-        export_file=f"{folder_name}/report.xlsx",
-        notes=export_warning_text or "Auto/suggested peaks confirmed by Batch v1.",
+        export_file=f"{folder_name}/{output_stem}.xlsx",
+        notes=item.notes or export_warning_text or "Auto/suggested peaks confirmed by Batch v1.",
     )
     artifact = _BatchFileArtifacts(
         folder_name=folder_name,
+        output_stem=output_stem,
         workbook_bytes=result.workbook_bytes,
         export_summary_text=summary_text,
         session_bytes=session_bytes,
@@ -555,8 +632,12 @@ def analyze_batch_files(
 
     analysis_items: list[BatchAnalysisItem] = []
     for index, item in enumerate(items, start=1):
-        safe_stem = safe_batch_name(item.file_name, f"file_{index:02d}")
-        folder_name = f"file_{index:02d}_{safe_stem}"
+        output_stem = safe_output_stem(item.output_stem or item.file_name, f"file_{index:02d}")
+        folder_name = f"file_{index:02d}_{output_stem}"
+        per_file_setup = {
+            **setup,
+            "survey_date_text": item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+        }
         try:
             raw_sheets = load_detected_sheets(BytesIO(item.workbook_bytes))
             detected_sheets = list(raw_sheets)
@@ -573,7 +654,7 @@ def analyze_batch_files(
             result = process_tmc(
                 raw_sheets=raw_sheets,
                 mapping=active_mapping,
-                setup=setup,
+                setup=per_file_setup,
                 detected_sheets=detected_sheets,
                 peak_mode=peak_mode,
                 peak_windows=peak_windows,
@@ -591,6 +672,8 @@ def analyze_batch_files(
             analysis_items.append(
                 BatchAnalysisItem(
                     file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+                    output_stem=output_stem,
                     folder_name=folder_name,
                     status="success",
                     workbook_bytes=item.workbook_bytes,
@@ -606,16 +689,24 @@ def analyze_batch_files(
                     QC_errors=counts["error"],
                     QC_warnings=counts["warning"],
                     QC_info=counts["info"],
-                    notes="Suggested peaks are ready for review.",
+                    mapping_status="matched" if apply_result.missing_detected_sheet_count == 0 else "needs review",
+                    matched_sheet_count=apply_result.matched_sheet_count,
+                    missing_detected_sheet_count=apply_result.missing_detected_sheet_count,
+                    extra_preset_row_count=apply_result.extra_preset_row_count,
+                    detected_sheets=detected_sheets,
+                    notes=item.notes or "Suggested peaks are ready for review.",
                 )
             )
         except Exception as exc:
             analysis_items.append(
                 BatchAnalysisItem(
                     file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+                    output_stem=output_stem,
                     folder_name=folder_name,
                     status="failed",
-                    notes=str(exc),
+                    mapping_status="failed",
+                    notes=item.notes or str(exc),
                 )
             )
     return BatchAnalysisResult(
@@ -653,6 +744,8 @@ def generate_batch_zip_from_reviewed_peaks(
             rows.append(
                 BatchSummaryRow(
                     file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text,
+                    output_stem=item.output_stem,
                     folder_name=item.folder_name,
                     status="failed",
                     export_mode_requested=export_mode_requested,
@@ -669,6 +762,8 @@ def generate_batch_zip_from_reviewed_peaks(
             rows.append(
                 BatchSummaryRow(
                     file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text,
+                    output_stem=item.output_stem,
                     folder_name=item.folder_name,
                     status="failed",
                     export_mode_requested=export_mode_requested,
@@ -684,7 +779,13 @@ def generate_batch_zip_from_reviewed_peaks(
 
         try:
             row, artifact = _process_one_file(
-                BatchItem(file_name=item.file_name, workbook_bytes=item.workbook_bytes),
+                BatchItem(
+                    file_name=item.file_name,
+                    workbook_bytes=item.workbook_bytes,
+                    survey_date_text=item.survey_date_text,
+                    output_stem=item.output_stem,
+                    notes=item.notes,
+                ),
                 folder_name=item.folder_name,
                 mapping=item.mapping,
                 setup=setup,
@@ -705,6 +806,8 @@ def generate_batch_zip_from_reviewed_peaks(
             rows.append(
                 BatchSummaryRow(
                     file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text,
+                    output_stem=item.output_stem,
                     folder_name=item.folder_name,
                     status="failed",
                     export_mode_requested=export_mode_requested,

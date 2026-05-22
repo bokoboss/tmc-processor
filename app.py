@@ -18,11 +18,14 @@ from tmc_processor.batch import (
     BATCH_PACKAGE_MIME,
     BatchItem,
     analyze_batch_files,
+    batch_change_invalidates,
+    batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_package_filename,
     batch_zip_contents_preview,
     generate_batch_zip_from_reviewed_peaks,
     reviewed_peak_values_complete,
+    safe_output_stem,
 )
 from tmc_processor.charts import report_chart_pngs
 from tmc_processor.constants import (
@@ -1192,6 +1195,128 @@ def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame) -> None:
         st.line_chart(fallback.rename("Total"), width="stretch")
 
 
+def _batch_upload_signature(files: list[object] | tuple[object, ...] | None) -> tuple[tuple[str, int, str], ...]:
+    signature = []
+    for file in files or []:
+        data = file.getvalue()
+        signature.append((Path(file.name).name, len(data), hashlib.sha256(data).hexdigest()))
+    return tuple(signature)
+
+
+def _metadata_signature(rows: list[dict[str, object]]) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple(
+        (
+            str(row.get("file_name", "")),
+            str(row.get("survey_date_text", "")),
+            safe_output_stem(str(row.get("output_stem", ""))),
+            str(row.get("notes", "")),
+        )
+        for row in rows
+    )
+
+
+def _sync_batch_metadata_state(batch_uploads: list[object] | tuple[object, ...] | None) -> list[dict[str, str]]:
+    file_names = [Path(file.name).name for file in batch_uploads or []]
+    upload_names = tuple(file_names)
+    existing_rows = st.session_state.get("tmc_batch_file_metadata_table") or []
+    existing_by_name = {str(row.get("file_name", "")): dict(row) for row in existing_rows}
+    rows = []
+    for default_row in batch_file_metadata_defaults(file_names):
+        existing = existing_by_name.get(default_row["file_name"], {})
+        rows.append(
+            {
+                "file_name": default_row["file_name"],
+                "survey_date_text": str(existing.get("survey_date_text", default_row["survey_date_text"]) or ""),
+                "output_stem": safe_output_stem(str(existing.get("output_stem", default_row["output_stem"]) or default_row["output_stem"])),
+                "notes": str(existing.get("notes", default_row["notes"]) or ""),
+            }
+        )
+    if st.session_state.get("tmc_batch_metadata_upload_names") != upload_names:
+        st.session_state["tmc_batch_metadata_upload_names"] = upload_names
+        st.session_state["tmc_batch_file_metadata_table"] = rows
+        st.session_state["tmc_batch_file_metadata_editor_version"] = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0) + 1
+    elif existing_rows != rows:
+        st.session_state["tmc_batch_file_metadata_table"] = rows
+    return st.session_state.get("tmc_batch_file_metadata_table", [])
+
+
+def _batch_items_from_uploads(batch_uploads: list[object] | tuple[object, ...] | None) -> list[BatchItem]:
+    metadata_rows = st.session_state.get("tmc_batch_file_metadata_table") or []
+    metadata_by_name = {str(row.get("file_name", "")): row for row in metadata_rows}
+    items = []
+    for file in batch_uploads or []:
+        file_name = Path(file.name).name
+        metadata = metadata_by_name.get(file_name, {})
+        items.append(
+            BatchItem(
+                file_name=file_name,
+                workbook_bytes=file.getvalue(),
+                survey_date_text=str(metadata.get("survey_date_text", "") or ""),
+                output_stem=safe_output_stem(str(metadata.get("output_stem", "") or file_name)),
+                notes=str(metadata.get("notes", "") or ""),
+            )
+        )
+    return items
+
+
+def _mark_batch_stale_if_inputs_changed(signature: tuple[object, ...]) -> bool:
+    previous = st.session_state.get("tmc_batch_input_signature")
+    st.session_state["tmc_batch_current_input_signature"] = signature
+    if batch_change_invalidates(previous, signature, st.session_state.get("tmc_batch_analysis_result") is not None):
+        st.session_state["tmc_batch_stale"] = True
+        st.session_state.pop("tmc_batch_export_result", None)
+    return bool(st.session_state.get("tmc_batch_stale"))
+
+
+def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
+    export_by_folder = {}
+    if batch_result:
+        export_by_folder = {row.folder_name: row for row in batch_result.summary_rows}
+    rows = []
+    if batch_analysis:
+        for item in batch_analysis.items:
+            export_row = export_by_folder.get(item.folder_name)
+            rows.append(
+                {
+                    "file_name": item.file_name,
+                    "survey_date_text": item.survey_date_text,
+                    "status": item.status,
+                    "mapping_status": item.mapping_status,
+                    "AM suggested": item.suggested_AM_peak,
+                    "PM suggested": item.suggested_PM_peak,
+                    "AM confirmed": item.confirmed_AM_peak,
+                    "PM confirmed": item.confirmed_PM_peak,
+                    "total PCU": item.total_PCU,
+                    "QC errors": item.QC_errors,
+                    "QC warnings": item.QC_warnings,
+                    "QC info": item.QC_info,
+                    "export_status": export_row.export_status if export_row else "",
+                    "notes": export_row.notes if export_row else item.notes,
+                }
+            )
+    elif batch_result:
+        rows = [
+            {
+                "file_name": row.file_name,
+                "survey_date_text": row.survey_date_text,
+                "status": row.status,
+                "mapping_status": "",
+                "AM suggested": row.suggested_AM_peak,
+                "PM suggested": row.suggested_PM_peak,
+                "AM confirmed": row.confirmed_AM_peak,
+                "PM confirmed": row.confirmed_PM_peak,
+                "total PCU": row.total_PCU,
+                "QC errors": row.QC_errors,
+                "QC warnings": row.QC_warnings,
+                "QC info": row.QC_info,
+                "export_status": row.export_status,
+                "notes": row.notes,
+            }
+            for row in batch_result.summary_rows
+        ]
+    return pd.DataFrame(rows)
+
+
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
@@ -1349,6 +1474,8 @@ def _run_streamlit_app() -> None:
         st.session_state["work_mode"] = "ประมวลผลไฟล์เดียว"
     is_single_file_mode = st.session_state["work_mode"] == "ประมวลผลไฟล์เดียว"
     uploaded_file = None
+    batch_uploads = []
+    batch_preset_upload = None
 
     with st.sidebar:
         st.header("โหมดการทำงาน")
@@ -1359,10 +1486,10 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
+        st.divider()
+        st.subheader("ข้อมูลนำเข้า")
         if is_single_file_mode:
             st.caption("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
-            st.divider()
-            st.subheader("ไฟล์เดี่ยว")
             uploaded_file = st.file_uploader(
                 "อัปโหลดไฟล์ TMC Excel",
                 type=["xlsx", "xlsm", "xls"],
@@ -1370,6 +1497,19 @@ def _run_streamlit_app() -> None:
             )
         else:
             st.caption("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+            batch_uploads = st.file_uploader(
+                "อัปโหลดไฟล์ TMC Excel หลายไฟล์",
+                type=["xlsx", "xlsm", "xls"],
+                accept_multiple_files=True,
+                key="batch_raw_tmc_uploads",
+                help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
+            )
+            batch_preset_upload = st.file_uploader(
+                "เปิด Mapping Preset สำหรับทุกไฟล์",
+                type=["json"],
+                key="batch_mapping_preset_upload",
+                help="Batch ใช้ Mapping Preset เดียวกันกับทุกไฟล์",
+            )
 
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
@@ -1417,9 +1557,12 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("use_template_report_layout_checkbox", True)
     st.session_state.setdefault("use_excel_com_native_charts_checkbox", bool(excel_com_status.available))
     st.session_state.setdefault("mapping_editor_version", 0)
-    st.session_state.setdefault("tmc_batch_analysis", None)
+    st.session_state.setdefault("tmc_batch_file_metadata_table", [])
+    st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
+    st.session_state.setdefault("tmc_batch_analysis_result", None)
     st.session_state.setdefault("tmc_batch_selected_review_file", "")
     st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+    st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
     _ensure_pce_factor_state()
 
@@ -1455,6 +1598,20 @@ def _run_streamlit_app() -> None:
         else:
             export_mode = st.session_state.get("report_export_mode_radio", SAFE_PNG_EXPORT_MODE)
             use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
+            st.subheader("โหมดส่งออก Batch")
+            batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
+            if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
+                st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
+            st.radio(
+                "Batch export mode",
+                options=batch_export_options,
+                key="tmc_batch_export_mode",
+                help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
+            )
+            if st.session_state["tmc_batch_export_mode"].startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+                st.caption("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
+            else:
+                st.caption("โหมดสำรองใช้กราฟ PNG แบบคงที่")
         st.divider()
         st.subheader("Excel Engine")
         previous_excel_com_available = bool(excel_com_status.available)
@@ -1475,6 +1632,22 @@ def _run_streamlit_app() -> None:
         with st.expander("รายละเอียด Excel COM", expanded=False):
             _render_excel_com_status(excel_com_status)
         _render_version_stamp()
+
+    batch_metadata_rows = _sync_batch_metadata_state(batch_uploads) if not is_single_file_mode else []
+    loaded_batch_preset = None
+    batch_preset_name = ""
+    batch_preset_signature = None
+    if not is_single_file_mode and batch_preset_upload is not None:
+        try:
+            batch_preset_bytes = batch_preset_upload.getvalue()
+            batch_preset_signature = (batch_preset_upload.name, hashlib.sha256(batch_preset_bytes).hexdigest())
+            loaded = load_mapping_preset(batch_preset_bytes)
+            loaded_batch_preset = loaded.preset
+            batch_preset_name = str(loaded.preset.get("preset_name") or batch_preset_upload.name)
+            for warning_message in loaded.warnings:
+                st.sidebar.warning(warning_message)
+        except (MappingPresetError, ValueError) as exc:
+            st.sidebar.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
 
     st.markdown(
         """
@@ -1513,12 +1686,9 @@ def _run_streamlit_app() -> None:
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
 
-    if is_single_file_mode:
-        setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
-            ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
-        )
-    else:
-        batch_tab = st.container()
+    setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
+        ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
+    )
 
     if is_single_file_mode:
       with setup_tab:
@@ -1838,370 +2008,292 @@ def _run_streamlit_app() -> None:
                         st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
 
     if not is_single_file_mode:
-        with batch_tab:
-            st.header("ประมวลผลหลายไฟล์")
+        batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
+        uploaded_ready = bool(batch_uploads)
+        mapping_ready = loaded_batch_preset is not None
+        pce_ready = bool(selected_pce_factors)
+        batch_ready = batch_inputs_ready(
+            uploaded_workbook_count=len(batch_uploads or []),
+            mapping_available=mapping_ready,
+            pce_factors_ready=pce_ready,
+        )
+        batch_signature = (
+            _batch_upload_signature(batch_uploads),
+            batch_preset_signature,
+            tuple(sorted((selected_pce_factors or {}).items())),
+            _metadata_signature(st.session_state.get("tmc_batch_file_metadata_table") or []),
+            batch_export_mode,
+        )
+        batch_stale = _mark_batch_stale_if_inputs_changed(batch_signature)
+        batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+        batch_result = st.session_state.get("tmc_batch_export_result")
 
+        with setup_tab:
+            st.header("ตั้งค่างาน Batch")
             with st.container(border=True):
                 _render_section_header(
-                    "Step 1: ขอบเขต Batch",
-                    "Batch v1 เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
+                    "ขอบเขต Batch",
+                    "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
                 )
-                _render_readiness_checklist(
-                    [
-                        ("ใช้ Mapping Preset เดียวกัน", True, "ทุกไฟล์ในชุด Batch ใช้ mapping ชุดเดียว"),
-                        ("ใช้ค่า PCE ชุดเดียวกัน", True, "อ้างอิงค่า PCE จากแท็บตั้งค่า"),
-                        ("ตรวจ Peak แยกแต่ละไฟล์ก่อนส่งออก", True, "ยืนยัน AM/PM ต่อไฟล์หลังวิเคราะห์"),
-                        ("ไม่รวมไฟล์ raw Excel ใน ZIP", True, "ZIP มีเฉพาะรายงาน สรุป Session Preset และ charts"),
-                    ]
-                )
+                setup_cols = st.columns(3)
+                setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
+                setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
+                setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+                direction_cols = st.columns(4)
+                direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
+                direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
+                direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
+                direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+                road_cols = st.columns(4)
+                road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
+                road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
+                road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
+                road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
+                selected_pce_factors = _render_pce_factor_editor()
 
             with st.container(border=True):
-                _render_section_header("Step 2: ข้อมูลนำเข้า", "เตรียมไฟล์สำรวจและ Mapping Preset เดียวสำหรับทั้งชุด")
-                input_cols = st.columns(2)
-                with input_cols[0]:
-                    batch_uploads = st.file_uploader(
-                        "Upload multiple TMC Excel files",
-                        type=["xlsx", "xlsm", "xls"],
-                        accept_multiple_files=True,
-                        key="batch_raw_tmc_uploads",
-                        help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
-                    )
-                with input_cols[1]:
-                    batch_preset_upload = st.file_uploader(
-                        "Load Mapping Preset for all files",
-                        type=["json"],
-                        key="batch_mapping_preset_upload",
-                        help="Batch v1 ใช้ Mapping Preset เดียวกันกับทุกไฟล์ ไม่รองรับการเลือก Mapping แยกต่อไฟล์",
-                    )
-                    use_current_mapping_for_batch = False
-                    if st.session_state.get("mapping_table"):
-                        use_current_mapping_for_batch = st.checkbox(
-                            "ใช้ Mapping จากแท็บกำหนดทิศทางปัจจุบันแทนไฟล์ Preset",
-                            key="batch_use_current_mapping",
-                        )
-
-                loaded_batch_preset = None
-                batch_preset_name = ""
-                if batch_preset_upload is not None and not use_current_mapping_for_batch:
-                    try:
-                        loaded = load_mapping_preset(batch_preset_upload.getvalue())
-                        loaded_batch_preset = loaded.preset
-                        batch_preset_name = loaded.preset.get("preset_name", batch_preset_upload.name)
-                        for warning_message in loaded.warnings:
-                            st.warning(warning_message)
-                    except (MappingPresetError, ValueError) as exc:
-                        st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
-
-                batch_mapping = None
-                if use_current_mapping_for_batch and st.session_state.get("mapping_table"):
-                    batch_mapping = pd.DataFrame(st.session_state["mapping_table"])
-                    batch_preset_name = str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "Current Mapping")
-
-                st.markdown("#### Batch export mode")
-                batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
-                if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
-                    st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
-                batch_export_mode = st.radio(
-                    "Batch export mode",
-                    options=batch_export_options,
-                    key="tmc_batch_export_mode",
-                    help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
-                )
-                if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                    st.success("Excel Template Mode selected for Batch. Native Excel chart export will be attempted per file.")
+                _render_section_header("ไฟล์ใน Batch", "แก้เฉพาะวันที่สำรวจ ชื่อไฟล์ส่งออก และหมายเหตุรายไฟล์")
+                if not batch_metadata_rows:
+                    _render_empty_state("ยังไม่มีไฟล์ Batch", "อัปโหลดไฟล์ TMC Excel หลายไฟล์ใน sidebar")
                 else:
-                    st.warning("Safe PNG Export Mode selected for Batch. Reports will use static PNG charts.")
-                if not excel_com_status.available:
-                    st.warning(f"Excel COM is unavailable, so Batch Excel Template Mode is disabled. Reason: {excel_com_status.reason}")
+                    st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
+                    metadata_version = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0)
+                    edited_metadata = st.data_editor(
+                        pd.DataFrame(batch_metadata_rows),
+                        key=f"tmc_batch_file_metadata_editor_{metadata_version}",
+                        hide_index=True,
+                        width="stretch",
+                        disabled=["file_name"],
+                        column_config={
+                            "file_name": st.column_config.TextColumn("file_name"),
+                            "survey_date_text": st.column_config.TextColumn("survey_date_text"),
+                            "output_stem": st.column_config.TextColumn("output_stem"),
+                            "notes": st.column_config.TextColumn("notes"),
+                        },
+                    )
+                    cleaned_metadata = []
+                    for row in edited_metadata.to_dict("records"):
+                        cleaned_metadata.append(
+                            {
+                                "file_name": Path(str(row.get("file_name", ""))).name,
+                                "survey_date_text": str(row.get("survey_date_text", "") or ""),
+                                "output_stem": safe_output_stem(str(row.get("output_stem", "") or row.get("file_name", ""))),
+                                "notes": str(row.get("notes", "") or ""),
+                            }
+                        )
+                    if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
+                        st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
 
-                uploaded_ready = bool(batch_uploads)
-                mapping_ready = batch_mapping is not None or loaded_batch_preset is not None
-                pce_ready = bool(selected_pce_factors)
-                batch_ready = batch_inputs_ready(
-                    uploaded_workbook_count=len(batch_uploads or []),
-                    mapping_available=mapping_ready,
-                    pce_factors_ready=pce_ready,
-                )
-                _render_readiness_checklist(
-                    [
-                        (
-                            "uploaded workbooks",
-                            uploaded_ready,
-                            f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel",
-                        ),
-                        (
-                            "mapping preset/current mapping ready",
-                            mapping_ready,
-                            "พร้อมใช้" if mapping_ready else "โหลด Mapping Preset หรือใช้ Mapping ปัจจุบัน",
-                        ),
-                        (
-                            "PCE factors ready",
-                            pce_ready,
-                            "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า",
-                        ),
-                    ]
-                )
+        with mapping_tab:
+            st.header("กำหนดทิศทาง Batch")
+            with st.container(border=True):
+                _render_section_header("Mapping Preset", "Mapping Preset เดียวจะถูกใช้กับทุกไฟล์ที่อัปโหลด")
+                if loaded_batch_preset:
+                    st.success(f"โหลด Mapping Preset แล้ว: {batch_preset_name}")
+                    preset_rows = pd.DataFrame(loaded_batch_preset.get("mapping_rows") or loaded_batch_preset.get("rows") or [])
+                    if not preset_rows.empty:
+                        st.dataframe(_ordered_mapping_frame(preset_rows), width="stretch")
+                else:
+                    _render_empty_state("ยังไม่มี Mapping Preset", "เปิด Mapping Preset ใน sidebar เพื่อใช้กับทุกไฟล์")
 
             with st.container(border=True):
-                _render_section_header("Step 3: วิเคราะห์และตรวจ Peak", "วิเคราะห์ทุกไฟล์ แล้วตรวจ AM/PM peak ที่จะใช้สร้างรายงาน")
-                if not batch_ready:
-                    _render_empty_state(
-                        "ยังไม่พร้อมวิเคราะห์ Batch",
-                        "อัปโหลด workbooks และโหลด Mapping Preset หรือใช้ Mapping ปัจจุบันก่อนเริ่มวิเคราะห์",
-                    )
-                analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
-                if analyze_batch:
-                    items = [BatchItem(file_name=file.name, workbook_bytes=file.getvalue()) for file in batch_uploads]
-                    with st.spinner("กำลังวิเคราะห์ Batch..."):
-                        batch_analysis = analyze_batch_files(
-                            items,
-                            mapping=batch_mapping,
-                            mapping_preset=loaded_batch_preset,
-                            setup=setup,
-                            pce_factors=selected_pce_factors,
-                            peak_mode=peak_mode,
-                            peak_windows=peak_windows,
-                            mapping_preset_name=batch_preset_name,
-                        )
-                    st.session_state["tmc_batch_analysis"] = batch_analysis
-                    st.session_state["tmc_batch_preset_name"] = batch_preset_name
-                    st.session_state.pop("tmc_batch_result", None)
-                    st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
-                    st.session_state["tmc_batch_confirmed_peaks"] = {
-                        analyzed_item.folder_name: {
-                            "AM": analyzed_item.confirmed_AM_peak,
-                            "PM": analyzed_item.confirmed_PM_peak,
-                        }
-                        for analyzed_item in batch_analysis.successful_items
-                    }
-                    st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
-
-                batch_analysis = st.session_state.get("tmc_batch_analysis")
-                if batch_analysis:
-                    st.info("ระบบจะใช้ช่วงเร่งด่วนที่ยืนยันในตารางนี้สำหรับการสร้างรายงาน Batch")
-                    batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
-                    batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
-                    review_header = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
-                    for column, label in zip(
-                        review_header,
-                        ["file_name", "status", "AM suggested", "PM suggested", "AM confirmed", "PM confirmed", "QC errors", "QC warnings", "QC info", "notes"],
-                    ):
-                        column.markdown(f"**{label}**")
-                    for analyzed_item in batch_analysis.items:
-                        row_cols = st.columns([2.2, 1.0, 1.2, 1.2, 1.5, 1.5, 0.8, 0.9, 0.8, 2.2])
-                        row_cols[0].write(analyzed_item.file_name)
-                        row_cols[1].write("สำเร็จ" if analyzed_item.status == "success" else "ไม่สำเร็จ")
-                        row_cols[2].write(analyzed_item.suggested_AM_peak or "-")
-                        row_cols[3].write(analyzed_item.suggested_PM_peak or "-")
-                        if analyzed_item.status == "success":
-                            options = analyzed_item.hourly_period_options or [
-                                value
-                                for value in [analyzed_item.suggested_AM_peak, analyzed_item.suggested_PM_peak]
-                                if value
-                            ]
-                            stored_peaks = batch_confirmed_peaks.setdefault(
-                                analyzed_item.folder_name,
-                                {"AM": analyzed_item.confirmed_AM_peak, "PM": analyzed_item.confirmed_PM_peak},
+                _render_section_header("Sheet matching status", "ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
+                if not batch_uploads or not loaded_batch_preset:
+                    _render_empty_state("ยังตรวจ Sheet matching ไม่ได้", "อัปโหลดไฟล์ Batch และเปิด Mapping Preset ก่อน")
+                else:
+                    status_rows = []
+                    for file in batch_uploads:
+                        try:
+                            detected = detect_raw_direction_sheet_names(BytesIO(file.getvalue()))
+                            apply_result = apply_mapping_preset_to_detected_sheets(loaded_batch_preset, detected)
+                            status_rows.append(
+                                {
+                                    "file_name": Path(file.name).name,
+                                    "matched sheets": apply_result.matched_sheet_count,
+                                    "missing detected sheets": apply_result.missing_detected_sheet_count,
+                                    "preset rows not found": apply_result.extra_preset_row_count,
+                                    "status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
+                                }
                             )
-                            am_default = stored_peaks.get("AM") or analyzed_item.confirmed_AM_peak
-                            pm_default = stored_peaks.get("PM") or analyzed_item.confirmed_PM_peak
-                            if am_default and am_default not in options:
-                                options = [am_default, *options]
-                            if pm_default and pm_default not in options:
-                                options = [pm_default, *options]
-                            options = list(dict.fromkeys(options))
-                            if options:
-                                selected_am = row_cols[4].selectbox(
-                                    "AM confirmed",
-                                    options=options,
-                                    index=options.index(am_default) if am_default in options else 0,
-                                    key=f"batch_peak_am_{batch_review_version}_{analyzed_item.folder_name}",
-                                    label_visibility="collapsed",
-                                )
-                                selected_pm = row_cols[5].selectbox(
-                                    "PM confirmed",
-                                    options=options,
-                                    index=options.index(pm_default) if pm_default in options else 0,
-                                    key=f"batch_peak_pm_{batch_review_version}_{analyzed_item.folder_name}",
-                                    label_visibility="collapsed",
-                                )
-                                batch_confirmed_peaks[analyzed_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
-                            else:
-                                row_cols[4].write("-")
-                                row_cols[5].write("-")
-                        else:
-                            row_cols[4].write("-")
-                            row_cols[5].write("-")
-                        row_cols[6].write(f"{analyzed_item.QC_errors:,}")
-                        row_cols[7].write(f"{analyzed_item.QC_warnings:,}")
-                        row_cols[8].write(f"{analyzed_item.QC_info:,}")
-                        row_cols[9].write(analyzed_item.notes or "")
+                        except Exception as exc:
+                            status_rows.append({"file_name": Path(file.name).name, "matched sheets": 0, "missing detected sheets": 0, "preset rows not found": 0, "status": str(exc)})
+                    st.dataframe(pd.DataFrame(status_rows), width="stretch")
 
-                    for analyzed_item in batch_analysis.successful_items:
-                        stored_peaks = batch_confirmed_peaks.get(analyzed_item.folder_name, {})
-                        analyzed_item.confirmed_AM_peak = stored_peaks.get("AM", analyzed_item.confirmed_AM_peak)
-                        analyzed_item.confirmed_PM_peak = stored_peaks.get("PM", analyzed_item.confirmed_PM_peak)
+        with dashboard_tab:
+            st.header("ตรวจ Peak Batch")
+            if batch_stale:
+                st.warning("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่")
+            _render_readiness_checklist(
+                [
+                    ("uploaded workbooks", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
+                    ("Mapping Preset ready", mapping_ready, "พร้อมใช้" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
+                    ("PCE factors ready", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
+                ]
+            )
+            analyze_batch = st.button("Analyze Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
+            if analyze_batch:
+                items = _batch_items_from_uploads(batch_uploads)
+                with st.spinner("กำลังวิเคราะห์ Batch..."):
+                    batch_analysis = analyze_batch_files(
+                        items,
+                        mapping_preset=loaded_batch_preset,
+                        setup=setup,
+                        pce_factors=selected_pce_factors,
+                        peak_mode=peak_mode,
+                        peak_windows=peak_windows,
+                        mapping_preset_name=batch_preset_name,
+                    )
+                st.session_state["tmc_batch_analysis_result"] = batch_analysis
+                st.session_state["tmc_batch_preset_name"] = batch_preset_name
+                st.session_state["tmc_batch_input_signature"] = st.session_state.get("tmc_batch_current_input_signature")
+                st.session_state["tmc_batch_stale"] = False
+                st.session_state.pop("tmc_batch_export_result", None)
+                st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
+                st.session_state["tmc_batch_confirmed_peaks"] = {
+                    item.folder_name: {"AM": item.confirmed_AM_peak, "PM": item.confirmed_PM_peak}
+                    for item in batch_analysis.successful_items
+                }
+                st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
 
-                    successful_items = batch_analysis.successful_items
-                    if successful_items:
-                        st.markdown("#### Per-file Peak Review")
-                        review_labels = {f"{item.file_name} ({item.folder_name})": item.folder_name for item in successful_items}
-                        label_by_folder = {folder: label for label, folder in review_labels.items()}
-                        selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
-                        selected_label = label_by_folder.get(selected_folder, next(iter(review_labels)))
-                        selected_review_label = st.selectbox(
-                            "Choose file for Peak Review",
-                            options=list(review_labels),
-                            index=list(review_labels).index(selected_label),
-                            key="tmc_batch_selected_review_label",
-                        )
-                        selected_folder = review_labels[selected_review_label]
-                        st.session_state["tmc_batch_selected_review_file"] = selected_folder
-                        selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
-                        _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
-                        review_peak_cols = st.columns(4)
-                        review_peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
-                        review_peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
-                        option_labels = selected_item.hourly_period_options or [
-                            value for value in [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak] if value
-                        ]
-                        stored_peaks = batch_confirmed_peaks.setdefault(
-                            selected_item.folder_name,
-                            {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak},
-                        )
-                        am_default = stored_peaks.get("AM") or selected_item.confirmed_AM_peak
-                        pm_default = stored_peaks.get("PM") or selected_item.confirmed_PM_peak
+            if batch_analysis:
+                batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+                batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
+                for item in batch_analysis.successful_items:
+                    stored = batch_confirmed_peaks.get(item.folder_name, {})
+                    item.confirmed_AM_peak = stored.get("AM", item.confirmed_AM_peak)
+                    item.confirmed_PM_peak = stored.get("PM", item.confirmed_PM_peak)
+                st.dataframe(_batch_status_frame(batch_analysis, batch_result), width="stretch")
+
+                successful_items = batch_analysis.successful_items
+                if successful_items:
+                    review_labels = {f"{item.file_name} ({item.survey_date_text or 'no date'})": item.folder_name for item in successful_items}
+                    selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
+                    label_by_folder = {folder: label for label, folder in review_labels.items()}
+                    selected_label = label_by_folder.get(selected_folder, next(iter(review_labels)))
+                    selected_review_label = st.selectbox(
+                        "เลือกไฟล์สำหรับตรวจกราฟ",
+                        options=list(review_labels),
+                        index=list(review_labels).index(selected_label),
+                        key="tmc_batch_selected_review_label",
+                    )
+                    selected_folder = review_labels[selected_review_label]
+                    st.session_state["tmc_batch_selected_review_file"] = selected_folder
+                    selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
+                    summary_cols = st.columns(4)
+                    summary_cols[0].metric("file name", selected_item.file_name)
+                    summary_cols[1].metric("survey date", selected_item.survey_date_text or "-")
+                    summary_cols[2].metric("total PCU", f"{selected_item.total_PCU:,.0f}")
+                    summary_cols[3].metric("QC count", f"{selected_item.QC_errors + selected_item.QC_warnings + selected_item.QC_info:,}")
+                    _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
+                    option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
+                    option_labels = [value for value in option_labels if value]
+                    peak_cols = st.columns(4)
+                    peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
+                    peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
+                    if option_labels:
+                        stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
+                        am_default = stored.get("AM") or selected_item.confirmed_AM_peak
+                        pm_default = stored.get("PM") or selected_item.confirmed_PM_peak
                         for value in [am_default, pm_default]:
                             if value and value not in option_labels:
-                                option_labels = [value, *option_labels]
+                                option_labels.insert(0, value)
                         option_labels = list(dict.fromkeys(option_labels))
-                        if option_labels:
-                            selected_am = review_peak_cols[2].selectbox(
-                                "Confirmed AM",
-                                options=option_labels,
-                                index=option_labels.index(am_default) if am_default in option_labels else 0,
-                                key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
-                            )
-                            selected_pm = review_peak_cols[3].selectbox(
-                                "Confirmed PM",
-                                options=option_labels,
-                                index=option_labels.index(pm_default) if pm_default in option_labels else 0,
-                                key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
-                            )
-                            batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
-                            selected_item.confirmed_AM_peak = selected_am
-                            selected_item.confirmed_PM_peak = selected_pm
-
-                    if batch_analysis.has_failures:
-                        st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้จะอยู่ใน batch_summary.xlsx และไม่ต้องยืนยัน Peak")
-                else:
-                    _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กดวิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
-
-            with st.container(border=True):
-                _render_section_header("Step 4: ส่งออก Batch", "สร้าง ZIP หลังตรวจ Peak ของไฟล์ที่วิเคราะห์สำเร็จครบแล้ว")
-                batch_analysis = st.session_state.get("tmc_batch_analysis")
-                batch_result = st.session_state.get("tmc_batch_result")
-                no_successful_files = not batch_analysis or not batch_analysis.successful_items
-                peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
-                if not batch_analysis:
-                    _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
-                elif no_successful_files:
-                    st.warning("ยังไม่มีไฟล์ที่วิเคราะห์สำเร็จ จึงยังสร้าง Batch ZIP ไม่ได้")
-                elif not peaks_ready:
-                    st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
-                else:
-                    st.code(
-                        "\n".join(
-                            [
-                                "batch_summary.xlsx",
-                                "one folder per processed file/",
-                                "  report.xlsx",
-                                "  export_summary.txt",
-                                "  session.tmcproj.json",
-                                "  mapping_preset.mapping.json",
-                                "  charts/",
-                            ]
-                        ),
-                        language="text",
-                    )
-                generate_batch = st.button(
-                    "Generate Batch ZIP",
-                    type="primary",
-                    disabled=no_successful_files or not peaks_ready,
-                    key="generate_batch_zip",
-                )
-                if generate_batch and batch_analysis:
-                    with st.spinner("กำลังสร้าง Batch ZIP..."):
-                        batch_result = generate_batch_zip_from_reviewed_peaks(
-                            batch_analysis,
-                            setup=setup,
-                            pce_factors=selected_pce_factors,
-                            peak_mode=peak_mode,
-                            peak_windows=peak_windows,
-                            export_mode=batch_export_mode,
-                            use_template_report_layout=True,
-                            use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
+                        selected_am = peak_cols[2].selectbox(
+                            "Confirmed AM",
+                            options=option_labels,
+                            index=option_labels.index(am_default) if am_default in option_labels else 0,
+                            key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
                         )
-                    st.session_state["tmc_batch_result"] = batch_result
-                    st.success("สร้าง Batch ZIP เสร็จแล้ว")
+                        selected_pm = peak_cols[3].selectbox(
+                            "Confirmed PM",
+                            options=option_labels,
+                            index=option_labels.index(pm_default) if pm_default in option_labels else 0,
+                            key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
+                        )
+                        if stored.get("AM") != selected_am or stored.get("PM") != selected_pm:
+                            st.session_state.pop("tmc_batch_export_result", None)
+                        batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
+                        selected_item.confirmed_AM_peak = selected_am
+                        selected_item.confirmed_PM_peak = selected_pm
+                if batch_analysis.has_failures:
+                    st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องยืนยัน Peak")
+            else:
+                _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด Analyze Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
-                if batch_result:
-                    batch_table = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
-                    display_columns = {
-                        "file_name": "file_name",
-                        "status": "status",
-                        "export_mode_requested": "mode requested",
-                        "export_mode_used": "mode used",
-                        "export_status": "export status",
-                        "suggested_AM_peak": "AM suggested",
-                        "suggested_PM_peak": "PM suggested",
-                        "confirmed_AM_peak": "AM confirmed",
-                        "confirmed_PM_peak": "PM confirmed",
-                        "total_PCU": "total_PCU",
-                        "QC_errors": "QC errors",
-                        "QC_warnings": "QC warnings",
-                        "QC_info": "QC info",
-                        "notes": "notes",
-                    }
-                    display_table = batch_table[list(display_columns)].rename(columns=display_columns)
-                    st.dataframe(display_table, width="stretch")
-                    if batch_result.has_failures:
-                        st.warning("บางไฟล์ประมวลผลไม่สำเร็จ กรุณาตรวจสอบ batch_summary.xlsx")
-                    with st.expander("ตัวอย่างโครงสร้าง Batch ZIP", expanded=True):
-                        st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
-                        st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
-                    st.download_button(
-                        "Download Batch ZIP",
-                        data=download_buffer(batch_result.package_bytes),
-                        file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
-                        mime=BATCH_PACKAGE_MIME,
-                        key="download_batch_zip",
-                        help="ดาวน์โหลด ZIP ที่มี batch_summary.xlsx และผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ",
+        with export_tab:
+            st.header("ส่งออก Batch")
+            batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+            batch_result = st.session_state.get("tmc_batch_export_result")
+            no_successful_files = not batch_analysis or not batch_analysis.successful_items
+            peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
+            st.info(f"Batch export mode: {batch_export_mode}")
+            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+                st.warning("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
+            if batch_stale:
+                st.warning("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่")
+            generate_disabled = no_successful_files or not peaks_ready or batch_stale
+            generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
+            if generate_batch and batch_analysis:
+                with st.spinner("กำลังสร้าง Batch ZIP..."):
+                    batch_result = generate_batch_zip_from_reviewed_peaks(
+                        batch_analysis,
+                        setup=setup,
+                        pce_factors=selected_pce_factors,
+                        peak_mode=peak_mode,
+                        peak_windows=peak_windows,
+                        export_mode=batch_export_mode,
+                        use_template_report_layout=True,
+                        use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
                     )
+                st.session_state["tmc_batch_export_result"] = batch_result
+                st.success("สร้าง Batch ZIP เสร็จแล้ว")
+            if batch_result:
+                st.dataframe(_batch_status_frame(batch_analysis, batch_result), width="stretch")
+                with st.expander("ZIP contents preview", expanded=True):
+                    st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
+                    st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
+                st.download_button(
+                    "Download Batch ZIP",
+                    data=download_buffer(batch_result.package_bytes),
+                    file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
+                    mime=BATCH_PACKAGE_MIME,
+                    key="download_batch_zip",
+                )
+            elif not batch_analysis:
+                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
+            elif not peaks_ready:
+                st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
 
-            with st.container(border=True):
-                _render_section_header("ตรวจสอบข้อมูล Batch", "สรุปสถานะการวิเคราะห์และการส่งออกของชุดไฟล์")
-                batch_analysis = st.session_state.get("tmc_batch_analysis")
-                batch_result = st.session_state.get("tmc_batch_result")
-                if batch_result:
-                    qc_rows = pd.DataFrame([row.__dict__ for row in batch_result.summary_rows])
-                    qc_columns = ["file_name", "status", "export_status", "QC_errors", "QC_warnings", "QC_info", "notes"]
-                    st.dataframe(qc_rows[[column for column in qc_columns if column in qc_rows.columns]], width="stretch")
-                elif batch_analysis:
-                    analysis_rows = pd.DataFrame(
-                        {
-                            "file_name": item.file_name,
-                            "status": item.status,
-                            "QC_errors": item.QC_errors,
-                            "QC_warnings": item.QC_warnings,
-                            "QC_info": item.QC_info,
-                            "notes": item.notes,
-                        }
-                        for item in batch_analysis.items
-                    )
-                    st.dataframe(analysis_rows, width="stretch")
-                else:
-                    _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
+        with qa_tab:
+            st.header("ตรวจสอบข้อมูล Batch")
+            batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+            batch_result = st.session_state.get("tmc_batch_export_result")
+            status_frame = _batch_status_frame(batch_analysis, batch_result)
+            if status_frame.empty:
+                _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
+            else:
+                st.dataframe(status_frame, width="stretch")
+                failed = status_frame[status_frame["status"].astype(str) == "failed"]
+                if not failed.empty:
+                    st.warning("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ")
+                    st.dataframe(failed[["file_name", "notes"]], width="stretch")
+                with st.expander("Batch QC summary by file", expanded=True):
+                    st.dataframe(status_frame[["file_name", "QC errors", "QC warnings", "QC info"]], width="stretch")
+                with st.expander("Batch diagnostic details", expanded=False):
+                    if batch_analysis:
+                        st.write(
+                            [
+                                {
+                                    "file_name": item.file_name,
+                                    "detected_sheets": item.detected_sheets,
+                                    "matched_sheet_count": item.matched_sheet_count,
+                                    "missing_detected_sheet_count": item.missing_detected_sheet_count,
+                                    "extra_preset_row_count": item.extra_preset_row_count,
+                                    "notes": item.notes,
+                                }
+                                for item in batch_analysis.items
+                            ]
+                        )
 
     processed = st.session_state.get("tmc_processed")
     pce_results_stale = _processed_pce_results_stale(processed, selected_pce_factors)

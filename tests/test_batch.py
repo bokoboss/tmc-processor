@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -12,10 +13,14 @@ from tmc_processor.batch import (
     BATCH_SUMMARY_COLUMNS,
     BatchItem,
     analyze_batch_files,
+    batch_change_invalidates,
+    batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_zip_contents_preview,
+    derive_survey_date_text_from_filename,
     generate_batch_zip_from_reviewed_peaks,
     process_batch_files,
+    safe_output_stem,
 )
 from tmc_processor.mapping_preset import load_mapping_preset
 
@@ -76,6 +81,33 @@ def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
     assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=True, pce_factors_ready=False)
 
 
+def test_filename_date_extraction_and_safe_output_stem() -> None:
+    assert derive_survey_date_text_from_filename("TMC_Main_2026-02-03.xlsx") == "2026-02-03"
+    assert derive_survey_date_text_from_filename("TMC_Main_20260203.xlsx") == "2026-02-03"
+    assert derive_survey_date_text_from_filename("TMC_Main_03-02-2026.xlsx") == "2026-02-03"
+    assert derive_survey_date_text_from_filename("TMC_Main_no_date.xlsx") == ""
+    assert safe_output_stem("../bad path/TMC Main:Day 1.xlsx") == "TMC_Main_Day_1"
+
+
+def test_batch_file_metadata_defaults_do_not_include_raw_paths() -> None:
+    defaults = batch_file_metadata_defaults([r"C:\raw\TMC Main 20260203.xlsx"])
+
+    assert defaults == [
+        {
+            "file_name": "TMC Main 20260203.xlsx",
+            "survey_date_text": "2026-02-03",
+            "output_stem": "TMC_Main_20260203",
+            "notes": "",
+        }
+    ]
+
+
+def test_batch_input_changes_invalidate_after_analysis() -> None:
+    assert batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=True)
+    assert not batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=False)
+    assert not batch_change_invalidates(("files-v1",), ("files-v1",), has_analysis=True)
+
+
 def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
     analysis = analyze_batch_files(
         _demo_items(),
@@ -109,10 +141,13 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
 
     assert "batch_summary.xlsx" in names
     success_folders = {row.folder_name for row in result.summary_rows if row.status == "success"}
-    for folder in success_folders:
-        assert f"{folder}/report.xlsx" in names
-        assert f"{folder}/export_summary.txt" in names
-        assert f"{folder}/session.tmcproj.json" in names
+    for row in result.summary_rows:
+        if row.status != "success":
+            continue
+        folder = row.folder_name
+        assert f"{folder}/{row.output_stem}.xlsx" in names
+        assert f"{folder}/{row.output_stem}_export_summary.txt" in names
+        assert f"{folder}/{row.output_stem}_session.tmcproj.json" in names
         assert f"{folder}/mapping_preset.mapping.json" in names
     assert len(success_folders) == 2
     assert DAY1.name not in names
@@ -130,7 +165,8 @@ def test_batch_safe_png_export_records_export_mode_in_summaries() -> None:
     )
 
     with ZipFile(BytesIO(result.package_bytes)) as archive:
-        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        first = result.summary_rows[0]
+        summary_text = archive.read(f"{first.folder_name}/{first.output_stem}_export_summary.txt").decode("utf-8")
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
@@ -156,7 +192,8 @@ def test_batch_excel_template_mode_records_requested_and_used_mode() -> None:
     )
 
     with ZipFile(BytesIO(result.package_bytes)) as archive:
-        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        first = result.summary_rows[0]
+        summary_text = archive.read(f"{first.folder_name}/{first.output_stem}_export_summary.txt").decode("utf-8")
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
@@ -182,9 +219,9 @@ def test_batch_zip_contents_preview_lists_expected_artifacts() -> None:
     preview = batch_zip_contents_preview(result.summary_rows)
 
     assert preview[0] == "batch_summary.xlsx"
-    assert "file_01_DEMO_TMC1_FourLeg/report.xlsx" in preview
-    assert "file_01_DEMO_TMC1_FourLeg/export_summary.txt" in preview
-    assert "file_01_DEMO_TMC1_FourLeg/session.tmcproj.json" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_export_summary.txt" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_session.tmcproj.json" in preview
     assert "file_01_DEMO_TMC1_FourLeg/mapping_preset.mapping.json" in preview
     assert "file_01_DEMO_TMC1_FourLeg/charts/" in preview
 
@@ -207,7 +244,8 @@ def test_custom_confirmed_peak_overrides_suggested_in_final_zip() -> None:
     )
 
     with ZipFile(BytesIO(result.package_bytes)) as archive:
-        summary_text = archive.read("file_01_DEMO_TMC1_FourLeg/export_summary.txt").decode("utf-8")
+        first_row = result.summary_rows[0]
+        summary_text = archive.read(f"{first_row.folder_name}/{first_row.output_stem}_export_summary.txt").decode("utf-8")
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
@@ -220,6 +258,43 @@ def test_custom_confirmed_peak_overrides_suggested_in_final_zip() -> None:
     assert first_record["AM_peak"] == custom_am
     assert f"AM peak period: {custom_am}" in summary_text
     assert "Peak selection source: user_confirmed_batch" in summary_text
+
+
+def test_edited_batch_metadata_is_used_in_exports_and_summary() -> None:
+    items = [
+        BatchItem(
+            file_name=DAY1.name,
+            workbook_bytes=DAY1.read_bytes(),
+            survey_date_text="2026-02-03",
+            output_stem="demo-day-one",
+        )
+    ]
+    result = process_batch_files(
+        items,
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+    row = result.summary_rows[0]
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        names = set(archive.namelist())
+        summary_text = archive.read("file_01_demo-day-one/demo-day-one_export_summary.txt").decode("utf-8")
+        session = json.loads(archive.read("file_01_demo-day-one/demo-day-one_session.tmcproj.json").decode("utf-8"))
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    first_record = dict(zip(rows[0], rows[1]))
+
+    assert row.folder_name == "file_01_demo-day-one"
+    assert row.export_file == "file_01_demo-day-one/demo-day-one.xlsx"
+    assert "file_01_demo-day-one/demo-day-one.xlsx" in names
+    assert "survey_date_text: 2026-02-03" in summary_text
+    assert "output_stem: demo-day-one" in summary_text
+    assert session["metadata"]["survey_date_text"] == "2026-02-03"
+    assert first_record["survey_date_text"] == "2026-02-03"
+    assert first_record["output_stem"] == "demo-day-one"
 
 
 def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failure_rows() -> None:
@@ -241,7 +316,7 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
         names = set(archive.namelist())
         summary_bytes = archive.read("batch_summary.xlsx")
 
-    assert "file_01_DEMO_TMC1_FourLeg/report.xlsx" in names
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in names
     assert "file_02_broken_input/report.xlsx" not in names
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
@@ -280,7 +355,7 @@ def test_failed_analysis_item_does_not_block_reviewed_batch_zip() -> None:
         names = set(archive.namelist())
         summary_bytes = archive.read("batch_summary.xlsx")
 
-    assert "file_01_DEMO_TMC1_FourLeg/report.xlsx" in names
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in names
     assert "file_02_broken_input/report.xlsx" not in names
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     rows = list(workbook["batch_summary"].iter_rows(values_only=True))
