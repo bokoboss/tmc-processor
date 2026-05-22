@@ -22,7 +22,9 @@ from tmc_processor.batch import (
     batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_package_filename,
+    batch_zip_generation_block_reason,
     batch_zip_contents_preview,
+    BATCH_STALE_MESSAGE_TH,
     generate_batch_zip_from_reviewed_peaks,
     reviewed_peak_values_complete,
     safe_output_stem,
@@ -1268,6 +1270,12 @@ def _mark_batch_stale_if_inputs_changed(signature: tuple[object, ...]) -> bool:
     return bool(st.session_state.get("tmc_batch_stale"))
 
 
+def _mark_batch_stale_now() -> None:
+    if st.session_state.get("tmc_batch_analysis_result") is not None:
+        st.session_state["tmc_batch_stale"] = True
+        st.session_state.pop("tmc_batch_export_result", None)
+
+
 def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
     export_by_folder = {}
     if batch_result:
@@ -1280,6 +1288,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                 {
                     "file_name": item.file_name,
                     "survey_date_text": item.survey_date_text,
+                    "output_stem": item.output_stem,
                     "status": item.status,
                     "mapping_status": item.mapping_status,
                     "AM suggested": item.suggested_AM_peak,
@@ -1290,6 +1299,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                     "QC errors": item.QC_errors,
                     "QC warnings": item.QC_warnings,
                     "QC info": item.QC_info,
+                    "export_mode_used": export_row.export_mode_used if export_row else "",
                     "export_status": export_row.export_status if export_row else "",
                     "notes": export_row.notes if export_row else item.notes,
                 }
@@ -1299,6 +1309,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
             {
                 "file_name": row.file_name,
                 "survey_date_text": row.survey_date_text,
+                "output_stem": row.output_stem,
                 "status": row.status,
                 "mapping_status": "",
                 "AM suggested": row.suggested_AM_peak,
@@ -1309,12 +1320,37 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                 "QC errors": row.QC_errors,
                 "QC warnings": row.QC_warnings,
                 "QC info": row.QC_info,
+                "export_mode_used": row.export_mode_used,
                 "export_status": row.export_status,
                 "notes": row.notes,
             }
             for row in batch_result.summary_rows
         ]
     return pd.DataFrame(rows)
+
+
+def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
+    display = _batch_status_frame(batch_analysis, batch_result)
+    return display.rename(
+        columns={
+            "file_name": "ชื่อไฟล์",
+            "survey_date_text": "วันที่สำรวจ",
+            "output_stem": "ชื่อส่งออก",
+            "status": "สถานะ",
+            "mapping_status": "สถานะ Mapping",
+            "AM suggested": "AM แนะนำ",
+            "PM suggested": "PM แนะนำ",
+            "AM confirmed": "AM ยืนยัน",
+            "PM confirmed": "PM ยืนยัน",
+            "total PCU": "PCU รวม",
+            "QC errors": "QC ผิดพลาด",
+            "QC warnings": "QC เตือน",
+            "QC info": "QC ข้อมูล",
+            "export_mode_used": "โหมดส่งออกที่ใช้",
+            "export_status": "สถานะส่งออก",
+            "notes": "หมายเหตุ",
+        }
+    )
 
 
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
@@ -1602,16 +1638,22 @@ def _run_streamlit_app() -> None:
             batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
             if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
                 st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
-            st.radio(
+            if st.session_state.get("tmc_batch_export_mode_radio") not in batch_export_options:
+                st.session_state.pop("tmc_batch_export_mode_radio", None)
+            selected_batch_export_mode = st.radio(
                 "Batch export mode",
                 options=batch_export_options,
-                key="tmc_batch_export_mode",
+                index=batch_export_options.index(st.session_state["tmc_batch_export_mode"]),
+                key="tmc_batch_export_mode_radio",
                 help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
             )
-            if st.session_state["tmc_batch_export_mode"].startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+            st.session_state["tmc_batch_export_mode"] = selected_batch_export_mode
+            if selected_batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
                 st.caption("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
+                if len(batch_uploads or []) > 10:
+                    st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
             else:
-                st.caption("โหมดสำรองใช้กราฟ PNG แบบคงที่")
+                st.caption("Safe PNG Export Mode เป็นโหมดสำรองสำหรับตรวจงานเร็วขึ้น โดยใช้กราฟ PNG แบบคงที่")
         st.divider()
         st.subheader("Excel Engine")
         previous_excel_com_available = bool(excel_com_status.available)
@@ -2083,6 +2125,7 @@ def _run_streamlit_app() -> None:
                         )
                     if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
                         st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
+                        _mark_batch_stale_now()
 
         with mapping_tab:
             st.header("กำหนดทิศทาง Batch")
@@ -2122,7 +2165,7 @@ def _run_streamlit_app() -> None:
         with dashboard_tab:
             st.header("ตรวจ Peak Batch")
             if batch_stale:
-                st.warning("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่")
+                st.warning(BATCH_STALE_MESSAGE_TH)
             _render_readiness_checklist(
                 [
                     ("uploaded workbooks", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
@@ -2162,7 +2205,7 @@ def _run_streamlit_app() -> None:
                     stored = batch_confirmed_peaks.get(item.folder_name, {})
                     item.confirmed_AM_peak = stored.get("AM", item.confirmed_AM_peak)
                     item.confirmed_PM_peak = stored.get("PM", item.confirmed_PM_peak)
-                st.dataframe(_batch_status_frame(batch_analysis, batch_result), width="stretch")
+                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
 
                 successful_items = batch_analysis.successful_items
                 if successful_items:
@@ -2229,11 +2272,28 @@ def _run_streamlit_app() -> None:
             st.info(f"Batch export mode: {batch_export_mode}")
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
                 st.warning("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
+                if len(batch_uploads or []) > 10:
+                    st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
+            else:
+                st.info("Safe PNG Export Mode เป็นโหมดสำรอง / โหมดตรวจงานที่เร็วกว่า โดยใช้กราฟ PNG แบบคงที่")
             if batch_stale:
-                st.warning("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่")
-            generate_disabled = no_successful_files or not peaks_ready or batch_stale
+                st.warning(BATCH_STALE_MESSAGE_TH)
+            block_reason = batch_zip_generation_block_reason(
+                has_successful_files=not no_successful_files,
+                peaks_ready=peaks_ready,
+                batch_stale=batch_stale,
+            )
+            generate_disabled = bool(block_reason)
             generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
             if generate_batch and batch_analysis:
+                block_reason = batch_zip_generation_block_reason(
+                    has_successful_files=bool(batch_analysis.successful_items),
+                    peaks_ready=reviewed_peak_values_complete(batch_analysis),
+                    batch_stale=bool(st.session_state.get("tmc_batch_stale")),
+                )
+                if block_reason:
+                    st.warning(block_reason)
+                    st.stop()
                 with st.spinner("กำลังสร้าง Batch ZIP..."):
                     batch_result = generate_batch_zip_from_reviewed_peaks(
                         batch_analysis,
@@ -2248,7 +2308,7 @@ def _run_streamlit_app() -> None:
                 st.session_state["tmc_batch_export_result"] = batch_result
                 st.success("สร้าง Batch ZIP เสร็จแล้ว")
             if batch_result:
-                st.dataframe(_batch_status_frame(batch_analysis, batch_result), width="stretch")
+                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
                 with st.expander("ZIP contents preview", expanded=True):
                     st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
                     st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
@@ -2262,7 +2322,7 @@ def _run_streamlit_app() -> None:
             elif not batch_analysis:
                 _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
             elif not peaks_ready:
-                st.warning("กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP")
+                st.warning(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False))
 
         with qa_tab:
             st.header("ตรวจสอบข้อมูล Batch")
@@ -2272,7 +2332,7 @@ def _run_streamlit_app() -> None:
             if status_frame.empty:
                 _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
             else:
-                st.dataframe(status_frame, width="stretch")
+                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
                     st.warning("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ")

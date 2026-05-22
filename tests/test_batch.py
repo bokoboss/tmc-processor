@@ -17,10 +17,13 @@ from tmc_processor.batch import (
     batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_zip_contents_preview,
+    batch_zip_generation_block_reason,
+    BATCH_STALE_MESSAGE_TH,
     derive_survey_date_text_from_filename,
     generate_batch_zip_from_reviewed_peaks,
     process_batch_files,
     safe_output_stem,
+    unique_safe_output_stems,
 )
 from tmc_processor.mapping_preset import load_mapping_preset
 
@@ -104,8 +107,36 @@ def test_batch_file_metadata_defaults_do_not_include_raw_paths() -> None:
 
 def test_batch_input_changes_invalidate_after_analysis() -> None:
     assert batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=True)
+    assert batch_change_invalidates(("metadata", "stem-a"), ("metadata", "stem-b"), has_analysis=True)
+    assert batch_change_invalidates(("export-mode", "Safe PNG Export Mode"), ("export-mode", "Excel Template Mode"), has_analysis=True)
     assert not batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=False)
     assert not batch_change_invalidates(("files-v1",), ("files-v1",), has_analysis=True)
+
+
+def test_batch_zip_generation_is_blocked_when_batch_is_stale() -> None:
+    assert (
+        batch_zip_generation_block_reason(
+            has_successful_files=True,
+            peaks_ready=True,
+            batch_stale=True,
+        )
+        == BATCH_STALE_MESSAGE_TH
+    )
+    assert not batch_zip_generation_block_reason(
+        has_successful_files=True,
+        peaks_ready=True,
+        batch_stale=False,
+    )
+
+
+def test_unique_safe_output_stems_fallback_and_collision_handling() -> None:
+    items = [
+        BatchItem(file_name=r"C:\raw\Day 1.xlsx", workbook_bytes=b"", output_stem="../bad:stem"),
+        BatchItem(file_name="Day 2.xlsx", workbook_bytes=b"", output_stem="../bad:stem"),
+        BatchItem(file_name="Unsafe Name.xlsx", workbook_bytes=b"", output_stem="..."),
+    ]
+
+    assert unique_safe_output_stems(items) == ["bad_stem", "bad_stem_02", "Unsafe_Name"]
 
 
 def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
@@ -145,10 +176,10 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
         if row.status != "success":
             continue
         folder = row.folder_name
-        assert f"{folder}/{row.output_stem}.xlsx" in names
+        assert f"{folder}/{row.output_stem}_report.xlsx" in names
         assert f"{folder}/{row.output_stem}_export_summary.txt" in names
         assert f"{folder}/{row.output_stem}_session.tmcproj.json" in names
-        assert f"{folder}/mapping_preset.mapping.json" in names
+        assert f"{folder}/{row.output_stem}.mapping.json" in names
     assert len(success_folders) == 2
     assert DAY1.name not in names
     assert DAY2.name not in names
@@ -219,10 +250,10 @@ def test_batch_zip_contents_preview_lists_expected_artifacts() -> None:
     preview = batch_zip_contents_preview(result.summary_rows)
 
     assert preview[0] == "batch_summary.xlsx"
-    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_report.xlsx" in preview
     assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_export_summary.txt" in preview
     assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_session.tmcproj.json" in preview
-    assert "file_01_DEMO_TMC1_FourLeg/mapping_preset.mapping.json" in preview
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.mapping.json" in preview
     assert "file_01_DEMO_TMC1_FourLeg/charts/" in preview
 
 
@@ -288,8 +319,9 @@ def test_edited_batch_metadata_is_used_in_exports_and_summary() -> None:
     first_record = dict(zip(rows[0], rows[1]))
 
     assert row.folder_name == "file_01_demo-day-one"
-    assert row.export_file == "file_01_demo-day-one/demo-day-one.xlsx"
-    assert "file_01_demo-day-one/demo-day-one.xlsx" in names
+    assert row.export_file == "file_01_demo-day-one/demo-day-one_report.xlsx"
+    assert row.generated_report_filename == "demo-day-one_report.xlsx"
+    assert "file_01_demo-day-one/demo-day-one_report.xlsx" in names
     assert "survey_date_text: 2026-02-03" in summary_text
     assert "output_stem: demo-day-one" in summary_text
     assert session["metadata"]["survey_date_text"] == "2026-02-03"
@@ -316,8 +348,8 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
         names = set(archive.namelist())
         summary_bytes = archive.read("batch_summary.xlsx")
 
-    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in names
-    assert "file_02_broken_input/report.xlsx" not in names
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_report.xlsx" in names
+    assert "file_02_broken_input/broken_input_report.xlsx" not in names
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     rows = list(workbook["batch_summary"].iter_rows(values_only=True))
@@ -328,6 +360,7 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
     assert headers == BATCH_SUMMARY_COLUMNS
     assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(headers)
     assert {"export_mode_requested", "export_mode_used", "export_status", "export_error"}.issubset(headers)
+    assert {"output_stem", "generated_report_filename"}.issubset(headers)
     assert records[0]["export_status"] == "success"
     assert records[1]["export_status"] == "failed"
     assert records[1]["export_error"]
@@ -355,8 +388,8 @@ def test_failed_analysis_item_does_not_block_reviewed_batch_zip() -> None:
         names = set(archive.namelist())
         summary_bytes = archive.read("batch_summary.xlsx")
 
-    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg.xlsx" in names
-    assert "file_02_broken_input/report.xlsx" not in names
+    assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_report.xlsx" in names
+    assert "file_02_broken_input/broken_input_report.xlsx" not in names
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     rows = list(workbook["batch_summary"].iter_rows(values_only=True))
     records = [dict(zip(rows[0], row)) for row in rows[1:]]
@@ -402,3 +435,26 @@ def test_batch_summary_workbook_has_confirmed_peak_columns() -> None:
 
     assert "confirmed_AM_peak" in headers
     assert "confirmed_PM_peak" in headers
+
+
+def test_duplicate_output_stems_use_predictable_safe_zip_paths() -> None:
+    items = [
+        BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes(), output_stem="same:name"),
+        BatchItem(file_name=DAY2.name, workbook_bytes=DAY2.read_bytes(), output_stem="same:name"),
+    ]
+
+    result = process_batch_files(
+        items,
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        names = set(archive.namelist())
+
+    assert [row.folder_name for row in result.summary_rows] == ["file_01_same_name", "file_02_same_name_02"]
+    assert "file_01_same_name/same_name_report.xlsx" in names
+    assert "file_02_same_name_02/same_name_02_report.xlsx" in names
+    assert DAY1.name not in names
+    assert DAY2.name not in names

@@ -33,6 +33,7 @@ BATCH_PACKAGE_MIME = "application/zip"
 SAFE_BATCH_EXPORT_MODE = "Safe PNG Export Mode - Batch v1"
 BATCH_EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 BATCH_SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
+BATCH_STALE_MESSAGE_TH = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
 BATCH_SUMMARY_COLUMNS = [
     "file_name",
     "survey_date_text",
@@ -55,6 +56,7 @@ BATCH_SUMMARY_COLUMNS = [
     "QC_warnings",
     "QC_info",
     "export_file",
+    "generated_report_filename",
     "notes",
 ]
 
@@ -99,6 +101,7 @@ class BatchSummaryRow:
     QC_warnings: int = 0
     QC_info: int = 0
     export_file: str = ""
+    generated_report_filename: str = ""
     notes: str = ""
 
 
@@ -185,6 +188,28 @@ def safe_output_stem(name: str | None, default: str = "file") -> str:
     return safe_batch_name(name, default)
 
 
+def unique_safe_output_stems(items: Iterable[BatchItem]) -> list[str]:
+    """Return deterministic, collision-free output stems for a batch."""
+
+    stems: list[str] = []
+    seen: dict[str, int] = {}
+    for index, item in enumerate(items, start=1):
+        fallback = safe_output_stem(item.file_name, f"file_{index:02d}")
+        base = safe_output_stem(item.output_stem, fallback)
+        if not base:
+            base = fallback
+        duplicate_count = seen.get(base, 0)
+        seen[base] = duplicate_count + 1
+        stems.append(base if duplicate_count == 0 else f"{base}_{duplicate_count + 1:02d}")
+    return stems
+
+
+def batch_folder_name(index: int, output_stem: str) -> str:
+    """Return the predictable per-file ZIP folder name."""
+
+    return f"file_{index:02d}_{safe_output_stem(output_stem, f'file_{index:02d}')}"
+
+
 def derive_survey_date_text_from_filename(filename: str | None) -> str:
     """Extract a practical survey date from common filename patterns."""
 
@@ -236,6 +261,23 @@ def batch_change_invalidates(previous: object, current: object, has_analysis: bo
     return previous is not None and previous != current and has_analysis
 
 
+def batch_zip_generation_block_reason(
+    *,
+    has_successful_files: bool,
+    peaks_ready: bool,
+    batch_stale: bool,
+) -> str:
+    """Return a user-facing reason when Batch ZIP generation must be blocked."""
+
+    if batch_stale:
+        return BATCH_STALE_MESSAGE_TH
+    if not has_successful_files:
+        return "ยังไม่มีไฟล์ Batch ที่วิเคราะห์สำเร็จ"
+    if not peaks_ready:
+        return "กรุณาเลือก AM/PM confirmed peak ให้ครบทุกไฟล์ที่สำเร็จก่อน Generate Batch ZIP"
+    return ""
+
+
 def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[str]:
     """Return a compact expected ZIP content outline for UI display."""
 
@@ -251,10 +293,10 @@ def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[
             preview.extend(
                 [
                     f"{folder}/",
-                    f"{folder}/{stem}.xlsx",
+                    f"{folder}/{stem}_report.xlsx",
                     f"{folder}/{stem}_export_summary.txt",
                     f"{folder}/{stem}_session.tmcproj.json",
-                    f"{folder}/mapping_preset.mapping.json",
+                    f"{folder}/{stem}.mapping.json",
                     f"{folder}/charts/",
                 ]
             )
@@ -401,10 +443,10 @@ def create_batch_package_zip(
         for artifact in file_artifacts:
             folder = safe_batch_name(artifact.folder_name, "file")
             stem = safe_output_stem(artifact.output_stem, folder)
-            archive.writestr(f"{folder}/{stem}.xlsx", bytes(artifact.workbook_bytes))
+            archive.writestr(f"{folder}/{stem}_report.xlsx", bytes(artifact.workbook_bytes))
             archive.writestr(f"{folder}/{stem}_export_summary.txt", artifact.export_summary_text.encode("utf-8"))
             archive.writestr(f"{folder}/{stem}_session.tmcproj.json", bytes(artifact.session_bytes))
-            archive.writestr(f"{folder}/mapping_preset.mapping.json", bytes(artifact.mapping_preset_bytes))
+            archive.writestr(f"{folder}/{stem}.mapping.json", bytes(artifact.mapping_preset_bytes))
             for chart_name, png_bytes in sorted(artifact.chart_pngs.items()):
                 if png_bytes:
                     archive.writestr(f"{folder}/charts/{safe_batch_name(chart_name, 'chart')}.png", bytes(png_bytes))
@@ -549,7 +591,7 @@ def _process_one_file(
         peaks=result.peaks,
         mapping=active_mapping,
         qc=result.qc,
-        workbook_filename=f"{output_stem}.xlsx",
+        workbook_filename=f"{output_stem}_report.xlsx",
         pce_factors=result.pce_factors,
         export_settings={
             "template_version": TEMPLATE_VERSION,
@@ -594,7 +636,8 @@ def _process_one_file(
         QC_errors=counts["error"],
         QC_warnings=counts["warning"],
         QC_info=counts["info"],
-        export_file=f"{folder_name}/{output_stem}.xlsx",
+        export_file=f"{folder_name}/{output_stem}_report.xlsx",
+        generated_report_filename=f"{output_stem}_report.xlsx",
         notes=item.notes or export_warning_text or "Auto/suggested peaks confirmed by Batch v1.",
     )
     artifact = _BatchFileArtifacts(
@@ -631,9 +674,11 @@ def analyze_batch_files(
         source_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, []).mapping
 
     analysis_items: list[BatchAnalysisItem] = []
-    for index, item in enumerate(items, start=1):
-        output_stem = safe_output_stem(item.output_stem or item.file_name, f"file_{index:02d}")
-        folder_name = f"file_{index:02d}_{output_stem}"
+    item_list = list(items)
+    output_stems = unique_safe_output_stems(item_list)
+    for index, item in enumerate(item_list, start=1):
+        output_stem = output_stems[index - 1]
+        folder_name = batch_folder_name(index, output_stem)
         per_file_setup = {
             **setup,
             "survey_date_text": item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
