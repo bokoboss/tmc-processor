@@ -18,10 +18,13 @@ from tmc_processor.batch import (
     BATCH_PACKAGE_MIME,
     BatchItem,
     analyze_batch_files,
+    batch_analysis_qc_rows,
     batch_change_invalidates,
     batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_package_filename,
+    batch_qc_frame,
+    batch_selected_file_preview,
     batch_zip_generation_block_reason,
     batch_zip_contents_preview,
     BATCH_STALE_MESSAGE_TH,
@@ -1353,6 +1356,39 @@ def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFra
     )
 
 
+def _batch_qc_rows_for_ui(batch_analysis, batch_result=None) -> pd.DataFrame:
+    if batch_result:
+        return batch_qc_frame(batch_result.qc_rows)
+    return batch_qc_frame(batch_analysis_qc_rows(batch_analysis))
+
+
+def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
+    if status_frame.empty:
+        return {
+            "total_files": 0,
+            "successful_files": 0,
+            "failed_files": 0,
+            "QC_errors": 0,
+            "QC_warnings": 0,
+            "QC_info": 0,
+        }
+    statuses = status_frame["status"].fillna("").astype(str).str.casefold() if "status" in status_frame else pd.Series(dtype=str)
+
+    def _sum_column(column: str) -> int:
+        if column not in status_frame:
+            return 0
+        return int(pd.to_numeric(status_frame[column], errors="coerce").fillna(0).sum())
+
+    return {
+        "total_files": int(len(status_frame)),
+        "successful_files": int((statuses == "success").sum()),
+        "failed_files": int((statuses == "failed").sum()),
+        "QC_errors": _sum_column("QC errors"),
+        "QC_warnings": _sum_column("QC warnings"),
+        "QC_info": _sum_column("QC info"),
+    }
+
+
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
@@ -2222,11 +2258,23 @@ def _run_streamlit_app() -> None:
                     selected_folder = review_labels[selected_review_label]
                     st.session_state["tmc_batch_selected_review_file"] = selected_folder
                     selected_item = next(item for item in successful_items if item.folder_name == selected_folder)
-                    summary_cols = st.columns(4)
-                    summary_cols[0].metric("file name", selected_item.file_name)
-                    summary_cols[1].metric("survey date", selected_item.survey_date_text or "-")
-                    summary_cols[2].metric("total PCU", f"{selected_item.total_PCU:,.0f}")
-                    summary_cols[3].metric("QC count", f"{selected_item.QC_errors + selected_item.QC_warnings + selected_item.QC_info:,}")
+                    preview = batch_selected_file_preview(selected_item)
+                    with st.container(border=True):
+                        _render_section_header("ไฟล์ที่เลือก", f"{preview['file_name']} · {preview['output_stem']}")
+                        preview_cols = st.columns(4)
+                        preview_cols[0].metric("วันที่สำรวจ", preview["survey_date_text"] or "-")
+                        preview_cols[1].metric("สถานะ", preview["status"] or "-")
+                        preview_cols[2].metric("จำนวนรถรวม", f"{float(preview['total_vehicles']):,.0f}")
+                        preview_cols[3].metric("PCU รวม", f"{float(preview['total_PCU']):,.0f}")
+                        qc_preview_cols = st.columns(3)
+                        qc_preview_cols[0].metric("QC error", f"{int(preview['QC_errors']):,}")
+                        qc_preview_cols[1].metric("QC warning", f"{int(preview['QC_warnings']):,}")
+                        qc_preview_cols[2].metric("QC info", f"{int(preview['QC_info']):,}")
+                        peak_preview_cols = st.columns(4)
+                        peak_preview_cols[0].metric("AM แนะนำ", preview["suggested_AM_peak"] or "-")
+                        peak_preview_cols[1].metric("PM แนะนำ", preview["suggested_PM_peak"] or "-")
+                        peak_preview_cols[2].metric("AM ยืนยัน", preview["confirmed_AM_peak"] or "-")
+                        peak_preview_cols[3].metric("PM ยืนยัน", preview["confirmed_PM_peak"] or "-")
                     _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
@@ -2332,11 +2380,35 @@ def _run_streamlit_app() -> None:
             if status_frame.empty:
                 _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
             else:
+                counts = _batch_summary_counts(status_frame)
+                summary_cols = st.columns(6)
+                summary_cols[0].metric("ไฟล์ทั้งหมด", f"{counts['total_files']:,}")
+                summary_cols[1].metric("สำเร็จ", f"{counts['successful_files']:,}")
+                summary_cols[2].metric("ล้มเหลว", f"{counts['failed_files']:,}")
+                summary_cols[3].metric("QC error", f"{counts['QC_errors']:,}")
+                summary_cols[4].metric("QC warning", f"{counts['QC_warnings']:,}")
+                summary_cols[5].metric("QC info", f"{counts['QC_info']:,}")
                 st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
                     st.warning("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ")
                     st.dataframe(failed[["file_name", "notes"]], width="stretch")
+                batch_qc = _batch_qc_rows_for_ui(batch_analysis, batch_result)
+                if not batch_qc.empty:
+                    st.markdown("#### Batch_QC preview")
+                    compact_columns = [
+                        "file_name",
+                        "output_stem",
+                        "severity",
+                        "category",
+                        "check",
+                        "message",
+                    ]
+                    st.dataframe(batch_qc[compact_columns].head(25), width="stretch")
+                    with st.expander("Batch_QC รายละเอียดทั้งหมด", expanded=False):
+                        st.dataframe(batch_qc, width="stretch")
+                else:
+                    st.caption("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ")
                 with st.expander("Batch QC summary by file", expanded=True):
                     st.dataframe(status_frame[["file_name", "QC errors", "QC warnings", "QC info"]], width="stretch")
                 with st.expander("Batch diagnostic details", expanded=False):

@@ -59,6 +59,20 @@ BATCH_SUMMARY_COLUMNS = [
     "generated_report_filename",
     "notes",
 ]
+BATCH_QC_COLUMNS = [
+    "file_name",
+    "output_stem",
+    "survey_date_text",
+    "severity",
+    "category",
+    "check",
+    "message",
+    "detail",
+    "affected_field",
+    "movement_code",
+    "raw_sheet",
+    "notes",
+]
 
 
 @dataclass(frozen=True)
@@ -108,6 +122,7 @@ class BatchSummaryRow:
 @dataclass
 class BatchResult:
     summary_rows: list[BatchSummaryRow] = field(default_factory=list)
+    qc_rows: list[dict[str, str]] = field(default_factory=list)
     package_bytes: bytes = b""
     generated_at: str = ""
 
@@ -133,6 +148,7 @@ class BatchAnalysisItem:
     confirmed_PM_peak: str = ""
     hourly_period_options: list[str] = field(default_factory=list)
     hourly_movement_pcu: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    qc: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     total_vehicles: float = 0.0
     total_PCU: float = 0.0
     QC_errors: int = 0
@@ -396,13 +412,125 @@ def _qc_counts(qc: pd.DataFrame) -> dict[str, int]:
     }
 
 
+def _batch_qc_rows_for_file(
+    *,
+    file_name: str,
+    output_stem: str,
+    survey_date_text: str,
+    qc: pd.DataFrame,
+    notes: str = "",
+) -> list[dict[str, str]]:
+    if qc.empty:
+        return []
+    rows: list[dict[str, str]] = []
+    for raw_row in qc.to_dict("records"):
+        row = {
+            "file_name": Path(file_name).name,
+            "output_stem": safe_output_stem(output_stem, "file"),
+            "survey_date_text": str(survey_date_text or ""),
+            "severity": str(raw_row.get("severity", "") or ""),
+            "category": str(raw_row.get("category", "") or ""),
+            "check": str(raw_row.get("check", "") or ""),
+            "message": str(raw_row.get("message", "") or ""),
+            "detail": str(raw_row.get("detail", "") or ""),
+            "affected_field": str(raw_row.get("affected_field", "") or ""),
+            "movement_code": str(raw_row.get("movement_code", "") or ""),
+            "raw_sheet": str(raw_row.get("raw_sheet", "") or ""),
+            "notes": str(notes or ""),
+        }
+        rows.append(row)
+    return rows
+
+
+def _batch_failure_qc_row(
+    *,
+    file_name: str,
+    output_stem: str,
+    survey_date_text: str,
+    message: str,
+    notes: str = "",
+) -> dict[str, str]:
+    return {
+        "file_name": Path(file_name).name,
+        "output_stem": safe_output_stem(output_stem, "file"),
+        "survey_date_text": str(survey_date_text or ""),
+        "severity": "error",
+        "category": "batch_processing",
+        "check": "processing_failed",
+        "message": str(message or "Batch processing failed."),
+        "detail": "",
+        "affected_field": "",
+        "movement_code": "",
+        "raw_sheet": "",
+        "notes": str(notes or ""),
+    }
+
+
+def batch_qc_frame(qc_rows: Iterable[dict[str, Any]] | None) -> pd.DataFrame:
+    """Return Batch_QC rows in stable workbook/UI column order."""
+
+    return pd.DataFrame(list(qc_rows or []), columns=BATCH_QC_COLUMNS)
+
+
+def batch_analysis_qc_rows(analysis: BatchAnalysisResult | None) -> list[dict[str, str]]:
+    """Return QC preview rows from analyzed Batch files."""
+
+    if analysis is None:
+        return []
+    rows: list[dict[str, str]] = []
+    for item in analysis.items:
+        if item.status == "success":
+            rows.extend(
+                _batch_qc_rows_for_file(
+                    file_name=item.file_name,
+                    output_stem=item.output_stem,
+                    survey_date_text=item.survey_date_text,
+                    qc=item.qc,
+                    notes=item.notes,
+                )
+            )
+        else:
+            rows.append(
+                _batch_failure_qc_row(
+                    file_name=item.file_name,
+                    output_stem=item.output_stem,
+                    survey_date_text=item.survey_date_text,
+                    message=item.notes,
+                    notes=item.notes,
+                )
+            )
+    return rows
+
+
+def batch_selected_file_preview(item: BatchAnalysisItem | BatchSummaryRow) -> dict[str, Any]:
+    """Return compact selected-file values for Batch Peak review."""
+
+    return {
+        "file_name": item.file_name,
+        "survey_date_text": item.survey_date_text,
+        "output_stem": item.output_stem,
+        "status": item.status,
+        "total_vehicles": getattr(item, "total_vehicles", 0.0),
+        "total_PCU": getattr(item, "total_PCU", 0.0),
+        "QC_errors": getattr(item, "QC_errors", 0),
+        "QC_warnings": getattr(item, "QC_warnings", 0),
+        "QC_info": getattr(item, "QC_info", 0),
+        "suggested_AM_peak": getattr(item, "suggested_AM_peak", ""),
+        "suggested_PM_peak": getattr(item, "suggested_PM_peak", ""),
+        "confirmed_AM_peak": getattr(item, "confirmed_AM_peak", ""),
+        "confirmed_PM_peak": getattr(item, "confirmed_PM_peak", ""),
+    }
+
+
 def _batch_summary_workbook(
     rows: list[BatchSummaryRow],
     *,
+    qc_rows: list[dict[str, str]] | None = None,
     generated_at: str,
     mapping_preset_name: str,
 ) -> bytes:
     summary = pd.DataFrame([row.__dict__ for row in rows], columns=BATCH_SUMMARY_COLUMNS)
+    batch_qc = batch_qc_frame(qc_rows)
     metadata = pd.DataFrame(
         [
             {"field": "app_version", "value": APP_VERSION},
@@ -414,7 +542,8 @@ def _batch_summary_workbook(
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         metadata.to_excel(writer, sheet_name="metadata", index=False)
-        summary.to_excel(writer, sheet_name="batch_summary", index=False)
+        summary.to_excel(writer, sheet_name="Batch_Summary", index=False)
+        batch_qc.to_excel(writer, sheet_name="Batch_QC", index=False)
         for worksheet in writer.book.worksheets:
             worksheet.freeze_panes = "A2"
             for column_cells in worksheet.columns:
@@ -426,6 +555,7 @@ def _batch_summary_workbook(
 def create_batch_package_zip(
     *,
     summary_rows: list[BatchSummaryRow],
+    qc_rows: list[dict[str, str]] | None = None,
     file_artifacts: list[_BatchFileArtifacts],
     generated_at: str,
     mapping_preset_name: str = "",
@@ -435,6 +565,7 @@ def create_batch_package_zip(
     output = BytesIO()
     summary_bytes = _batch_summary_workbook(
         summary_rows,
+        qc_rows=list(qc_rows or []),
         generated_at=generated_at,
         mapping_preset_name=mapping_preset_name,
     )
@@ -491,7 +622,7 @@ def _process_one_file(
     confirmed_peak_periods: dict[str, tuple[str, str]] | None = None,
     suggested_am_peak: str = "",
     suggested_pm_peak: str = "",
-) -> tuple[BatchSummaryRow, _BatchFileArtifacts]:
+) -> tuple[BatchSummaryRow, _BatchFileArtifacts, list[dict[str, str]]]:
     output_stem = safe_output_stem(item.output_stem or item.file_name, folder_name)
     per_file_setup = {
         **setup,
@@ -650,7 +781,14 @@ def _process_one_file(
         chart_pngs=chart_pngs,
         diagram_png=diagram_png,
     )
-    return row, artifact
+    qc_rows = _batch_qc_rows_for_file(
+        file_name=item.file_name,
+        output_stem=output_stem,
+        survey_date_text=row.survey_date_text,
+        qc=result.qc,
+        notes=item.notes,
+    )
+    return row, artifact, qc_rows
 
 
 def analyze_batch_files(
@@ -729,6 +867,7 @@ def analyze_batch_files(
                     confirmed_PM_peak=suggested_pm,
                     hourly_period_options=options,
                     hourly_movement_pcu=hourly_movement,
+                    qc=result.qc,
                     total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
                     total_PCU=float(result.normalized["pcu"].sum()) if "pcu" in result.normalized else 0.0,
                     QC_errors=counts["error"],
@@ -781,6 +920,7 @@ def generate_batch_zip_from_reviewed_peaks(
     """Generate the final Batch ZIP using reviewed per-file peak selections."""
 
     rows: list[BatchSummaryRow] = []
+    qc_rows: list[dict[str, str]] = []
     artifacts: list[_BatchFileArtifacts] = []
     setup = dict(setup or {})
     export_mode_requested = _base_export_mode_label(export_mode)
@@ -797,6 +937,15 @@ def generate_batch_zip_from_reviewed_peaks(
                     export_mode_used="",
                     export_status="failed",
                     export_error=item.notes,
+                    notes=item.notes,
+                )
+            )
+            qc_rows.append(
+                _batch_failure_qc_row(
+                    file_name=item.file_name,
+                    output_stem=item.output_stem,
+                    survey_date_text=item.survey_date_text,
+                    message=item.notes,
                     notes=item.notes,
                 )
             )
@@ -820,10 +969,19 @@ def generate_batch_zip_from_reviewed_peaks(
                     notes="Confirmed AM/PM peak is missing.",
                 )
             )
+            qc_rows.append(
+                _batch_failure_qc_row(
+                    file_name=item.file_name,
+                    output_stem=item.output_stem,
+                    survey_date_text=item.survey_date_text,
+                    message="Confirmed AM/PM peak is missing.",
+                    notes="Confirmed AM/PM peak is missing.",
+                )
+            )
             continue
 
         try:
-            row, artifact = _process_one_file(
+            row, artifact, file_qc_rows = _process_one_file(
                 BatchItem(
                     file_name=item.file_name,
                     workbook_bytes=item.workbook_bytes,
@@ -847,6 +1005,7 @@ def generate_batch_zip_from_reviewed_peaks(
             )
             rows.append(row)
             artifacts.append(artifact)
+            qc_rows.extend(file_qc_rows)
         except Exception as exc:
             rows.append(
                 BatchSummaryRow(
@@ -866,14 +1025,24 @@ def generate_batch_zip_from_reviewed_peaks(
                     notes=str(exc),
                 )
             )
+            qc_rows.append(
+                _batch_failure_qc_row(
+                    file_name=item.file_name,
+                    output_stem=item.output_stem,
+                    survey_date_text=item.survey_date_text,
+                    message=str(exc),
+                    notes=str(exc),
+                )
+            )
 
     package = create_batch_package_zip(
         summary_rows=rows,
+        qc_rows=qc_rows,
         file_artifacts=artifacts,
         generated_at=analysis.generated_at,
         mapping_preset_name=analysis.mapping_preset_name,
     )
-    return BatchResult(summary_rows=rows, package_bytes=package, generated_at=analysis.generated_at)
+    return BatchResult(summary_rows=rows, qc_rows=qc_rows, package_bytes=package, generated_at=analysis.generated_at)
 
 
 def process_batch_files(

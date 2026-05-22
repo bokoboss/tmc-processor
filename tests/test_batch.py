@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 
 from tmc_processor.batch import (
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
+    BATCH_QC_COLUMNS,
     BATCH_SAFE_PNG_EXPORT_MODE,
     BATCH_SUMMARY_COLUMNS,
     BatchItem,
@@ -16,6 +17,8 @@ from tmc_processor.batch import (
     batch_change_invalidates,
     batch_file_metadata_defaults,
     batch_inputs_ready,
+    batch_qc_frame,
+    batch_selected_file_preview,
     batch_zip_contents_preview,
     batch_zip_generation_block_reason,
     BATCH_STALE_MESSAGE_TH,
@@ -159,6 +162,26 @@ def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
         assert "Total" in item.hourly_movement_pcu.columns
 
 
+def test_selected_file_preview_helper_exposes_compact_values() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    preview = batch_selected_file_preview(analysis.successful_items[0])
+
+    assert preview["file_name"] == DAY1.name
+    assert preview["output_stem"] == "DEMO_TMC1_FourLeg"
+    assert preview["status"] == "success"
+    assert preview["total_vehicles"] > 0
+    assert preview["total_PCU"] > 0
+    assert preview["suggested_AM_peak"]
+    assert preview["confirmed_AM_peak"] == preview["suggested_AM_peak"]
+    assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(preview)
+
+
 def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_inputs() -> None:
     result = process_batch_files(
         _demo_items(),
@@ -168,9 +191,11 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
     )
 
     with ZipFile(BytesIO(result.package_bytes)) as archive:
-        names = set(archive.namelist())
+        name_list = archive.namelist()
+        names = set(name_list)
 
     assert "batch_summary.xlsx" in names
+    assert name_list.count("batch_summary.xlsx") == 1
     success_folders = {row.folder_name for row in result.summary_rows if row.status == "success"}
     for row in result.summary_rows:
         if row.status != "success":
@@ -184,6 +209,68 @@ def test_batch_zip_contains_summary_and_one_folder_per_success_without_raw_input
     assert DAY1.name not in names
     assert DAY2.name not in names
     assert all(not name.endswith(".xlsm") and name not in {DAY1.name, DAY2.name} for name in names)
+
+
+def test_batch_summary_workbook_contains_summary_and_qc_sheets() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+
+    assert {"Batch_Summary", "Batch_QC"}.issubset(set(workbook.sheetnames))
+    summary_headers = [cell.value for cell in next(workbook["Batch_Summary"].iter_rows(max_row=1))]
+    qc_headers = [cell.value for cell in next(workbook["Batch_QC"].iter_rows(max_row=1))]
+    assert summary_headers == BATCH_SUMMARY_COLUMNS
+    assert qc_headers == BATCH_QC_COLUMNS
+
+
+def test_batch_qc_sheet_collects_qc_rows_per_file() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        workbook = load_workbook(BytesIO(archive.read("batch_summary.xlsx")), read_only=True, data_only=True)
+
+    rows = list(workbook["Batch_QC"].iter_rows(values_only=True))
+    records = [dict(zip(rows[0], row)) for row in rows[1:]]
+
+    assert records
+    assert {record["file_name"] for record in records} == {DAY1.name, DAY2.name}
+    assert all(record["output_stem"] for record in records)
+    assert all(record["severity"] in {"error", "warning", "info"} for record in records)
+
+
+def test_failed_file_creates_batch_qc_failure_row() -> None:
+    items = [
+        BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes()),
+        BatchItem(file_name="broken_input.xlsx", workbook_bytes=b"not an excel workbook"),
+    ]
+    result = process_batch_files(
+        items,
+        mapping_preset=_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    qc = batch_qc_frame(result.qc_rows)
+    failed = qc[qc["file_name"] == "broken_input.xlsx"]
+
+    assert not failed.empty
+    assert failed.iloc[0]["severity"] == "error"
+    assert failed.iloc[0]["category"] == "batch_processing"
+    assert failed.iloc[0]["check"] == "processing_failed"
+    assert failed.iloc[0]["message"]
 
 
 def test_batch_safe_png_export_records_export_mode_in_summaries() -> None:
@@ -201,7 +288,7 @@ def test_batch_safe_png_export_records_export_mode_in_summaries() -> None:
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     first_record = dict(zip(rows[0], rows[1]))
 
     assert first_record["export_mode_requested"] == BATCH_SAFE_PNG_EXPORT_MODE
@@ -228,7 +315,7 @@ def test_batch_excel_template_mode_records_requested_and_used_mode() -> None:
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     first_record = dict(zip(rows[0], rows[1]))
 
     assert first_record["export_mode_requested"] == BATCH_EXCEL_TEMPLATE_EXPORT_MODE
@@ -280,7 +367,7 @@ def test_custom_confirmed_peak_overrides_suggested_in_final_zip() -> None:
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     records = [dict(zip(rows[0], row)) for row in rows[1:]]
     first_record = records[0]
 
@@ -315,7 +402,7 @@ def test_edited_batch_metadata_is_used_in_exports_and_summary() -> None:
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     first_record = dict(zip(rows[0], rows[1]))
 
     assert row.folder_name == "file_01_demo-day-one"
@@ -352,7 +439,7 @@ def test_failed_file_does_not_stop_batch_and_summary_contains_success_and_failur
     assert "file_02_broken_input/broken_input_report.xlsx" not in names
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     headers = list(rows[0])
     records = [dict(zip(headers, row)) for row in rows[1:]]
 
@@ -391,7 +478,7 @@ def test_failed_analysis_item_does_not_block_reviewed_batch_zip() -> None:
     assert "file_01_DEMO_TMC1_FourLeg/DEMO_TMC1_FourLeg_report.xlsx" in names
     assert "file_02_broken_input/broken_input_report.xlsx" not in names
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    rows = list(workbook["batch_summary"].iter_rows(values_only=True))
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
     records = [dict(zip(rows[0], row)) for row in rows[1:]]
     assert records[1]["status"] == "failed"
     assert records[1]["notes"]
@@ -431,7 +518,7 @@ def test_batch_summary_workbook_has_confirmed_peak_columns() -> None:
         summary_bytes = archive.read("batch_summary.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
-    headers = [cell.value for cell in next(workbook["batch_summary"].iter_rows(max_row=1))]
+    headers = [cell.value for cell in next(workbook["Batch_Summary"].iter_rows(max_row=1))]
 
     assert "confirmed_AM_peak" in headers
     assert "confirmed_PM_peak" in headers
