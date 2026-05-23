@@ -368,6 +368,33 @@ def _inject_global_css() -> None:
             font-size: var(--tmc-font-sm);
             margin-top: var(--tmc-space-2);
         }
+        .tmc-workflow-shell {
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            padding: var(--tmc-space-3) var(--tmc-space-4);
+            margin: 0 0 var(--tmc-space-4) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-workflow-shell-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: var(--tmc-space-3);
+            margin-bottom: var(--tmc-space-2);
+        }
+        .tmc-workflow-mode {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            font-weight: 650;
+            line-height: 1.25;
+        }
+        .tmc-workflow-next {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-xs);
+            line-height: 1.35;
+            text-align: right;
+        }
         .tmc-status-grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -538,15 +565,45 @@ def _inject_global_css() -> None:
         .tmc-workflow-stepper {
             display: grid;
             grid-template-columns: repeat(6, minmax(0, 1fr));
-            gap: var(--tmc-space-2);
-            margin: var(--tmc-space-3) 0 0 0;
+            gap: 0;
+            align-items: start;
+            margin: var(--tmc-space-2) 0;
         }
         .tmc-workflow-step {
-            border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-lg);
-            background: var(--tmc-surface);
-            padding: 0.44rem var(--tmc-space-2);
+            position: relative;
+            display: grid;
+            grid-template-columns: 1.15rem minmax(0, 1fr);
+            column-gap: 0.42rem;
+            padding: 0.08rem var(--tmc-space-2) 0.12rem 0;
             min-width: 0;
+        }
+        .tmc-workflow-step::before {
+            content: "";
+            position: absolute;
+            top: 0.57rem;
+            left: 1.15rem;
+            right: 0.25rem;
+            border-top: 1px solid var(--tmc-border);
+            z-index: 0;
+        }
+        .tmc-workflow-step:last-child::before {
+            display: none;
+        }
+        .tmc-workflow-dot {
+            position: relative;
+            z-index: 1;
+            width: 1.05rem;
+            height: 1.05rem;
+            border-radius: 999px;
+            border: 1px solid var(--tmc-border);
+            background: var(--tmc-surface);
+            color: var(--tmc-text-soft);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.66rem;
+            font-weight: 700;
+            line-height: 1;
         }
         .tmc-workflow-step-label {
             color: var(--tmc-text-muted);
@@ -563,16 +620,38 @@ def _inject_global_css() -> None:
             line-height: 1.25;
             margin-top: 0.1rem;
         }
-        .tmc-workflow-done {
+        .tmc-workflow-completed .tmc-workflow-dot {
+            color: var(--tmc-success);
+            background: var(--tmc-success-soft);
             border-color: #cfe3d4;
-            background: var(--tmc-primary-subtle);
         }
-        .tmc-workflow-active {
+        .tmc-workflow-completed::before {
+            border-top-color: #cfe3d4;
+        }
+        .tmc-workflow-active .tmc-workflow-dot {
+            color: var(--tmc-surface);
+            background: var(--tmc-primary);
             border-color: var(--tmc-primary);
-            background: var(--tmc-surface-raised);
         }
         .tmc-workflow-active .tmc-workflow-step-label {
             color: var(--tmc-primary);
+        }
+        .tmc-workflow-warning .tmc-workflow-dot {
+            color: var(--tmc-warning);
+            background: var(--tmc-warning-soft);
+            border-color: var(--tmc-bronze-soft);
+        }
+        .tmc-workflow-warning .tmc-workflow-step-label {
+            color: var(--tmc-warning);
+        }
+        .tmc-workflow-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: var(--tmc-space-2);
+        }
+        .tmc-workflow-summary .tmc-chip {
+            font-weight: 600;
         }
         .tmc-peak-am {
             border-top-color: var(--tmc-success);
@@ -949,6 +1028,14 @@ def _inject_global_css() -> None:
             .tmc-kpi-grid,
             .tmc-workflow-stepper {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
+                row-gap: var(--tmc-space-2);
+            }
+            .tmc-workflow-shell-head {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+            .tmc-workflow-next {
+                text-align: left;
             }
         }
         @media (max-width: 640px) {
@@ -1234,6 +1321,195 @@ def _render_status_cards(
         + "</div>",
         unsafe_allow_html=True,
     )
+
+def _workflow_status_label(status: str) -> str:
+    return {
+        "completed": "พร้อม",
+        "active": "กำลังทำ",
+        "pending": "รอดำเนินการ",
+        "warning": "ต้องตรวจสอบ",
+    }.get(status, "รอดำเนินการ")
+
+
+def _workflow_summary_chip(label: str, value: str, kind: str = "neutral") -> str:
+    return _status_chip_html(f"{label}: {value}", kind)
+
+
+def _single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
+    mapping_rows = len(st.session_state.get("mapping_table") or [])
+    processed = st.session_state.get("tmc_processed") is not None and not bool(st.session_state.get("tmc_pce_results_stale"))
+    output_ready = st.session_state.get("tmc_output") is not None
+    confirmed = _confirmed_peaks_from_state()
+    peaks_ready = all(confirmed.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end"))
+    excel_ready = bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
+    preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
+    mapping_needs_review = bool(uploaded_name and (not mapping_rows or int(preset_info.get("missing", 0) or 0) > 0))
+
+    steps = ["pending"] * 6
+    if uploaded_name:
+        steps[0] = "completed"
+        steps[1] = "completed"
+    if mapping_rows and not mapping_needs_review:
+        steps[2] = "completed"
+    elif mapping_needs_review:
+        steps[2] = "warning"
+    if processed:
+        steps[3] = "completed"
+    elif st.session_state.get("tmc_pce_results_stale"):
+        steps[3] = "warning"
+    if peaks_ready:
+        steps[4] = "completed"
+    elif processed:
+        steps[4] = "active"
+    if output_ready:
+        steps[5] = "completed"
+    elif processed and peaks_ready and excel_ready:
+        steps[5] = "active"
+
+    if not uploaded_name:
+        steps[0] = "active"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif mapping_needs_review:
+        next_action = "ตรวจสอบ Mapping ก่อนประมวลผล"
+    elif not processed:
+        steps[3] = "active"
+        next_action = "ประมวลผลไฟล์หลัง Mapping พร้อมใช้งาน"
+    elif not peaks_ready:
+        next_action = "ยืนยันช่วง Peak ก่อนส่งออก"
+    elif not output_ready:
+        next_action = "พร้อมส่งออกรายงาน"
+    else:
+        next_action = "สร้างรายงานแล้ว พร้อมดาวน์โหลดไฟล์"
+
+    summary = [
+        ("ไฟล์สำรวจ", uploaded_name or "ยังไม่ได้โหลด", "success" if uploaded_name else "neutral"),
+        ("Mapping", "ต้องตรวจสอบ" if mapping_needs_review else ("พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"), "warning" if mapping_needs_review else ("success" if mapping_rows else "neutral")),
+        ("Peak", "ยืนยันแล้ว" if peaks_ready else ("รอยืนยัน" if processed else "ยังไม่มีผลประมวลผล"), "success" if peaks_ready else ("warning" if processed else "neutral")),
+        ("ส่งออก", "สร้างแล้ว" if output_ready else ("พร้อมสร้างรายงาน" if processed and peaks_ready and excel_ready else "ยังไม่พร้อม"), "success" if output_ready or (processed and peaks_ready and excel_ready) else "neutral"),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action}
+
+
+def _batch_workflow_state(
+    *,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    batch_signature: tuple[object, ...],
+) -> dict[str, object]:
+    metadata_rows = st.session_state.get("tmc_batch_file_metadata_table") or []
+    pce_ready = bool(_current_pce_factors_from_state())
+    batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+    batch_result = st.session_state.get("tmc_batch_export_result")
+    previous_signature = st.session_state.get("tmc_batch_input_signature")
+    batch_stale = bool(st.session_state.get("tmc_batch_stale")) or batch_change_invalidates(
+        previous_signature,
+        batch_signature,
+        batch_analysis is not None,
+    )
+    successful_items = list(batch_analysis.successful_items) if batch_analysis else []
+    successful_count = len(successful_items)
+    confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
+    peaks_ready = bool(successful_items) and confirmed_count == successful_count
+
+    steps = ["pending"] * 6
+    if uploaded_count:
+        steps[0] = "completed"
+    else:
+        steps[0] = "active"
+    if uploaded_count and metadata_rows and pce_ready:
+        steps[1] = "completed"
+    elif uploaded_count:
+        steps[1] = "active"
+    if batch_mapping_ready:
+        steps[2] = "completed"
+    elif uploaded_count:
+        steps[2] = "active"
+    if batch_analysis and not batch_stale:
+        steps[3] = "completed"
+    elif batch_stale:
+        steps[3] = "warning"
+    elif uploaded_count and batch_mapping_ready and pce_ready:
+        steps[3] = "active"
+    if peaks_ready:
+        steps[4] = "completed"
+    elif batch_analysis and successful_items:
+        steps[4] = "warning" if confirmed_count else "active"
+    if batch_result:
+        steps[5] = "completed"
+    elif peaks_ready and not batch_stale:
+        steps[5] = "active"
+
+    if not uploaded_count:
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif not batch_mapping_ready:
+        next_action = "เปิด Mapping Preset สำหรับ Batch ที่แถบด้านซ้าย"
+    elif batch_stale:
+        next_action = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
+    elif not batch_analysis:
+        next_action = "วิเคราะห์ Batch หลังไฟล์และ Mapping Preset พร้อม"
+    elif successful_items and not peaks_ready:
+        next_action = "ยืนยันช่วง Peak ให้ครบทุกไฟล์ที่วิเคราะห์สำเร็จ"
+    elif peaks_ready and not batch_result:
+        next_action = "พร้อมสร้าง Batch ZIP"
+    else:
+        next_action = "สร้าง Batch ZIP แล้ว พร้อมดาวน์โหลดไฟล์"
+
+    summary = [
+        ("ไฟล์สำรวจ", f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่ได้โหลด", "success" if uploaded_count else "neutral"),
+        ("Mapping Preset", "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม", "success" if batch_mapping_ready else "neutral"),
+        ("Batch Analysis", "ต้องวิเคราะห์ใหม่" if batch_stale else ("วิเคราะห์แล้ว" if batch_analysis else "ยังไม่ได้วิเคราะห์"), "warning" if batch_stale else ("success" if batch_analysis else "neutral")),
+        ("Peak", f"ยืนยันแล้ว {confirmed_count:,}/{successful_count:,} ไฟล์" if successful_count else "ยังไม่มีไฟล์สำเร็จ", "success" if peaks_ready else ("warning" if successful_count else "neutral")),
+        ("ส่งออก", "สร้าง Batch ZIP แล้ว" if batch_result else ("พร้อมสร้าง Batch ZIP" if peaks_ready and not batch_stale else "ยังไม่พร้อม"), "success" if batch_result or (peaks_ready and not batch_stale) else "neutral"),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action}
+
+
+def _render_workflow_shell(
+    *,
+    is_single_file_mode: bool,
+    uploaded_name: str | None,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    batch_signature: tuple[object, ...],
+    export_mode: str | None,
+    excel_com_status: ExcelComStatus,
+) -> None:
+    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "ตรวจ Peak", "ส่งออก"]
+    state = (
+        _single_workflow_state(uploaded_name, export_mode, excel_com_status)
+        if is_single_file_mode
+        else _batch_workflow_state(
+            uploaded_count=uploaded_count,
+            batch_mapping_ready=batch_mapping_ready,
+            batch_signature=batch_signature,
+        )
+    )
+    mode_label = "ประมวลผลไฟล์เดียว" if is_single_file_mode else "ประมวลผลหลายไฟล์"
+    html = [
+        '<div class="tmc-workflow-shell">',
+        '<div class="tmc-workflow-shell-head">',
+        f'<div class="tmc-workflow-mode">{escape(mode_label)}</div>',
+        f'<div class="tmc-workflow-next">{escape(str(state["next_action"]))}</div>',
+        "</div>",
+        '<div class="tmc-workflow-stepper">',
+    ]
+    for index, (label, status) in enumerate(zip(labels, state["steps"]), start=1):
+        dot = "✓" if status == "completed" else ("!" if status == "warning" else str(index))
+        html.append(
+            f'<div class="tmc-workflow-step tmc-workflow-{escape(str(status))}">'
+            f'<div class="tmc-workflow-dot">{escape(dot)}</div>'
+            "<div>"
+            f'<div class="tmc-workflow-step-label">{escape(label)}</div>'
+            f'<div class="tmc-workflow-step-state">{escape(_workflow_status_label(str(status)))}</div>'
+            "</div>"
+            "</div>"
+        )
+    html.append("</div>")
+    html.append('<div class="tmc-workflow-summary">')
+    for label, value, kind in state["summary"]:
+        html.append(_workflow_summary_chip(str(label), str(value), str(kind)))
+    html.append("</div></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
 def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
@@ -2128,19 +2404,25 @@ def _run_streamlit_app() -> None:
         """,
         unsafe_allow_html=True,
     )
-    workflow_uploaded = (uploaded_file is not None) if is_single_file_mode else bool(batch_uploads)
-    _render_workflow_stepper(
+    shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
+    shell_batch_signature = (
+        _batch_upload_signature(batch_uploads),
+        batch_preset_signature,
+        tuple(sorted((_current_pce_factors_from_state() or {}).items())),
+        _metadata_signature(st.session_state.get("tmc_batch_file_metadata_table") or []),
+        shell_batch_export_mode,
+    )
+    _render_workflow_shell(
         is_single_file_mode=is_single_file_mode,
-        uploaded=workflow_uploaded,
+        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+        uploaded_count=len(batch_uploads or []),
         batch_mapping_ready=loaded_batch_preset is not None,
+        batch_signature=shell_batch_signature,
+        export_mode=export_mode,
+        excel_com_status=excel_com_status,
     )
     if is_single_file_mode:
         _render_alert("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน", "info")
-        _render_status_cards(
-            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-            excel_com_status=excel_com_status,
-            export_mode=export_mode,
-        )
     else:
         _render_alert("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์", "info")
 
