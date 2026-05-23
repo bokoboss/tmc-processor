@@ -327,8 +327,8 @@ def _inject_global_css() -> None:
 
             --tmc-radius-sm: 6px;
             --tmc-radius-md: 10px;
-            --tmc-radius-lg: 14px;
-            --tmc-radius-xl: 18px;
+            --tmc-radius-lg: 10px;
+            --tmc-radius-xl: 14px;
             --tmc-shadow-subtle: 0 1px 2px rgba(21, 23, 19, 0.04);
             --tmc-shadow-soft: 0 8px 24px rgba(21, 23, 19, 0.06);
         }
@@ -410,6 +410,177 @@ def _inject_global_css() -> None:
             font-size: var(--tmc-font-xs);
             line-height: 1.25;
             overflow-wrap: anywhere;
+        }
+        .tmc-panel {
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            padding: var(--tmc-space-4);
+            margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-panel-title {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-md);
+            font-weight: 650;
+            line-height: 1.3;
+            margin-bottom: 0.12rem;
+        }
+        .tmc-panel-description {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.4;
+        }
+        .tmc-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
+        }
+        .tmc-kpi-card {
+            min-height: 86px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.1rem;
+            overflow: hidden;
+        }
+        .tmc-kpi-value {
+            color: var(--tmc-text);
+            font-size: 1.32rem;
+            font-weight: 700;
+            line-height: 1.18;
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+        }
+        .tmc-kpi-unit {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-xs);
+            font-weight: 600;
+            margin-left: 0.2rem;
+        }
+        .tmc-kpi-detail {
+            color: var(--tmc-text-soft);
+            font-size: var(--tmc-font-xs);
+            line-height: 1.3;
+            overflow-wrap: anywhere;
+        }
+        .tmc-chip {
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            border: 1px solid var(--tmc-border-soft);
+            border-radius: var(--tmc-radius-sm);
+            padding: 0.1rem 0.46rem;
+            font-size: var(--tmc-font-xs);
+            font-weight: 650;
+            line-height: 1.35;
+            white-space: nowrap;
+        }
+        .tmc-chip-success {
+            color: var(--tmc-success);
+            background: var(--tmc-success-soft);
+            border-color: #cfe3d4;
+        }
+        .tmc-chip-warning {
+            color: var(--tmc-warning);
+            background: var(--tmc-warning-soft);
+            border-color: var(--tmc-bronze-soft);
+        }
+        .tmc-chip-danger {
+            color: var(--tmc-danger);
+            background: var(--tmc-danger-soft);
+            border-color: #efd0c8;
+        }
+        .tmc-chip-info {
+            color: var(--tmc-info);
+            background: var(--tmc-info-soft);
+            border-color: #d0ddea;
+        }
+        .tmc-chip-neutral {
+            color: var(--tmc-text-muted);
+            background: var(--tmc-surface-muted);
+            border-color: var(--tmc-border);
+        }
+        .tmc-alert {
+            border: 1px solid var(--tmc-border-soft);
+            border-left-width: 3px;
+            border-radius: var(--tmc-radius-lg);
+            padding: var(--tmc-space-2) var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-3) 0;
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.45;
+            background: var(--tmc-surface);
+        }
+        .tmc-alert-info {
+            border-left-color: var(--tmc-info);
+            background: var(--tmc-surface);
+        }
+        .tmc-alert-warning {
+            border-left-color: var(--tmc-warning);
+            background: var(--tmc-bronze-subtle);
+        }
+        .tmc-alert-error {
+            border-left-color: var(--tmc-danger);
+            background: var(--tmc-danger-soft);
+        }
+        .tmc-alert-success {
+            border-left-color: var(--tmc-success);
+            background: var(--tmc-success-soft);
+        }
+        .tmc-action-hint {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.4;
+            margin: -0.2rem 0 var(--tmc-space-2) 0;
+        }
+        .tmc-workflow-stepper {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: var(--tmc-space-2);
+            margin: var(--tmc-space-3) 0 0 0;
+        }
+        .tmc-workflow-step {
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            background: var(--tmc-surface);
+            padding: 0.44rem var(--tmc-space-2);
+            min-width: 0;
+        }
+        .tmc-workflow-step-label {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-xs);
+            font-weight: 650;
+            line-height: 1.25;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tmc-workflow-step-state {
+            color: var(--tmc-text-soft);
+            font-size: 0.68rem;
+            line-height: 1.25;
+            margin-top: 0.1rem;
+        }
+        .tmc-workflow-done {
+            border-color: #cfe3d4;
+            background: var(--tmc-primary-subtle);
+        }
+        .tmc-workflow-active {
+            border-color: var(--tmc-primary);
+            background: var(--tmc-surface-raised);
+        }
+        .tmc-workflow-active .tmc-workflow-step-label {
+            color: var(--tmc-primary);
+        }
+        .tmc-peak-am {
+            border-top-color: var(--tmc-success);
+            background: var(--tmc-primary-subtle);
+        }
+        .tmc-peak-pm {
+            border-top-color: var(--tmc-bronze);
+            background: var(--tmc-bronze-subtle);
         }
         .tmc-status-card .tmc-card-label,
         .tmc-status-card .tmc-card-value,
@@ -775,9 +946,17 @@ def _inject_global_css() -> None:
             .tmc-status-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
+            .tmc-kpi-grid,
+            .tmc-workflow-stepper {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
         }
         @media (max-width: 640px) {
             .tmc-status-grid {
+                grid-template-columns: 1fr;
+            }
+            .tmc-kpi-grid,
+            .tmc-workflow-stepper {
                 grid-template-columns: 1fr;
             }
             .tmc-title {
@@ -819,11 +998,121 @@ def _render_empty_state(title: str, description: str = "") -> None:
     )
 
 
+def _render_panel(title: str, description: str = "") -> None:
+    description_html = (
+        f'<div class="tmc-panel-description">{escape(description)}</div>' if description else ""
+    )
+    st.markdown(
+        '<div class="tmc-panel">'
+        f'<div class="tmc-panel-title">{escape(title)}</div>'
+        f"{description_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _chip_kind_from_text(value: str) -> str:
+    text = str(value).casefold()
+    success_terms = {
+        "success",
+        "complete",
+        "confirmed",
+        "ready",
+        "loaded",
+        "ผ่าน",
+        "สำเร็จ",
+        "เสร็จสิ้น",
+        "ยืนยันแล้ว",
+        "พร้อม",
+        "พร้อมใช้งาน",
+        "โหลดแล้ว",
+    }
+    warning_terms = {
+        "warning",
+        "warn",
+        "needs review",
+        "pending",
+        "active",
+        "ต้องตรวจสอบ",
+        "กำลังใช้งาน",
+        "รอตรวจสอบ",
+    }
+    danger_terms = {"error", "failed", "fail", "danger", "ผิดพลาด", "ล้มเหลว", "ไม่สำเร็จ"}
+    info_terms = {"info", "technical", "ข้อมูล"}
+    if any(term in text for term in danger_terms):
+        return "danger"
+    if any(term in text for term in warning_terms):
+        return "warning"
+    if any(term in text for term in success_terms):
+        return "success"
+    if any(term in text for term in info_terms):
+        return "info"
+    return "neutral"
+
+
+def _status_chip_html(label: str, kind: str = "neutral") -> str:
+    allowed = {"success", "warning", "danger", "info", "neutral"}
+    chip_kind = kind if kind in allowed else "neutral"
+    return f'<span class="tmc-chip tmc-chip-{chip_kind}">{escape(label)}</span>'
+
+
+def _render_status_chip(label: str, kind: str = "neutral") -> None:
+    st.markdown(_status_chip_html(label, kind), unsafe_allow_html=True)
+
+
+def _kpi_card_html(label: str, value: object, unit: str = "", detail: str = "", status: str | None = None) -> str:
+    unit_html = f'<span class="tmc-kpi-unit">{escape(unit)}</span>' if unit else ""
+    detail_html = f'<div class="tmc-kpi-detail">{escape(detail)}</div>' if detail else '<div class="tmc-kpi-detail">&nbsp;</div>'
+    status_html = _status_chip_html(status, _chip_kind_from_text(status)) if status else ""
+    return (
+        '<div class="tmc-card tmc-kpi-card">'
+        f'<div class="tmc-card-label">{escape(label)}</div>'
+        f'<div class="tmc-kpi-value">{escape(str(value))}{unit_html}</div>'
+        f"{detail_html}"
+        f"{status_html}"
+        "</div>"
+    )
+
+
+def _render_kpi_card(label: str, value: object, unit: str = "", detail: str = "", status: str | None = None) -> None:
+    st.markdown(_kpi_card_html(label, value, unit, detail, status), unsafe_allow_html=True)
+
+
+def _render_metric_strip(items: list[tuple[str, object, str, str] | tuple[str, object, str, str, str]], columns: int = 4) -> None:
+    column_count = max(1, min(columns, 6))
+    grid_style = f' style="grid-template-columns: repeat({column_count}, minmax(0, 1fr));"'
+    html = ['<div class="tmc-kpi-grid"' + grid_style + ">"]
+    for item in items:
+        label, value, unit, detail, *rest = item
+        status = rest[0] if rest else None
+        html.append(_kpi_card_html(str(label), value, str(unit or ""), str(detail or ""), status))
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def _render_alert(message: str, kind: str = "info") -> None:
+    allowed = {"info", "warning", "error", "success"}
+    alert_kind = kind if kind in allowed else "info"
+    st.markdown(
+        f'<div class="tmc-alert tmc-alert-{alert_kind}">{escape(message)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_action_hint(message: str) -> None:
+    if message:
+        st.markdown(f'<div class="tmc-action-hint">{escape(message)}</div>', unsafe_allow_html=True)
+
+
 def _status_tone(status: str) -> str:
     text = str(status).casefold()
-    if text in {"complete", "confirmed", "ready", "loaded", "เสร็จสิ้น", "ยืนยันแล้ว", "พร้อมใช้งาน", "โหลดแล้ว"}:
+    if _chip_kind_from_text(status) == "success":
         return "green"
-    if text in {"needs review", "ต้องตรวจสอบ", "active", "กำลังใช้งาน"}:
+    if _chip_kind_from_text(status) == "danger":
+        return "red"
+    if _chip_kind_from_text(status) == "warning":
+        return "amber"
+    if _chip_kind_from_text(status) == "info":
         return "blue"
     return "gray"
 
@@ -831,10 +1120,16 @@ def _status_tone(status: str) -> str:
 def _status_card_html(label: str, status: str, note: str = "", tone: str | None = None) -> str:
     tone = tone or _status_tone(status)
     note_html = f'<div class="tmc-card-note">{escape(note)}</div>' if note else '<div class="tmc-card-note">&nbsp;</div>'
+    chip_kind = {
+        "green": "success",
+        "amber": "warning",
+        "red": "danger",
+        "blue": "info",
+    }.get(tone, _chip_kind_from_text(status))
     return (
         f'<div class="tmc-card tmc-status-card tmc-status-{tone}">'
         f'<div class="tmc-card-label">{escape(label)}</div>'
-        f'<div class="tmc-card-value">{escape(status)}</div>'
+        f'<div class="tmc-card-value">{_status_chip_html(status, chip_kind)}</div>'
         f"{note_html}"
         "</div>"
     )
@@ -866,6 +1161,42 @@ def _render_version_stamp() -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def _workflow_step_statuses(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> list[str]:
+    mapping_ready = bool(st.session_state.get("mapping_table"))
+    processed = "tmc_processed" in st.session_state
+    output_ready = "tmc_output" in st.session_state
+    batch_analysis_ready = st.session_state.get("tmc_batch_analysis_result") is not None
+    batch_export_ready = st.session_state.get("tmc_batch_export_result") is not None
+    if is_single_file_mode:
+        done = [uploaded, uploaded, mapping_ready, processed, processed, output_ready]
+    else:
+        batch_files_ready = bool(st.session_state.get("tmc_batch_file_metadata_table"))
+        preset_ready = batch_mapping_ready
+        done = [uploaded, batch_files_ready, preset_ready, batch_analysis_ready, batch_analysis_ready, batch_export_ready]
+    active_index = next((index for index, value in enumerate(done) if not value), len(done) - 1)
+    return ["done" if value else ("active" if index == active_index else "pending") for index, value in enumerate(done)]
+
+
+def _render_workflow_stepper(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> None:
+    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "Peak Review", "Export"]
+    state_text = {"done": "พร้อม", "active": "ขั้นตอนปัจจุบัน", "pending": "รอดำเนินการ"}
+    statuses = _workflow_step_statuses(
+        is_single_file_mode=is_single_file_mode,
+        uploaded=uploaded,
+        batch_mapping_ready=batch_mapping_ready,
+    )
+    html = ['<div class="tmc-workflow-stepper">']
+    for label, status in zip(labels, statuses):
+        html.append(
+            f'<div class="tmc-workflow-step tmc-workflow-{status}">'
+            f'<div class="tmc-workflow-step-label">{escape(label)}</div>'
+            f'<div class="tmc-workflow-step-state">{escape(state_text[status])}</div>'
+            "</div>"
+        )
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
 def _render_status_cards(
@@ -1448,6 +1779,11 @@ def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
+    title_text = str(title).casefold()
+    if "am" in title_text or "เช้า" in title_text:
+        card_class = f"{card_class} tmc-peak-am"
+    elif "pm" in title_text or "เย็น" in title_text:
+        card_class = f"{card_class} tmc-peak-pm"
     badge = "ยืนยันแล้ว" if is_confirmed else "แนะนำ"
     pcu_text = f"{pcu} PCU" if pcu else "ไม่มีข้อมูล PCU"
     st.markdown(
@@ -1788,20 +2124,25 @@ def _run_streamlit_app() -> None:
         <div class="tmc-header">
             <h1 class="tmc-title">TMC Processor</h1>
             <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
-            <div class="tmc-workflow">อัปโหลดไฟล์ → ตั้งค่างาน → กำหนดทิศทาง → ประมวลผล → ตรวจสอบช่วงเร่งด่วน → ส่งออกไฟล์</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    workflow_uploaded = (uploaded_file is not None) if is_single_file_mode else bool(batch_uploads)
+    _render_workflow_stepper(
+        is_single_file_mode=is_single_file_mode,
+        uploaded=workflow_uploaded,
+        batch_mapping_ready=loaded_batch_preset is not None,
+    )
     if is_single_file_mode:
-        st.info("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
+        _render_alert("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน", "info")
         _render_status_cards(
             uploaded_name=uploaded_file.name if uploaded_file is not None else None,
             excel_com_status=excel_com_status,
             export_mode=export_mode,
         )
     else:
-        st.info("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+        _render_alert("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์", "info")
 
     detected_sheet_names: list[str] = []
     preview_summary = pd.DataFrame()
@@ -2265,6 +2606,7 @@ def _run_streamlit_app() -> None:
                     ("PCE factors ready", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
                 ]
             )
+            _render_action_hint("วิเคราะห์ Batch หลังจากไฟล์ Mapping Preset และค่า PCE พร้อมแล้ว")
             analyze_batch = st.button("Analyze Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
             if analyze_batch:
                 items = _batch_items_from_uploads(batch_uploads)
@@ -2317,26 +2659,40 @@ def _run_streamlit_app() -> None:
                     preview = batch_selected_file_preview(selected_item)
                     with st.container(border=True):
                         _render_section_header("ไฟล์ที่เลือก", f"{preview['file_name']} · {preview['output_stem']}")
-                        preview_cols = st.columns(4)
-                        preview_cols[0].metric("วันที่สำรวจ", preview["survey_date_text"] or "-")
-                        preview_cols[1].metric("สถานะ", preview["status"] or "-")
-                        preview_cols[2].metric("จำนวนรถรวม", f"{float(preview['total_vehicles']):,.0f}")
-                        preview_cols[3].metric("PCU รวม", f"{float(preview['total_PCU']):,.0f}")
-                        qc_preview_cols = st.columns(3)
-                        qc_preview_cols[0].metric("QC error", f"{int(preview['QC_errors']):,}")
-                        qc_preview_cols[1].metric("QC warning", f"{int(preview['QC_warnings']):,}")
-                        qc_preview_cols[2].metric("QC info", f"{int(preview['QC_info']):,}")
-                        peak_preview_cols = st.columns(4)
-                        peak_preview_cols[0].metric("AM แนะนำ", preview["suggested_AM_peak"] or "-")
-                        peak_preview_cols[1].metric("PM แนะนำ", preview["suggested_PM_peak"] or "-")
-                        peak_preview_cols[2].metric("AM ยืนยัน", preview["confirmed_AM_peak"] or "-")
-                        peak_preview_cols[3].metric("PM ยืนยัน", preview["confirmed_PM_peak"] or "-")
+                        _render_metric_strip(
+                            [
+                                ("วันที่สำรวจ", preview["survey_date_text"] or "-", "", ""),
+                                ("สถานะ", preview["status"] or "-", "", "", preview["status"] or "pending"),
+                                ("จำนวนรถรวม", f"{float(preview['total_vehicles']):,.0f}", "คัน", ""),
+                                ("PCU รวม", f"{float(preview['total_PCU']):,.0f}", "PCU", ""),
+                            ],
+                            columns=4,
+                        )
+                        _render_metric_strip(
+                            [
+                                ("QC error", f"{int(preview['QC_errors']):,}", "", ""),
+                                ("QC warning", f"{int(preview['QC_warnings']):,}", "", ""),
+                                ("QC info", f"{int(preview['QC_info']):,}", "", ""),
+                            ],
+                            columns=3,
+                        )
+                        _render_metric_strip(
+                            [
+                                ("AM แนะนำ", preview["suggested_AM_peak"] or "-", "", "ช่วงเช้า"),
+                                ("PM แนะนำ", preview["suggested_PM_peak"] or "-", "", "ช่วงเย็น"),
+                                ("AM ยืนยัน", preview["confirmed_AM_peak"] or "-", "", "ใช้ในรายงาน"),
+                                ("PM ยืนยัน", preview["confirmed_PM_peak"] or "-", "", "ใช้ในรายงาน"),
+                            ],
+                            columns=4,
+                        )
                     _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
                     peak_cols = st.columns(4)
-                    peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
-                    peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
+                    with peak_cols[0]:
+                        _render_kpi_card("Suggested AM", selected_item.suggested_AM_peak or "-", detail="ระบบแนะนำ")
+                    with peak_cols[1]:
+                        _render_kpi_card("Suggested PM", selected_item.suggested_PM_peak or "-", detail="ระบบแนะนำ")
                     if option_labels:
                         stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
                         am_default = stored.get("AM") or selected_item.confirmed_AM_peak
@@ -2388,6 +2744,7 @@ def _run_streamlit_app() -> None:
                 batch_stale=batch_stale,
             )
             generate_disabled = bool(block_reason)
+            _render_action_hint(block_reason or "สร้าง ZIP หลังจากตรวจและยืนยัน Peak ครบทุกไฟล์แล้ว")
             generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
             if generate_batch and batch_analysis:
                 block_reason = batch_zip_generation_block_reason(
@@ -2437,13 +2794,17 @@ def _run_streamlit_app() -> None:
                 _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
             else:
                 counts = _batch_summary_counts(status_frame)
-                summary_cols = st.columns(6)
-                summary_cols[0].metric("ไฟล์ทั้งหมด", f"{counts['total_files']:,}")
-                summary_cols[1].metric("สำเร็จ", f"{counts['successful_files']:,}")
-                summary_cols[2].metric("ล้มเหลว", f"{counts['failed_files']:,}")
-                summary_cols[3].metric("QC error", f"{counts['QC_errors']:,}")
-                summary_cols[4].metric("QC warning", f"{counts['QC_warnings']:,}")
-                summary_cols[5].metric("QC info", f"{counts['QC_info']:,}")
+                _render_metric_strip(
+                    [
+                        ("ไฟล์ทั้งหมด", f"{counts['total_files']:,}", "", ""),
+                        ("สำเร็จ", f"{counts['successful_files']:,}", "", "", "success" if counts["successful_files"] else "pending"),
+                        ("ล้มเหลว", f"{counts['failed_files']:,}", "", "", "failed" if counts["failed_files"] else "พร้อม"),
+                        ("QC error", f"{counts['QC_errors']:,}", "", "", "error" if counts["QC_errors"] else "พร้อม"),
+                        ("QC warning", f"{counts['QC_warnings']:,}", "", "", "warning" if counts["QC_warnings"] else "พร้อม"),
+                        ("QC info", f"{counts['QC_info']:,}", "", "", "info" if counts["QC_info"] else "พร้อม"),
+                    ],
+                    columns=6,
+                )
                 st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
@@ -2508,11 +2869,15 @@ def _run_streamlit_app() -> None:
                 )
             else:
                 st.markdown("#### สรุปผลการประมวลผล")
-                metric_cols = st.columns(4)
-                metric_cols[0].metric("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}")
-                metric_cols[1].metric("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0")
-                metric_cols[2].metric("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0")
-                metric_cols[3].metric("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}")
+                _render_metric_strip(
+                    [
+                        ("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}", "แถว", ""),
+                        ("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0", "คัน", ""),
+                        ("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0", "PCU", ""),
+                        ("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}", "", "QC"),
+                    ],
+                    columns=4,
+                )
 
                 _render_qc_status(result.qc)
 
@@ -2618,6 +2983,7 @@ def _run_streamlit_app() -> None:
             st.markdown("#### ดาวน์โหลดไฟล์")
             if pce_results_stale:
                 st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
+            _render_action_hint("สร้างรายงานหลังจากประมวลผลและยืนยันช่วงเร่งด่วน AM/PM แล้ว")
             export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
             if export_run:
                 excel_com_requested = bool(use_excel_com_native_charts)
@@ -2831,18 +3197,22 @@ def _run_streamlit_app() -> None:
             if result is not None:
                 st.markdown("#### QC summary")
                 qc_counts = _qc_severity_counts(result.qc)
-                qc_cols = st.columns(3)
-                qc_cols[0].metric("error", f"{qc_counts['error']:,}")
-                qc_cols[1].metric("warning", f"{qc_counts['warning']:,}")
-                qc_cols[2].metric("info", f"{qc_counts['info']:,}")
+                _render_metric_strip(
+                    [
+                        ("error", f"{qc_counts['error']:,}", "", "", "error" if qc_counts["error"] else "พร้อม"),
+                        ("warning", f"{qc_counts['warning']:,}", "", "", "warning" if qc_counts["warning"] else "พร้อม"),
+                        ("info", f"{qc_counts['info']:,}", "", "", "info" if qc_counts["info"] else "พร้อม"),
+                    ],
+                    columns=3,
+                )
                 if qc_counts["error"]:
-                    st.error("QC errors found. Review details before export.")
+                    _render_alert("พบ QC error กรุณาตรวจรายละเอียดก่อนส่งออก", "error")
                 elif qc_counts["warning"]:
-                    st.warning("QC warnings found. Export is still available, but review the notes first.")
+                    _render_alert("พบ QC warning ยังส่งออกได้ แต่ควรตรวจหมายเหตุก่อน", "warning")
                 elif qc_counts["info"]:
-                    st.info("QC info notes are available for review.")
+                    _render_alert("มีหมายเหตุ QC info สำหรับตรวจสอบ", "info")
                 else:
-                    st.success("No QC issues found.")
+                    _render_alert("ไม่พบประเด็น QC", "success")
                 with st.expander("QC details", expanded=False):
                     st.dataframe(result.qc, width="stretch")
                 with st.expander("Hourly summary", expanded=False):
