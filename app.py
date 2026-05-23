@@ -28,7 +28,6 @@ from tmc_processor.batch import (
     batch_selected_file_preview,
     batch_zip_generation_block_reason,
     batch_zip_contents_preview,
-    BATCH_STALE_MESSAGE_TH,
     generate_batch_zip_from_reviewed_peaks,
     reviewed_peak_values_complete,
     safe_output_stem,
@@ -1124,6 +1123,7 @@ def _chip_kind_from_text(value: str) -> str:
         "ต้องตรวจสอบ",
         "กำลังใช้งาน",
         "รอตรวจสอบ",
+        "รอยืนยัน",
     }
     danger_terms = {"error", "failed", "fail", "danger", "ผิดพลาด", "ล้มเหลว", "ไม่สำเร็จ"}
     info_terms = {"info", "technical", "ข้อมูล"}
@@ -2031,6 +2031,26 @@ def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFra
     )
 
 
+def _batch_peak_review_display_frame(batch_analysis) -> pd.DataFrame:
+    display = _batch_status_frame(batch_analysis)
+    if display.empty:
+        return display
+    columns = [
+        "file_name",
+        "survey_date_text",
+        "status",
+        "AM suggested",
+        "PM suggested",
+        "AM confirmed",
+        "PM confirmed",
+        "QC errors",
+        "QC warnings",
+        "QC info",
+        "notes",
+    ]
+    return display[[column for column in columns if column in display.columns]]
+
+
 def _batch_qc_rows_for_ui(batch_analysis, batch_result=None) -> pd.DataFrame:
     if batch_result:
         return batch_qc_frame(batch_result.qc_rows)
@@ -2929,18 +2949,21 @@ def _run_streamlit_app() -> None:
                     st.dataframe(pd.DataFrame(status_rows), width="stretch")
 
         with dashboard_tab:
-            st.header("ตรวจ Peak Batch")
+            _render_section_header("ตรวจ Peak รายไฟล์", "ตรวจกราฟและยืนยัน AM/PM Peak แยกตามไฟล์ ก่อนสร้าง Batch ZIP")
             if batch_stale:
-                st.warning(BATCH_STALE_MESSAGE_TH)
-            _render_readiness_checklist(
-                [
-                    ("uploaded workbooks", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
-                    ("Mapping Preset ready", mapping_ready, "พร้อมใช้" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
-                    ("PCE factors ready", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
-                ]
-            )
-            _render_action_hint("วิเคราะห์ Batch หลังจากไฟล์ Mapping Preset และค่า PCE พร้อมแล้ว")
-            analyze_batch = st.button("Analyze Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
+            if not batch_ready:
+                _render_readiness_checklist(
+                    [
+                        ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
+                        ("Mapping Preset", mapping_ready, "พร้อมใช้" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
+                        ("ค่า PCE", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
+                    ]
+                )
+                _render_action_hint("เตรียมไฟล์ Mapping Preset และค่า PCE ให้พร้อมก่อนวิเคราะห์ Batch")
+            elif not batch_analysis or batch_stale:
+                _render_action_hint("วิเคราะห์ Batch เพื่อสร้างรายการตรวจ Peak รายไฟล์")
+            analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
             if analyze_batch:
                 items = _batch_items_from_uploads(batch_uploads)
                 with st.spinner("กำลังวิเคราะห์ Batch..."):
@@ -2972,9 +2995,21 @@ def _run_streamlit_app() -> None:
                     stored = batch_confirmed_peaks.get(item.folder_name, {})
                     item.confirmed_AM_peak = stored.get("AM", item.confirmed_AM_peak)
                     item.confirmed_PM_peak = stored.get("PM", item.confirmed_PM_peak)
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
-
                 successful_items = batch_analysis.successful_items
+                confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
+                successful_count = len(successful_items)
+                status_items = [
+                    ("ไฟล์ทั้งหมด", f"{len(batch_analysis.items):,}", "ไฟล์", ""),
+                    ("ยืนยัน Peak", f"{confirmed_count:,}/{successful_count:,}", "ไฟล์", "ไฟล์ที่วิเคราะห์สำเร็จ"),
+                    ("ไฟล์ไม่สำเร็จ", f"{sum(1 for item in batch_analysis.items if item.status == 'failed'):,}", "ไฟล์", "ไม่ต้องยืนยัน Peak"),
+                ]
+                _render_metric_strip(status_items, columns=3)
+                if successful_count and confirmed_count == successful_count:
+                    _render_alert("ยืนยัน Peak ครบแล้ว — พร้อมส่งออก Batch", "success")
+                elif successful_count:
+                    _render_alert("ยังมีไฟล์ที่ต้องยืนยัน Peak", "warning")
+                st.dataframe(_batch_peak_review_display_frame(batch_analysis), width="stretch", hide_index=True)
+
                 if successful_items:
                     review_labels = {f"{item.file_name} ({item.survey_date_text or 'no date'})": item.folder_name for item in successful_items}
                     selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
@@ -3009,23 +3044,12 @@ def _run_streamlit_app() -> None:
                             ],
                             columns=3,
                         )
-                        _render_metric_strip(
-                            [
-                                ("AM แนะนำ", preview["suggested_AM_peak"] or "-", "", "ช่วงเช้า"),
-                                ("PM แนะนำ", preview["suggested_PM_peak"] or "-", "", "ช่วงเย็น"),
-                                ("AM ยืนยัน", preview["confirmed_AM_peak"] or "-", "", "ใช้ในรายงาน"),
-                                ("PM ยืนยัน", preview["confirmed_PM_peak"] or "-", "", "ใช้ในรายงาน"),
-                            ],
-                            columns=4,
-                        )
+                    _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนยืนยันช่วง Peak")
                     _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
-                    peak_cols = st.columns(4)
-                    with peak_cols[0]:
-                        _render_kpi_card("Suggested AM", selected_item.suggested_AM_peak or "-", detail="ระบบแนะนำ")
-                    with peak_cols[1]:
-                        _render_kpi_card("Suggested PM", selected_item.suggested_PM_peak or "-", detail="ระบบแนะนำ")
+                    _render_section_header("ยืนยัน Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่ยืนยันในหน้านี้สำหรับรายงานของไฟล์นี้")
+                    peak_cols = st.columns(2)
                     if option_labels:
                         stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
                         am_default = stored.get("AM") or selected_item.confirmed_AM_peak
@@ -3034,27 +3058,37 @@ def _run_streamlit_app() -> None:
                             if value and value not in option_labels:
                                 option_labels.insert(0, value)
                         option_labels = list(dict.fromkeys(option_labels))
-                        selected_am = peak_cols[2].selectbox(
-                            "Confirmed AM",
-                            options=option_labels,
-                            index=option_labels.index(am_default) if am_default in option_labels else 0,
-                            key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
-                        )
-                        selected_pm = peak_cols[3].selectbox(
-                            "Confirmed PM",
-                            options=option_labels,
-                            index=option_labels.index(pm_default) if pm_default in option_labels else 0,
-                            key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
-                        )
+                        with peak_cols[0]:
+                            _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_AM_peak"] or "", "", "auto_suggested")
+                            selected_am = st.selectbox(
+                                "ช่วงที่ยืนยัน AM",
+                                options=option_labels,
+                                index=option_labels.index(am_default) if am_default in option_labels else 0,
+                                key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            _render_status_chip("ยืนยันแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
+                        with peak_cols[1]:
+                            _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_PM_peak"] or "", "", "auto_suggested")
+                            selected_pm = st.selectbox(
+                                "ช่วงที่ยืนยัน PM",
+                                options=option_labels,
+                                index=option_labels.index(pm_default) if pm_default in option_labels else 0,
+                                key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            _render_status_chip("ยืนยันแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
                         if stored.get("AM") != selected_am or stored.get("PM") != selected_pm:
                             st.session_state.pop("tmc_batch_export_result", None)
                         batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
                         selected_item.confirmed_AM_peak = selected_am
                         selected_item.confirmed_PM_peak = selected_pm
+                    else:
+                        _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak ของไฟล์นี้", "warning")
                 if batch_analysis.has_failures:
-                    st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องยืนยัน Peak")
+                    _render_alert("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องยืนยัน Peak", "warning")
             else:
-                _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด Analyze Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
+                _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด วิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
         with export_tab:
             _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
@@ -3248,31 +3282,18 @@ def _run_streamlit_app() -> None:
 
     if is_single_file_mode:
         with dashboard_tab:
-            st.header("ตรวจสอบกราฟและช่วงเร่งด่วน")
+            _render_section_header("ตรวจ Peak", "ตรวจสอบรูปแบบปริมาณจราจรรายชั่วโมง และยืนยันช่วง AM/PM Peak สำหรับใช้ในรายงาน")
             if pce_results_stale:
-                st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
+                _render_alert("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจ Peak หรือส่งออกรายงาน", "warning")
             if result is None:
                 _render_empty_state(
-                    "ยังไม่มีผลประมวลผล",
-                    "ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน",
+                    "กรุณาประมวลผลข้อมูลก่อนตรวจ Peak",
+                    "เมื่อประมวลผลแล้ว ระบบจะแสดงกราฟ PCU รายชั่วโมงและตัวเลือกยืนยัน AM/PM Peak",
                 )
             else:
-                st.markdown("#### สรุปผลการประมวลผล")
-                _render_metric_strip(
-                    [
-                        ("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}", "แถว", ""),
-                        ("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0", "คัน", ""),
-                        ("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0", "PCU", ""),
-                        ("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}", "", "QC"),
-                    ],
-                    columns=4,
-                )
-
-                _render_qc_status(result.qc)
-
-                st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
+                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็น source of truth")
                 _render_hourly_pcu_line_chart(hourly_movement)
-    
+
                 am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
                 pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
                 interval_options = _hourly_interval_options(hourly_movement, result.peaks)
@@ -3283,45 +3304,60 @@ def _run_streamlit_app() -> None:
                     loaded_confirmed_peaks = st.session_state.get("tmc_loaded_confirmed_peaks") or {}
                     loaded_am_label = f"{loaded_confirmed_peaks.get('am_peak_start', '')}-{loaded_confirmed_peaks.get('am_peak_end', '')}".strip("-")
                     loaded_pm_label = f"{loaded_confirmed_peaks.get('pm_peak_start', '')}-{loaded_confirmed_peaks.get('pm_peak_end', '')}".strip("-")
-                    if loaded_am_label in option_labels and "am_peak_period_select" not in st.session_state:
-                        st.session_state["am_peak_period_select"] = loaded_am_label
+                    if loaded_am_label in option_labels and not st.session_state.get("am_peak_period_select"):
                         am_default = loaded_am_label
-                    if loaded_pm_label in option_labels and "pm_peak_period_select" not in st.session_state:
-                        st.session_state["pm_peak_period_select"] = loaded_pm_label
+                    if loaded_pm_label in option_labels and not st.session_state.get("pm_peak_period_select"):
                         pm_default = loaded_pm_label
                     am_index = option_labels.index(am_default) if am_default in option_labels else 0
                     pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
 
                     _render_section_header(
-                        "ยืนยันช่วงเร่งด่วน",
-                        "เปรียบเทียบค่าที่ระบบแนะนำกับช่วงเวลาที่ต้องการใช้ในรายงาน",
+                        "ยืนยันช่วง Peak",
+                        "ระบบตรวจจับอัตโนมัติเป็นค่าแนะนำ ผู้ตรวจต้องยืนยันช่วงที่จะใช้ในรายงาน",
                     )
                     confirm_cols = st.columns(2)
-                    am_peak_label = confirm_cols[0].selectbox("เลือกช่วงเร่งด่วนเช้า", option_labels, index=am_index, key="am_peak_period_select")
-                    pm_peak_label = confirm_cols[1].selectbox("เลือกช่วงเร่งด่วนเย็น", option_labels, index=pm_index, key="pm_peak_period_select")
+                    with confirm_cols[0]:
+                        _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
+                        am_peak_label = st.selectbox("ช่วงที่ยืนยัน AM", option_labels, index=am_index, key="am_peak_period_select")
+                    with confirm_cols[1]:
+                        _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
+                        pm_peak_label = st.selectbox("ช่วงที่ยืนยัน PM", option_labels, index=pm_index, key="pm_peak_period_select")
                     confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
                     confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
                     st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
                     st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
                     st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
-                    st.caption("รายงาน Excel จะใช้ช่วงเร่งด่วนที่ยืนยันในหน้านี้")
+                    confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
+                    confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
+                    _render_metric_strip(
+                        [
+                            ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่ยืนยัน", "ยืนยันแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
+                            ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่ยืนยัน", "ยืนยันแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
+                            ("AM PCU", _interval_total_pcu(hourly_movement, confirmed_am_label) or am_pcu or "-", "PCU", "Peak PCU"),
+                            ("PM PCU", _interval_total_pcu(hourly_movement, confirmed_pm_label) or pm_pcu or "-", "PCU", "Peak PCU"),
+                        ],
+                        columns=4,
+                    )
+                    _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
                     if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
-                        st.success("ยืนยันช่วงเร่งด่วนแล้ว — พร้อมส่งออก")
-
-                    peak_cols = st.columns(4)
-                    with peak_cols[0]:
-                        _render_peak_card("ช่วงเร่งด่วนเช้า (แนะนำ)", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
-                    with peak_cols[1]:
-                        _render_peak_card("ช่วงเร่งด่วนเย็น (แนะนำ)", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
-                    with peak_cols[2]:
-                        confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
-                        _render_peak_card("ช่วงเร่งด่วนเช้า (ยืนยัน)", confirmed_am_label, _interval_total_pcu(hourly_movement, confirmed_am_label), "user_confirmed")
-                    with peak_cols[3]:
-                        confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
-                        _render_peak_card("ช่วงเร่งด่วนเย็น (ยืนยัน)", confirmed_pm_label, _interval_total_pcu(hourly_movement, confirmed_pm_label), "user_confirmed")
+                        _render_alert("ยืนยันช่วง Peak แล้ว — พร้อมส่งออก", "success")
+                    else:
+                        _render_alert("กรุณายืนยัน AM Peak และ PM Peak ก่อนส่งออก", "warning")
                 else:
-                    st.warning("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak")
+                    _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak", "warning")
+
+                _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
+                _render_metric_strip(
+                    [
+                        ("จำนวนแถว", f"{len(result.normalized):,}", "แถว", "normalized"),
+                        ("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0", "คัน", ""),
+                        ("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0", "PCU", ""),
+                        ("QC", f"{len(result.qc):,}", "", "ประเด็น"),
+                    ],
+                    columns=4,
+                )
+                _render_qc_status(result.qc)
 
                 with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
                     st.dataframe(hourly_movement, width="stretch")
