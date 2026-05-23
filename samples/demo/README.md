@@ -1,48 +1,48 @@
 # Synthetic Demo Dataset
 
-All files in this folder are fully synthetic. They do not contain real project
-names, real survey points, real traffic counts, client data, or private files.
+All files in this folder are synthetic. They do not contain real survey counts,
+real project names, real survey points, client data, or private files.
 
 ## Files
 
-- `DEMO_TMC1_FourLeg.xlsx` - synthetic raw TMC workbook with four direction
-  sheets: `ทิศ 1`, `ทิศ 2`, `ทิศ 3`, and `ทิศ 4`.
-- `DEMO_TMC1_FourLeg_Day2.xlsx` - second synthetic raw TMC workbook with the
-  same sheet structure and different deterministic volumes for Basic Batch v1.1.
-- `DEMO_TMC1_FourLeg_mapping.xlsx` - saved mapping workbook for the current
-  "Load saved mapping Excel" workflow. It includes a simple aggregation example
-  where a mainline through stream and a frontage through stream both map to
-  `NS`.
-- `DEMO_TMC1_FourLeg.mapping.json` - Mapping Preset for the same synthetic
-  intersection. It stores mapping rows only, so it can be reused separately from
-  the full Project Session.
-- `DEMO_TMC1_FourLeg_session.tmcproj.json` - optional synthetic Project Session
-  with demo metadata, labels, default PCE factors, peak windows, export settings,
-  and mapping rows. It does not embed raw Excel content.
+- `DEMO_TMC1_FourLeg.xlsx` - synthetic Day 1 raw TMC workbook.
+- `DEMO_TMC1_FourLeg_Day2.xlsx` - synthetic Day 2 raw TMC workbook for batch testing.
+- `DEMO_TMC1_FourLeg_mapping.xlsx` - mapping workbook for the older "load saved mapping Excel" workflow.
+- `DEMO_TMC1_FourLeg.mapping.json` - Mapping Preset for the same synthetic intersection. Use this for the recommended preset workflow and for batch mode.
+- `DEMO_TMC1_FourLeg_session.tmcproj.json` - optional Project Session with synthetic setup metadata, mapping, PCE factors, peak settings, and export settings. It does not embed raw Excel content.
 
-## Quick Demo Workflow
+## Single-File Demo
 
 1. Start the app with `start_tmc_processor.bat`.
 2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx`.
-3. In the mapping section, load either `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`
-   or `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
-4. Click Process.
-5. Review the Dashboard and Peak Review. The synthetic data is designed to show
-   an AM peak around 08:00-09:00 and a PM peak around 17:00-18:00.
-6. Generate the Excel Report.
+3. Load either:
+   - `samples/demo/DEMO_TMC1_FourLeg.mapping.json`, or
+   - `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`.
+4. Process the workbook.
+5. Review the dashboard and confirm Peak periods.
+6. Generate the Excel report or Export Package ZIP.
 
-The Project Session file can be loaded as a convenience after uploading the demo
-workbook, but the workbook plus either mapping file is enough for the basic demo.
+The synthetic data is designed to show an AM peak around 08:00-09:00 and a PM
+peak around 17:00-18:00.
 
-## Batch Demo Workflow
+## Batch Demo
 
-1. Open the app with `start_tmc_processor.bat`.
-2. Go to the `ประมวลผลหลายไฟล์` tab.
-3. Upload both `samples/demo/DEMO_TMC1_FourLeg.xlsx` and
-   `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
-4. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json` as the shared Mapping
-   Preset.
-5. Click `วิเคราะห์ Batch`.
-6. Review or adjust the per-file AM/PM confirmed peaks.
-7. Click Generate Batch ZIP.
-8. Review the status table and download the Batch ZIP.
+1. Start the app with `start_tmc_processor.bat`.
+2. Choose `ประมวลผลหลายไฟล์`.
+3. Upload both demo workbooks:
+   - `samples/demo/DEMO_TMC1_FourLeg.xlsx`
+   - `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`
+4. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json` as the shared Mapping Preset.
+5. Set survey date and output stem per file if needed.
+6. Analyze the batch.
+7. Review or adjust the per-file AM/PM confirmed peaks.
+8. Generate and download the Batch ZIP.
+
+## Mapping Excel Vs Mapping Preset
+
+The mapping Excel file is kept for compatibility with the saved mapping Excel
+workflow.
+
+The Mapping Preset (`.mapping.json`) is the recommended reusable mapping format.
+It stores mapping rows only, so it can be shared across survey dates without
+carrying full project setup or raw workbook content.

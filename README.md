@@ -1,258 +1,150 @@
 # TMC Processor
 
-TMC Processor เป็นเครื่องมือบน Streamlit สำหรับประมวลผลข้อมูล **Turning Movement Count (TMC)** จากไฟล์ Excel ของงานสำรวจจราจร ให้เป็นตารางสรุป กราฟ ตรวจสอบช่วงเร่งด่วน และรายงาน Excel ที่พร้อมนำไปใช้ต่อในงานรายงานด้านวิศวกรรมจราจร
+TMC Processor is a Streamlit tool for processing Turning Movement Count (TMC)
+Excel workbooks. It helps traffic teams turn raw survey workbooks into mapped
+movement tables, PCU/PCE summaries, peak-hour review outputs, charts, Excel
+reports, and export packages.
 
-โปรแกรมนี้ออกแบบมาเพื่อช่วยลดงานซ้ำ เช่น การจัดทิศทางจากไฟล์สำรวจ การรวม movement จากหลาย source stream การเลือกช่วง Peak และการสร้างรายงานตามเทมเพลต Excel
+Version: `0.2.0` public beta.
 
-## ความสามารถหลัก
+## What It Does
 
-- อ่านไฟล์ TMC Excel ที่มี sheet ทิศทาง เช่น `ทิศ 1`, `ทิศ 2`, หรือ `ทิศ 2+3`
-- ตรวจพบ sheet ทิศทางและแสดงตัวอย่างก่อนประมวลผล
-- กำหนด Mapping จากทิศทาง/stream ในไฟล์สำรวจไปยัง movement มาตรฐาน เช่น `NS`, `NE`, `WU`, `EU`
-- รองรับการรวมหลาย source stream ไปยัง movement เดียว เช่น ทางหลักตรง + ทางคู่ขนานตรง → `NS`
-- เก็บรายละเอียด trace กลับได้ผ่าน `Movement_Aggregation_Audit`
-- คำนวณ PCU จากค่า PCE factor ที่กำหนดไว้
-- สร้างตารางสรุปรายชั่วโมง แยก movement แยกประเภทยานพาหนะ สัดส่วนยานพาหนะ และ PHF
-- แสดง Dashboard สำหรับตรวจสอบกราฟปริมาณจราจรรวมรายชั่วโมง
-- ให้ผู้ใช้ยืนยันหรือ override ช่วง AM/PM Peak ก่อนสร้างรายงาน
-- ใช้ช่วง Peak ที่ยืนยันแล้วเป็น source of truth สำหรับทุก output ที่เกี่ยวข้อง
-- ส่งออก Excel report ตามเทมเพลต 4-leg TMC
-- รองรับ **Excel Template Mode** ผ่าน Microsoft Excel COM เพื่อรักษา Native Chart, สูตร และรูปแบบของเทมเพลต
-- มี **Safe PNG Export Mode** เป็นโหมดสำรองเมื่อ Excel COM ใช้งานไม่ได้
-- Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`
-- Basic Batch Processing v1.1 สำหรับประมวลผลไฟล์สำรวจหลายวันของจุดเดียวกันด้วย Mapping Preset, ค่า PCE ร่วมกัน และ Peak ยืนยันรายไฟล์
-- UI ภาษาไทย สำหรับ workflow การใช้งานของทีมงานด้านจราจร
+- Reads TMC Excel workbooks with directional survey sheets.
+- Maps raw survey directions and source streams to standard movement codes.
+- Supports many-to-one movement aggregation, with audit output for traceability.
+- Calculates PCU values from editable PCE factors.
+- Lets users review and confirm AM/PM peak periods before export.
+- Exports Excel reports using either Excel Template Mode or Safe PNG Export Mode.
+- Saves and loads Mapping Presets (`.mapping.json`) and Project Sessions (`.tmcproj.json`).
+- Processes one file at a time or multiple days for the same survey point in batch mode.
+- Creates Export Package ZIP files and Batch ZIP files with `batch_summary.xlsx` and `Batch_QC`.
 
-## Workflow การใช้งาน
+## Quick Start For Windows Users
 
-```text
-อัปโหลดไฟล์ → ตั้งค่างาน → กำหนดทิศทาง → ประมวลผล → ตรวจสอบช่วงเร่งด่วน → ส่งออกไฟล์
-```
+1. Download the repository ZIP from GitHub, or clone it with Git.
+2. Extract the ZIP to a local folder, for example `C:\MyRD\tmc-processor`.
+3. Double-click `start_tmc_processor.bat`.
+4. Wait for setup to finish. The first run may take several minutes because the launcher creates `.venv`, installs dependencies, and checks optional Excel COM support.
+5. Use the app in the browser window that opens. Later runs are faster because the virtual environment already exists.
 
-ขั้นตอนทั่วไป:
+Requirements:
 
-1. อัปโหลดไฟล์ TMC Excel
-2. กรอกข้อมูลรายงาน ป้ายปลายทาง ชื่อถนน และข้อมูล setup
-3. ตรวจสอบและแก้ไข Mapping
-4. ประมวลผลข้อมูล
-5. ตรวจสอบ Dashboard และยืนยันช่วง AM/PM Peak
-6. สร้างรายงาน Excel
-7. ดาวน์โหลดรายงาน หรือบันทึก Project Session ไว้ใช้ต่อ
+- Windows
+- Python 3.10 or newer, with `python.exe` available on `PATH`
+- Microsoft Excel desktop app only if you want Excel Template Mode with COM/native chart preservation
 
-## ทดลองใช้งานด้วยไฟล์ Demo
+If Excel COM is unavailable, use Safe PNG Export Mode.
 
-ไฟล์ใน `samples/demo/` เป็นข้อมูลสังเคราะห์ทั้งหมด ใช้สำหรับทดลองโปรแกรมโดยไม่ต้องมีไฟล์สำรวจจริง
+## Single-File Workflow
 
-1. Run `start_tmc_processor.bat`
-2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx`
-3. Load `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`
-4. Process
-5. Review Peak
-6. Generate Excel Report
+1. Start the app with `start_tmc_processor.bat`.
+2. Choose the single-file work mode.
+3. Upload one raw TMC workbook.
+4. Fill in setup metadata such as project name, survey point, survey date, road labels, and weather.
+5. Create or load mapping:
+   - load a Mapping Preset (`.mapping.json`), or
+   - load a saved mapping Excel file, or
+   - edit the mapping table in the app.
+6. Review or adjust editable PCE factors if needed.
+7. Process the workbook.
+8. Review the dashboard and confirm AM/PM Peak periods.
+9. Generate an Excel report or an Export Package ZIP.
+
+Export packages include processed outputs, charts, summary text, mapping/session metadata, and report files. They do not include raw input Excel files by default.
+
+## Batch Workflow
+
+Batch v1 is intended for the same survey point or same intersection surveyed across multiple days, using one shared Mapping Preset.
+
+1. Start the app with `start_tmc_processor.bat`.
+2. Choose `ประมวลผลหลายไฟล์`.
+3. Upload multiple raw or demo workbooks for the same survey point.
+4. Load one shared Mapping Preset, for example `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
+5. Set survey date and output stem for each file.
+6. Analyze the batch.
+7. Review and confirm Peak periods per file.
+8. Generate the Batch ZIP.
+
+The Batch ZIP contains `batch_summary.xlsx`, including `Batch_QC`, plus one sanitized output folder per successful workbook. Raw input Excel files and local raw paths are not included.
+
+## Demo Workflow
+
+Demo files live in `samples/demo/`:
+
+- `DEMO_TMC1_FourLeg.xlsx`
+- `DEMO_TMC1_FourLeg_Day2.xlsx`
+- `DEMO_TMC1_FourLeg.mapping.json`
+- `DEMO_TMC1_FourLeg_mapping.xlsx`
+- `DEMO_TMC1_FourLeg_session.tmcproj.json`
+
+All demo files are synthetic. They do not contain real survey counts, project names, client data, or private locations.
+
+Single-file demo:
+
+1. Start the app.
+2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx`.
+3. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json` or `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`.
+4. Process the workbook.
+5. Review Peak periods.
+6. Generate an Excel report or Export Package ZIP.
 
 Batch demo:
 
-1. Open the app with `start_tmc_processor.bat`.
-2. Go to the `ประมวลผลหลายไฟล์` tab.
-3. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx` and `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
-4. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
-5. Click `วิเคราะห์ Batch`.
-6. Review or adjust the per-file AM/PM confirmed peaks.
-7. Click Generate Batch ZIP.
-8. Download the Batch ZIP.
+1. Choose `ประมวลผลหลายไฟล์`.
+2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx` and `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`.
+3. Load `samples/demo/DEMO_TMC1_FourLeg.mapping.json`.
+4. Set survey dates and output stems if needed.
+5. Analyze the batch.
+6. Review Peak periods per file.
+7. Generate the Batch ZIP.
 
-## วิธีเปิดแบบง่ายที่สุดสำหรับ Windows
+## Mapping Preset Vs Project Session
 
-ส่วนนี้เขียนสำหรับผู้ใช้ทั่วไปที่ยังไม่คุ้นกับ Python หรือ command line มาก่อน
+Mapping Preset (`.mapping.json`) stores reusable mapping rows only: raw sheet,
+source stream, movement label, output movement code, include flags, and
+aggregation fields. Use it when the same intersection mapping should be reused
+across dates or workbooks.
 
-### สิ่งที่ต้องมี
+Project Session (`.tmcproj.json`) stores broader job setup: metadata, mapping,
+PCE factors, peak settings, and export settings. It does not embed the raw Excel
+input file.
 
-1. **Windows**
-2. **Python** แนะนำเวอร์ชัน 3.11 หรือ 3.12
-3. **Microsoft Excel** ถ้าต้องการใช้โหมดรายงานตามเทมเพลต Excel และ Native Chart
+## Export Modes
 
-> ตอนติดตั้ง Python ให้เลือกตัวเลือก **Add python.exe to PATH** ด้วย
+Excel Template Mode uses Microsoft Excel COM on Windows to fill the report
+template while preserving native charts, formulas, layout, and formatting.
 
-### ขั้นตอนที่ 1: ดาวน์โหลดโปรแกรม
+Safe PNG Export Mode uses openpyxl and static chart images. It is the fallback
+when Excel COM is unavailable.
 
-วิธีง่ายที่สุดคือดาวน์โหลดจาก GitHub:
+## Privacy And Data Safety
 
-1. เปิดหน้า repo นี้ใน GitHub
-2. กดปุ่ม **Code**
-3. เลือก **Download ZIP**
-4. แตกไฟล์ ZIP ไปไว้ในโฟลเดอร์ที่ต้องการ เช่น
+This is a public repository. Do not commit real survey files, client data,
+private project names, generated reports from real projects, private mapping
+files, or private Project Sessions.
 
-```text
-C:\MyRD\tmc-processor
-```
+The repository is configured so these work areas stay ignored:
 
-ถ้าใช้ Git เป็นอยู่แล้ว สามารถใช้คำสั่งนี้แทนได้:
+- `samples/raw/`
+- `outputs/`
+- generated `.tmcproj.json` files outside `samples/demo/`
+- generated ZIP files
 
-```powershell
-git clone https://github.com/bokoboss/tmc-processor.git
-cd tmc-processor
-```
+Export packages do not include raw input Excel files by default. Keep real survey
+inputs and real outputs on local or private storage.
 
-### ขั้นตอนที่ 2: เปิดโปรแกรม
+## Developer Verification
 
-ดับเบิลคลิก `start_tmc_processor.bat`
-
-ครั้งแรกอาจใช้เวลาหลายนาที เพราะไฟล์นี้จะสร้าง `.venv` ติดตั้งแพ็กเกจที่จำเป็น ติดตั้ง `pywin32` และทดสอบ Excel COM แบบไม่บังคับให้โดยอัตโนมัติ ครั้งต่อไปจะเปิดเร็วขึ้น เพราะจะข้ามขั้นตอนติดตั้งเมื่อพบ `.venv` แล้ว
-
-เมื่อโปรแกรมเปิดแล้ว ให้ใช้งานผ่านหน้าต่างเว็บเบราว์เซอร์ที่เปิดขึ้นมาอัตโนมัติ หากต้องการปิดโปรแกรม ให้กลับมาที่หน้าต่างสีดำแล้วกด `Ctrl+C`
-
-ถ้าต้องการแยกขั้นตอนติดตั้งและเปิดโปรแกรมเอง ยังสามารถใช้ `setup_windows.bat` เพื่อติดตั้งก่อน แล้วใช้ `run_app.bat` เพื่อเปิดโปรแกรมในครั้งต่อไปได้
-
-อย่านำไฟล์ข้อมูลดิบของโครงการจริง ไฟล์ผลลัพธ์ Excel ไฟล์ `.tmcproj.json` หรือข้อมูลส่วนตัวขึ้น GitHub ให้เก็บไฟล์งานจริงไว้ในเครื่องของผู้ใช้เท่านั้น
-
-## วิธีเปิดโปรแกรมครั้งถัดไป
-
-หลังจากติดตั้งครั้งแรกแล้ว ครั้งต่อไปให้ดับเบิลคลิก `start_tmc_processor.bat` ได้เลย โปรแกรมจะข้ามขั้นตอนติดตั้งและเปิดเร็วขึ้น
-
-ถ้าใช้วิธีแยกขั้นตอน สามารถดับเบิลคลิก `run_app.bat` หลังจากเคยรัน `setup_windows.bat` แล้ว
-
-## สรุปปัญหาที่พบบ่อยตอนติดตั้ง
-
-### 1. PowerShell บอกว่า `python` ไม่รู้จัก
-
-สาเหตุที่พบบ่อยคือยังไม่ได้ติดตั้ง Python หรือไม่ได้เลือก **Add python.exe to PATH** ตอนติดตั้ง
-
-แนวทางแก้:
-
-- ติดตั้ง Python ใหม่
-- เลือก **Add python.exe to PATH**
-- ปิด PowerShell แล้วเปิดใหม่
-- ลอง `python --version` อีกครั้ง
-
-### 2. ใช้ Excel Template Mode ไม่ได้
-
-ตรวจว่าเครื่องมี Microsoft Excel แบบ desktop app แล้วเปิด `start_tmc_processor.bat` อีกครั้ง โปรแกรมจะติดตั้ง `pywin32` และทดสอบ Excel COM ให้แบบไม่บังคับในครั้งแรก
-
-ถ้ายังใช้ไม่ได้ ให้ใช้ Safe PNG Export Mode ไปก่อน
-
-## Excel Template Mode และ Excel COM
-
-โหมดที่แนะนำสำหรับ final report คือ **Excel Template Mode** เพราะโปรแกรมจะใช้ Microsoft Excel เปิดสำเนาของเทมเพลต แล้วเติมข้อมูลลงใน cell/range ที่กำหนดไว้ เพื่อรักษา:
-
-- Native Chart ใน Excel
-- สูตรในเทมเพลต
-- layout และ formatting ของ workbook
-
-ข้อกำหนดสำหรับ Excel Template Mode:
-
-- Windows
-- Microsoft Excel แบบ desktop app
-- `pywin32`
-
-หาก Excel COM ใช้งานไม่ได้ โปรแกรมจะ fallback ไปใช้ **Safe PNG Export Mode** ซึ่งใช้ openpyxl และกราฟ PNG แบบคงที่แทน
-
-## Basic Batch Processing v1.1
-
-Basic Batch v1.1 is intended for the same survey point or intersection surveyed
-across multiple days. Upload multiple raw TMC Excel workbooks, use one shared
-Mapping Preset and shared PCE factors, analyze the batch, confirm AM/PM peaks
-per file, then download one Batch ZIP.
-
-The batch ZIP contains `batch_summary.xlsx` plus one sanitized folder per
-successful input file. Each folder contains `report.xlsx`, `export_summary.txt`,
-`session.tmcproj.json`, `mapping_preset.mapping.json`, and chart PNGs. Raw input
-Excel files and local file paths are not included. If one workbook fails,
-processing continues and the failure is recorded in `batch_summary.xlsx`.
-
-## Mapping Preset vs Project Session
-
-- Mapping Preset (`.mapping.json`) stores only the mapping table: raw sheet,
-  source stream, movement label, output movement code, include flags, and
-  aggregation fields. Use it to reuse the same intersection mapping across
-  survey dates, raw workbooks, or team members.
-- Project Session (`.tmcproj.json`) stores the broader job setup, including
-  metadata, mapping, PCE factors, peak settings, and export settings. Use it to
-  reopen a full job configuration.
-
-## Project Session
-
-โปรแกรมรองรับการ Save / Load Project Session ผ่านไฟล์ `.tmcproj.json`
-
-Project Session ใช้เก็บการตั้งค่า เช่น:
-
-- ข้อมูลรายงาน
-- ป้ายปลายทางและชื่อถนน
-- Mapping
-- source stream / movement aggregation
-- ช่วง Peak ที่ยืนยันแล้ว
-- export settings
-
-ไฟล์ session **ไม่เก็บ raw Excel input file** เพื่อลดความเสี่ยงเรื่องข้อมูลจริงและขนาดไฟล์ ผู้ใช้ต้องอัปโหลด raw file ใหม่เมื่อต้องการเปิด session กลับมาใช้งาน
-
-## Many-to-one Movement Aggregation
-
-โปรแกรมรองรับกรณีที่หลาย source stream ต้องรวมเป็น movement เดียวในรายงาน เช่น:
-
-| Source stream | Raw movement | Output movement |
-|---|---|---|
-| mainline | ตรงทางหลัก | NS |
-| frontage | ตรงทางคู่ขนาน | NS |
-
-ผลลัพธ์ในตารางสรุปจะมี `NS` เพียงคอลัมน์เดียว โดยรวมค่าจาก source stream ทั้งหมด และสามารถตรวจสอบย้อนหลังได้ใน sheet `Movement_Aggregation_Audit`
-
-ค่า `source_stream` ที่รองรับใน Mapping editor ได้แก่:
-
-- `mainline`
-- `frontage`
-- `service_road`
-- `ramp`
-- `other`
-
-## โครงสร้าง output หลัก
-
-Workbook ที่ export จะมี sheet สำหรับตรวจสอบและใช้งานต่อ เช่น:
-
-- `Setup`
-- `Mapping`
-- `Normalized_Data`
-- `QC_Check`
-- `Hourly_Movement_PCU`
-- `Hourly_Vehicle_Class`
-- `Vehicle_Composition_Report`
-- `Vehicle_Group_PCE`
-- `PHF_15min`
-- `Peak_PHF`
-- `Diagram_Data`
-- `Movement_Aggregation_Audit`
-- `Report_Text`
-- `Charts`
-- sheet รายงานตามเทมเพลต
-
-ชื่อ sheet อาจเปลี่ยนได้ตามเวอร์ชันของโปรแกรมและการตั้งค่า export
-
-## การตรวจสอบสำหรับผู้พัฒนา
-
-ชุดทดสอบและสคริปต์ QA ภายในไม่ได้รวมอยู่ใน public release นี้ หากเพิ่มชุดทดสอบใน branch สำหรับพัฒนา สามารถติดตั้ง dependency เสริมได้ด้วย:
+Useful checks before release:
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m py_compile app.py
+python scripts/smoke_demo.py
+python -m pytest
 ```
 
-## ข้อจำกัดปัจจุบัน
-
-- โปรแกรมยังไม่ infer ทิศทางจราจรจาก geometry อัตโนมัติ ผู้ใช้ต้องตรวจและกำหนด Mapping เอง
-- โหมด Excel Template Mode ใช้งานได้เฉพาะ Windows ที่มี Microsoft Excel และ pywin32
-- Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่ จึงไม่รักษา Native Chart ของ Excel template
-- กรณีสะพาน/อุโมงค์/ทางยกระดับพิเศษยังควรจัดการด้วย tag/audit และ Mapping ก่อน ยังไม่ได้เป็น geometry engine เต็มรูปแบบ
-- Project Session ไม่เก็บ raw Excel file ต้องอัปโหลดไฟล์สำรวจใหม่เมื่อนำ session กลับมาใช้
-
-## ความเป็นส่วนตัวและข้อมูลจริง
-
-Repository นี้เป็น public repository ดังนั้นไม่ควร commit ไฟล์ที่มีข้อมูลจริง เช่น:
-
-- raw survey Excel files
-- ไฟล์รายงาน/output ที่สร้างจากข้อมูลจริง
-- Project Session ที่มีชื่อโครงการจริงหรือข้อมูลเฉพาะงาน
-- mapping files ที่อ้างอิงโครงการจริง
-- ไฟล์จากลูกค้า หรือไฟล์ที่มีข้อมูลที่ไม่ควรเผยแพร่
-
-แนะนำให้เก็บข้อมูลจริงไว้ในเครื่องหรือ private storage เท่านั้น และใช้ synthetic/demo data สำหรับ public repository
+The smoke demo uses synthetic files from `samples/demo/`.
 
 ## License
 
-This project is released under the MIT License. See LICENSE for details.
+This project is released under the MIT License. See [LICENSE](LICENSE).

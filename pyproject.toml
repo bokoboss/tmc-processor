@@ -1,6 +1,6 @@
 [project]
 name = "tmc-processor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Streamlit MVP for processing Turning Movement Count Excel files."
 requires-python = ">=3.10"
 dependencies = [
