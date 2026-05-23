@@ -16,6 +16,7 @@ import streamlit as st
 from tmc_processor.batch import (
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
     BATCH_PACKAGE_MIME,
+    BATCH_SAFE_PNG_EXPORT_MODE,
     BatchItem,
     analyze_batch_files,
     batch_analysis_qc_rows,
@@ -1623,6 +1624,17 @@ def _render_pce_factor_editor() -> dict[str, float]:
     return _current_pce_factors_from_state()
 
 
+def _pce_override_summary(selected_pce_factors: dict[str, float]) -> tuple[bool, str]:
+    traceability = pce_factor_traceability_frame(selected_pce_factors)
+    overrides = traceability[traceability["source"] == "user_override"]
+    if overrides.empty:
+        return False, "ใช้ค่าเริ่มต้น"
+    override_text = ", ".join(
+        f"{row.vehicle_class}={float(row.pce_factor):g}" for row in overrides.itertuples(index=False)
+    )
+    return True, override_text
+
+
 def _current_mapping_for_session() -> pd.DataFrame | None:
     mapping_value = st.session_state.get("mapping_table")
     if mapping_value is None:
@@ -2449,52 +2461,61 @@ def _run_streamlit_app() -> None:
 
     if is_single_file_mode:
       with setup_tab:
-        st.header("ตั้งค่างาน")
-        with st.container(border=True):
-            _render_section_header("ข้อมูลรายงาน", "ข้อมูลหลักที่จะใช้ในหน้าแรกของรายงาน")
-            report_cols = st.columns(3)
-            project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
-            tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
-            tmc_title = report_cols[2].text_input("ชื่อจุดนับ", key="tmc_title_input")
-            info_cols = st.columns(4)
-            survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
-            survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
-            weather = info_cols[2].text_input("สภาพอากาศ", key="weather_input")
-            responsible_party = info_cols[3].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
+        _render_section_header("ตั้งค่างาน", "ระบุข้อมูลงานและค่าที่ใช้ในการประมวลผลรายงาน")
+        if uploaded_file is None:
+            _render_action_hint("เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย")
 
-        with st.container(border=True):
-            _render_section_header("ค่าเริ่มต้นช่วงเร่งด่วน", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
-            period_row_1 = st.columns(4)
-            period_row_2 = st.columns(4)
-            survey_period = period_row_1[0].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
-            if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
-                st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
-            peak_mode = period_row_1[1].selectbox("รูปแบบการคำนวณ Peak", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
-            am_peak_window_start = period_row_1[2].time_input("เริ่มช่วง AM", step=900, key="am_peak_window_start_input")
-            am_peak_window_end = period_row_1[3].time_input("สิ้นสุดช่วง AM", step=900, key="am_peak_window_end_input")
-            pm_peak_window_start = period_row_2[0].time_input("เริ่มช่วง PM", step=900, key="pm_peak_window_start_input")
-            pm_peak_window_end = period_row_2[1].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
+        setup_left, setup_right = st.columns([1.15, 1])
+        with setup_left:
+            with st.container(border=True):
+                _render_section_header("ข้อมูลโครงการและรายงาน", "ข้อมูลหลักสำหรับปกและหัวรายงาน")
+                report_cols = st.columns(2)
+                project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
+                tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
+                tmc_title = st.text_input("ชื่อจุดนับ", key="tmc_title_input")
+                info_cols = st.columns(2)
+                survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
+                survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
+                weather = info_cols[0].text_input("สภาพอากาศ", key="weather_input")
+                responsible_party = info_cols[1].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
 
-        with st.container(border=True):
-            _render_section_header("ป้ายปลายทาง", "ข้อความปลายทางของแต่ละขาเข้า-ออก")
-            direction_cols = st.columns(4)
-            north_label = direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
-            south_label = direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
-            east_label = direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
-            west_label = direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+            with st.container(border=True):
+                _render_section_header("ช่วงสำรวจและ Peak", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
+                survey_period = st.text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+                if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
+                    st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
+                peak_mode = st.selectbox("รูปแบบการคำนวณ Peak", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
+                period_cols = st.columns(4)
+                am_peak_window_start = period_cols[0].time_input("เริ่มช่วง AM", step=900, key="am_peak_window_start_input")
+                am_peak_window_end = period_cols[1].time_input("สิ้นสุดช่วง AM", step=900, key="am_peak_window_end_input")
+                pm_peak_window_start = period_cols[2].time_input("เริ่มช่วง PM", step=900, key="pm_peak_window_start_input")
+                pm_peak_window_end = period_cols[3].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
 
-        with st.container(border=True):
-            _render_section_header("ชื่อถนน / ทางหลวง", "ชื่อถนนที่จะแสดงในแผนภาพและรายงาน")
-            road_cols = st.columns(4)
-            north_road = road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
-            south_road = road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
-            east_road = road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
-            west_road = road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
-            st.markdown("#### คำบรรยายรูป Diagram")
-            caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
-            show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
+        with setup_right:
+            with st.container(border=True):
+                _render_section_header("ป้ายปลายทางและถนน", "ข้อความที่ใช้ใน Diagram และรายงาน")
+                st.caption("ป้ายปลายทาง")
+                direction_cols = st.columns(2)
+                north_label = direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
+                south_label = direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
+                east_label = direction_cols[0].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
+                west_label = direction_cols[1].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+                st.caption("ชื่อถนน / ทางหลวง")
+                road_cols = st.columns(2)
+                north_road = road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
+                south_road = road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
+                east_road = road_cols[0].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
+                west_road = road_cols[1].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
+                caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
+                show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
 
-        selected_pce_factors = _render_pce_factor_editor()
+            with st.container(border=True):
+                _render_section_header("ค่า PCE", "แก้เฉพาะกรณีต้องใช้ค่าเทียบเท่ารถยนต์นั่งต่างจากค่าเริ่มต้น")
+                selected_pce_factors = _render_pce_factor_editor()
+                has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+                _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
+                if has_overrides:
+                    st.caption(override_text)
 
     if not is_single_file_mode:
         project_name = st.session_state.get("project_name_input", "")
@@ -2786,61 +2807,91 @@ def _run_streamlit_app() -> None:
         batch_result = st.session_state.get("tmc_batch_export_result")
 
         with setup_tab:
-            st.header("ตั้งค่างาน Batch")
-            with st.container(border=True):
-                _render_section_header(
-                    "ขอบเขต Batch",
-                    "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
-                )
-                setup_cols = st.columns(3)
-                setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
-                setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
-                setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
-                direction_cols = st.columns(4)
-                direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
-                direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
-                direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
-                direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
-                road_cols = st.columns(4)
-                road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
-                road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
-                road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
-                road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
-                selected_pce_factors = _render_pce_factor_editor()
+            _render_section_header("ตั้งค่า Batch", "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+            if batch_stale:
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
 
-            with st.container(border=True):
-                _render_section_header("ไฟล์ใน Batch", "แก้เฉพาะวันที่สำรวจ ชื่อไฟล์ส่งออก และหมายเหตุรายไฟล์")
-                if not batch_metadata_rows:
-                    _render_empty_state("ยังไม่มีไฟล์ Batch", "อัปโหลดไฟล์ TMC Excel หลายไฟล์ใน sidebar")
-                else:
-                    st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
-                    metadata_version = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0)
-                    edited_metadata = st.data_editor(
-                        pd.DataFrame(batch_metadata_rows),
-                        key=f"tmc_batch_file_metadata_editor_{metadata_version}",
-                        hide_index=True,
-                        width="stretch",
-                        disabled=["file_name"],
-                        column_config={
-                            "file_name": st.column_config.TextColumn("file_name"),
-                            "survey_date_text": st.column_config.TextColumn("survey_date_text"),
-                            "output_stem": st.column_config.TextColumn("output_stem"),
-                            "notes": st.column_config.TextColumn("notes"),
-                        },
+            batch_left, batch_right = st.columns([1.1, 1])
+            with batch_left:
+                with st.container(border=True):
+                    _render_section_header("ขอบเขต Batch", "ค่ากลางที่จะใช้ร่วมกันทุกไฟล์")
+                    _render_readiness_checklist(
+                        [
+                            ("ใช้ Mapping Preset เดียวกันทุกไฟล์", mapping_ready, "เปิดไฟล์ Preset ใน sidebar"),
+                            ("ใช้ค่า PCE ชุดเดียวกัน", pce_ready, ""),
+                            ("ตรวจ Peak แยกแต่ละไฟล์", bool(batch_analysis), "อยู่ในแท็บตรวจ Peak"),
+                            ("ไม่รวม raw Excel ใน ZIP", True, "แพ็กเกจส่งออกมีเฉพาะรายงานและไฟล์ประกอบ"),
+                        ]
                     )
-                    cleaned_metadata = []
-                    for row in edited_metadata.to_dict("records"):
-                        cleaned_metadata.append(
-                            {
-                                "file_name": Path(str(row.get("file_name", ""))).name,
-                                "survey_date_text": str(row.get("survey_date_text", "") or ""),
-                                "output_stem": safe_output_stem(str(row.get("output_stem", "") or row.get("file_name", ""))),
-                                "notes": str(row.get("notes", "") or ""),
-                            }
+                    setup_cols = st.columns(3)
+                    setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
+                    setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
+                    setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+                    direction_cols = st.columns(4)
+                    direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
+                    direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
+                    direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
+                    direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+                    road_cols = st.columns(4)
+                    road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
+                    road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
+                    road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
+                    road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
+
+                with st.container(border=True):
+                    _render_section_header("ค่า PCE ร่วม", "ค่า PCE ชุดนี้จะใช้กับทุกไฟล์ใน Batch")
+                    selected_pce_factors = _render_pce_factor_editor()
+                    has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+                    _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
+                    if has_overrides:
+                        st.caption(override_text)
+
+            with batch_right:
+                with st.container(border=True):
+                    _render_section_header("ไฟล์ที่อัปโหลด", "ตรวจจำนวนไฟล์และชื่อไฟล์ก่อนวิเคราะห์ Batch")
+                    if not batch_metadata_rows:
+                        _render_action_hint("อัปโหลดไฟล์ TMC Excel หลายไฟล์ในแถบด้านซ้าย")
+                    else:
+                        _render_metric_strip(
+                            [
+                                ("จำนวนไฟล์", f"{len(batch_metadata_rows):,}", "ไฟล์", "พร้อมตั้งค่ารายไฟล์"),
+                            ],
+                            columns=1,
                         )
-                    if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
-                        st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
-                        _mark_batch_stale_now()
+                        st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
+
+                with st.container(border=True):
+                    _render_section_header("ข้อมูลรายไฟล์", "survey_date_text และ output_stem จะใช้ในรายงานและ ZIP")
+                    if not batch_metadata_rows:
+                        _render_empty_state("ยังไม่มีข้อมูลรายไฟล์", "อัปโหลดไฟล์ Batch เพื่อสร้างตารางตั้งค่า")
+                    else:
+                        metadata_version = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0)
+                        edited_metadata = st.data_editor(
+                            pd.DataFrame(batch_metadata_rows),
+                            key=f"tmc_batch_file_metadata_editor_{metadata_version}",
+                            hide_index=True,
+                            width="stretch",
+                            disabled=["file_name"],
+                            column_config={
+                                "file_name": st.column_config.TextColumn("ชื่อไฟล์ต้นทาง"),
+                                "survey_date_text": st.column_config.TextColumn("วันที่สำรวจ"),
+                                "output_stem": st.column_config.TextColumn("ชื่อไฟล์ส่งออก"),
+                                "notes": st.column_config.TextColumn("หมายเหตุ"),
+                            },
+                        )
+                        cleaned_metadata = []
+                        for row in edited_metadata.to_dict("records"):
+                            cleaned_metadata.append(
+                                {
+                                    "file_name": Path(str(row.get("file_name", ""))).name,
+                                    "survey_date_text": str(row.get("survey_date_text", "") or ""),
+                                    "output_stem": safe_output_stem(str(row.get("output_stem", "") or row.get("file_name", ""))),
+                                    "notes": str(row.get("notes", "") or ""),
+                                }
+                            )
+                        if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
+                            st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
+                            _mark_batch_stale_now()
 
         with mapping_tab:
             st.header("กำหนดทิศทาง Batch")
@@ -3006,27 +3057,61 @@ def _run_streamlit_app() -> None:
                 _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด Analyze Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
         with export_tab:
-            st.header("ส่งออก Batch")
+            _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             no_successful_files = not batch_analysis or not batch_analysis.successful_items
             peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
-            st.info(f"Batch export mode: {batch_export_mode}")
-            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                st.warning("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
-                if len(batch_uploads or []) > 10:
-                    st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
-            else:
-                st.info("Safe PNG Export Mode เป็นโหมดสำรอง / โหมดตรวจงานที่เร็วกว่า โดยใช้กราฟ PNG แบบคงที่")
+            output_stems_valid = all(str(row.get("output_stem", "")).strip() for row in st.session_state.get("tmc_batch_file_metadata_table") or [])
+            export_mode_ready = bool(
+                batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
+                or excel_com_status.available
+                or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+            )
+
+            batch_export_left, batch_export_right = st.columns([0.95, 1.05])
+            with batch_export_left:
+                with st.container(border=True):
+                    _render_section_header("โหมดส่งออก", "สถานะโหมดที่เลือกสำหรับ Batch")
+                    _render_status_chip(batch_export_mode, "success" if export_mode_ready else "warning")
+                    _render_alert(
+                        "Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์",
+                        "warning" if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) else "info",
+                    )
+                    _render_alert(
+                        "เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้",
+                        "info",
+                    )
+                    if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) and len(batch_uploads or []) > 10:
+                        _render_alert("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น", "warning")
+
+            with batch_export_right:
+                with st.container(border=True):
+                    _render_section_header("ความพร้อม Batch", "ตรวจเงื่อนไขก่อนสร้าง Batch ZIP")
+                    _render_readiness_checklist(
+                        [
+                            ("อัปโหลดไฟล์แล้ว", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
+                            ("Mapping Preset พร้อม", mapping_ready, "ใช้ Preset เดียวกันทุกไฟล์"),
+                            ("วิเคราะห์ Batch แล้วและข้อมูลไม่ stale", bool(batch_analysis and not batch_stale), ""),
+                            ("ยืนยัน Peak ของไฟล์ที่สำเร็จแล้ว", peaks_ready, ""),
+                            ("output_stem ใช้งานได้", output_stems_valid, "ใช้เป็นชื่อโฟลเดอร์และชื่อรายงาน"),
+                            ("โหมดส่งออกพร้อม", export_mode_ready, ""),
+                        ]
+                    )
             if batch_stale:
-                st.warning(BATCH_STALE_MESSAGE_TH)
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
             block_reason = batch_zip_generation_block_reason(
                 has_successful_files=not no_successful_files,
                 peaks_ready=peaks_ready,
                 batch_stale=batch_stale,
             )
-            generate_disabled = bool(block_reason)
-            _render_action_hint(block_reason or "สร้าง ZIP หลังจากตรวจและยืนยัน Peak ครบทุกไฟล์แล้ว")
+            generate_disabled = bool(block_reason) or not output_stems_valid or not export_mode_ready
+            _render_section_header("สร้าง Batch ZIP", "สร้างแพ็กเกจหลังจากตรวจและยืนยัน Peak ครบทุกไฟล์แล้ว")
+            if not output_stems_valid and not block_reason:
+                block_reason = "ตรวจสอบ output_stem ในแท็บตั้งค่า Batch ก่อนสร้าง ZIP"
+            if not export_mode_ready and not block_reason:
+                block_reason = "โหมดส่งออกยังไม่พร้อม"
+            _render_action_hint(block_reason or "พร้อมสร้าง Batch ZIP")
             generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
             if generate_batch and batch_analysis:
                 block_reason = batch_zip_generation_block_reason(
@@ -3050,8 +3135,30 @@ def _run_streamlit_app() -> None:
                     )
                 st.session_state["tmc_batch_export_result"] = batch_result
                 st.success("สร้าง Batch ZIP เสร็จแล้ว")
+            with st.expander("ตัวอย่างไฟล์ใน Batch ZIP", expanded=False):
+                st.code(
+                    "\n".join(
+                        [
+                            "batch_summary.xlsx",
+                            "<output_stem>/report.xlsx",
+                            "<output_stem>/export_summary.txt",
+                            "<output_stem>/session.tmcproj.json",
+                            "<output_stem>/mapping.json",
+                            "<output_stem>/charts/",
+                        ]
+                    ),
+                    language="text",
+                )
+                st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
             if batch_result:
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
+                _render_section_header("สถานะส่งออกรายไฟล์", "ผลการสร้างรายงานใน Batch ล่าสุด")
+                status_display = _batch_status_display_frame(batch_analysis, batch_result)
+                status_columns = [
+                    column
+                    for column in ["ชื่อไฟล์", "ชื่อส่งออก", "สถานะส่งออก", "โหมดส่งออกที่ใช้", "หมายเหตุ"]
+                    if column in status_display.columns
+                ]
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch")
                 with st.expander("ZIP contents preview", expanded=True):
                     st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
                     st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
@@ -3221,50 +3328,55 @@ def _run_streamlit_app() -> None:
     
     if is_single_file_mode:
         with export_tab:
-            st.header("ส่งออกไฟล์")
-            st.markdown("#### โหมดส่งออกรายงาน")
-            if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
-                st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
-            else:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
-                st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
-
-            st.markdown("#### Excel Engine")
-            if excel_com_status.available:
-                version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
-                st.success(f"Excel COM พร้อมใช้งาน — {version_text}")
-            else:
-                st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}")
-            st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
-            with st.expander("รายละเอียด Excel COM", expanded=False):
-                _render_excel_com_status(excel_com_status)
-
-            _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
-            if result is not None:
-                _render_qc_status(result.qc)
             confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
-            _render_readiness_checklist(
-                [
-                    ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
-                    ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
-                    ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
-                    ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
-                    (
-                        "Excel COM พร้อมใช้งาน",
-                        bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-                        "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
-                    ),
-                ]
-            )
+            _render_section_header("ส่งออกรายงาน", "สร้างรายงาน Excel และชุดไฟล์ประกอบสำหรับตรวจสอบย้อนหลัง")
+
+            export_status_col, readiness_col = st.columns([0.9, 1.1])
+            with export_status_col:
+                with st.container(border=True):
+                    _render_section_header("โหมดส่งออก", "แสดงสถานะโหมดที่เลือกจากแถบด้านซ้าย")
+                    if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
+                        st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
+                        st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
+                    else:
+                        st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
+                        st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
+
+                    if excel_com_status.available:
+                        version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
+                        _render_alert(f"Excel COM พร้อมใช้งาน: {version_text}", "success")
+                    else:
+                        _render_alert(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}", "warning")
+                    st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
+                    with st.expander("รายละเอียด Excel COM", expanded=False):
+                        _render_excel_com_status(excel_com_status)
+
+            with readiness_col:
+                with st.container(border=True):
+                    _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบแบบย่อก่อนสร้างรายงาน")
+                    if result is not None:
+                        _render_qc_status(result.qc)
+                    _render_readiness_checklist(
+                        [
+                            ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
+                            ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
+                            ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
+                            ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
+                            (
+                                "Excel COM พร้อมใช้งาน",
+                                bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
+                                "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+                            ),
+                        ]
+                    )
 
             use_template_report_layout = st.checkbox(
                 "ใช้รูปแบบรายงานจาก Excel Template หากพร้อมใช้งาน",
                 key="use_template_report_layout_checkbox",
             )
-            st.markdown("#### ดาวน์โหลดไฟล์")
+            _render_section_header("สร้างและดาวน์โหลด", "สร้างรายงานก่อน แล้วจึงดาวน์โหลด Excel หรือ Export Package ZIP")
             if pce_results_stale:
-                st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
+                _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
             _render_action_hint("สร้างรายงานหลังจากประมวลผลและยืนยันช่วงเร่งด่วน AM/PM แล้ว")
             export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
             if export_run:
@@ -3410,6 +3522,23 @@ def _run_streamlit_app() -> None:
                     chart_pngs=output.get("chart_pngs", {}),
                     diagram_png=output.get("diagram_png"),
                 )
+                with st.expander("ตัวอย่างไฟล์ใน Export Package ZIP", expanded=False):
+                    st.code(
+                        "\n".join(
+                            [
+                                output["workbook_filename"],
+                                "export_summary.txt",
+                                session_filename,
+                                "mapping_preset.mapping.json",
+                                "mapping.csv",
+                                "charts/hourly_pcu_chart.png",
+                                "charts/vehicle_composition_chart.png",
+                                "charts/tmc_movement_diagram.png",
+                            ]
+                        ),
+                        language="text",
+                    )
+                    st.caption("Export Package ZIP ไม่รวม raw input Excel")
                 _render_download_button(
                     "ดาวน์โหลด Export Package ZIP",
                     package_bytes,
