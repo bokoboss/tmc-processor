@@ -85,12 +85,12 @@ def hourly_pcu_chart_png(
     y_values = _coerce_number(chart_data["Total"])
 
     fig, ax = plt.subplots(figsize=(10, 5.2))
-    ax.plot(x_labels, y_values, color="#1F6F8B", linewidth=2.4, marker="o", markersize=4.8)
-    ax.fill_between(range(len(x_labels)), y_values.to_numpy(), color="#C7E3EA", alpha=0.45)
+    ax.plot(x_labels, y_values, color="#0E4A2A", linewidth=2.4, marker="o", markersize=4.8)
+    ax.fill_between(range(len(x_labels)), y_values.to_numpy(), color="#E8EFE7", alpha=0.7)
     ax.set_title("ปริมาณจราจรรายชั่วโมง (PCU)", fontsize=16, fontweight="bold", pad=14)
     ax.set_xlabel("เวลา", fontsize=12)
     ax.set_ylabel("ปริมาณจราจร (PCU/ชั่วโมง)", fontsize=12)
-    ax.grid(axis="y", color="#D9E2E8", linewidth=0.8)
+    ax.grid(axis="y", color="#E6E1D8", linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
     ax.tick_params(axis="x", rotation=35)
     ax.set_ylim(bottom=0)
@@ -138,12 +138,12 @@ def vehicle_composition_chart_png(
 
     height = max(4.8, 0.38 * len(chart_data) + 1.8)
     fig, ax = plt.subplots(figsize=(10, height))
-    colors = ["#A23E48" if index % 2 else "#2E6F95" for index in range(len(chart_data))]
+    colors = ["#B57A22" if index % 2 else "#0E4A2A" for index in range(len(chart_data))]
     bars = ax.barh(chart_data[label_column].astype(str), chart_data[percent_column], color=colors, alpha=0.88)
     ax.set_title("สัดส่วนประเภทยานพาหนะ", fontsize=16, fontweight="bold", pad=14)
     ax.set_xlabel("สัดส่วน (%)", fontsize=12)
     ax.set_ylabel("ประเภทยานพาหนะ", fontsize=12)
-    ax.grid(axis="x", color="#D9E2E8", linewidth=0.8)
+    ax.grid(axis="x", color="#E6E1D8", linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xlim(left=0)
     ax.set_title(_chart_title(ax.get_title(), setup), fontsize=16, fontweight="bold", pad=14)
