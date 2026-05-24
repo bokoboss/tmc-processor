@@ -490,7 +490,8 @@ def _setup_first_lookup_formula(*fields: str) -> str:
 
 def _setup_join_formula(*fields: str) -> str:
     parts = [_setup_lookup_expr(field) for field in fields]
-    return f'=TRIM({"&\" \"&".join(parts)})'
+    separator = '&" "&'
+    return f'=TRIM({separator.join(parts)})'
 
 
 def _setup_survey_point_formula() -> str:
