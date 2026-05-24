@@ -2238,9 +2238,6 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str) -> pd.DataFrame
         "source_stream",
         "raw_movement_label",
         "movement_code",
-        "from_leg",
-        "to_leg",
-        "turn_type",
         "include_in_report",
         "include_in_peak",
     ]
@@ -2715,6 +2712,75 @@ def _thai_aggregation_message(message: str) -> str:
     return message
 
 
+def _mapping_workspace_counts(mapping: pd.DataFrame, detected_sheet_names: list[str] | tuple[str, ...]) -> dict[str, int]:
+    frame = pd.DataFrame(mapping)
+    if frame.empty:
+        return {
+            "rows": 0,
+            "detected_sheets": len(detected_sheet_names or []),
+            "included": 0,
+            "excluded": 0,
+            "peak_included": 0,
+            "duplicate_movements": 0,
+            "blank_source_stream": 0,
+        }
+    include_report = frame["include_in_report"].fillna(True).astype(bool) if "include_in_report" in frame else pd.Series(True, index=frame.index)
+    include_peak = frame["include_in_peak"].fillna(True).astype(bool) if "include_in_peak" in frame else pd.Series(True, index=frame.index)
+    movement = frame["movement_code"].fillna("").astype(str).str.strip() if "movement_code" in frame else pd.Series("", index=frame.index)
+    included_movement = movement[include_report & (movement != "")]
+    source_stream = frame["source_stream"].fillna("").astype(str).str.strip() if "source_stream" in frame else pd.Series("", index=frame.index)
+    return {
+        "rows": int(len(frame)),
+        "detected_sheets": len(detected_sheet_names or []),
+        "included": int(include_report.sum()),
+        "excluded": int((~include_report).sum()),
+        "peak_included": int(include_peak.sum()),
+        "duplicate_movements": int((included_movement.value_counts() > 1).sum()),
+        "blank_source_stream": int((source_stream == "").sum()),
+    }
+
+
+def _mapping_aggregation_preview(mapping: pd.DataFrame) -> pd.DataFrame:
+    frame = pd.DataFrame(mapping)
+    columns = ["output_movement_code", "source_stream count", "raw_movement_label/source_direction", "aggregation_method"]
+    if frame.empty or "movement_code" not in frame:
+        return pd.DataFrame(columns=columns)
+    include_report = frame["include_in_report"].fillna(True).astype(bool) if "include_in_report" in frame else pd.Series(True, index=frame.index)
+    movement = frame["movement_code"].fillna("").astype(str).str.strip()
+    included = frame[include_report & (movement != "")].copy()
+    if included.empty:
+        return pd.DataFrame(columns=columns)
+    included["output_movement_code"] = included["movement_code"].fillna("").astype(str).str.strip()
+    for column in ("source_stream", "raw_movement_label", "raw_direction", "raw_sheet", "aggregation_method"):
+        if column not in included:
+            included[column] = ""
+        included[column] = included[column].fillna("").astype(str)
+    rows = []
+    for movement_code, group in included.groupby("output_movement_code", dropna=False):
+        if len(group) <= 1:
+            continue
+        label_parts = []
+        for _, row in group.iterrows():
+            label = str(row.get("raw_movement_label") or row.get("raw_direction") or row.get("raw_sheet") or "").strip()
+            if label:
+                label_parts.append(label)
+        rows.append(
+            {
+                "output_movement_code": movement_code,
+                "source_stream count": int(group["source_stream"].replace("", pd.NA).nunique(dropna=True) or len(group)),
+                "raw_movement_label/source_direction": ", ".join(label_parts[:4]),
+                "aggregation_method": ", ".join(sorted({str(value) for value in group["aggregation_method"] if str(value).strip()})),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _mapping_preset_rows_frame(preset: dict[str, object] | None) -> pd.DataFrame:
+    if not preset:
+        return pd.DataFrame()
+    return pd.DataFrame(preset.get("mapping_rows") or preset.get("rows") or [])
+
+
 def _thai_mapping_control_warning(message: str) -> str:
     if message.startswith("Unknown ") and " value(s) " in message:
         return f"พบค่าใน Mapping ที่อยู่นอกตัวเลือก ระบบโหลดแบบปลอดภัยแล้ว ({message})"
@@ -3131,22 +3197,18 @@ def _run_streamlit_app() -> None:
 
     if is_single_file_mode:
         if active_tab == "กำหนดทิศทาง":
-            st.header("กำหนดทิศทาง")
+            _render_section_header(
+                "กำหนดทิศทาง",
+                "จับคู่ข้อมูลจากชีตสำรวจเข้ากับรหัสการเคลื่อนที่มาตรฐาน ก่อนประมวลผลรายงาน",
+            )
             if uploaded_file is None:
                 _render_empty_state(
                     "ยังไม่มีไฟล์สำรวจ",
-                    "อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ",
+                    "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย",
                 )
             elif not detected_sheet_names:
-                st.warning('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"')
+                _render_alert('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"', "warning")
             else:
-                with st.expander("Sheet ทิศทางที่ตรวจพบ", expanded=False):
-                    st.dataframe(preview_summary, width="stretch")
-                _render_section_header(
-                    "ตารางกำหนดทิศทาง",
-                    "ตรวจสอบ Sheet สำรวจและกำหนด movement สำหรับรายงาน",
-                )
-                st.caption("หลายแถวสามารถ map ไปยัง movement เดียวกันได้ เช่น ทางหลักตรง + ทางคู่ขนานตรง → NS")
                 default_mapping = default_mapping_for_sheets(detected_sheet_names)
                 if st.session_state.get("mapping_table") is not None:
                     default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
@@ -3161,7 +3223,8 @@ def _run_streamlit_app() -> None:
                 st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
                 st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
 
-                with st.expander("นำเข้า/ส่งออก Mapping", expanded=False):
+                with st.container(border=True):
+                    _render_section_header("นำเข้า/ส่งออก Mapping", "เลือกใช้ Mapping Excel สำหรับแก้ไขใน Excel หรือ Mapping Preset สำหรับนำค่าที่ตั้งไว้กลับมาใช้ซ้ำ")
                     mapping_excel_col, mapping_preset_col = st.columns(2)
                     with mapping_excel_col:
                         st.markdown("**Mapping Excel**")
@@ -3241,15 +3304,41 @@ def _run_streamlit_app() -> None:
                         f"{preset_info.get('extra', 0)} preset rows were not found in current workbook."
                     )
                 for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
-                    st.warning(warning_message)
+                    _render_alert(warning_message, "warning")
+
+                mapping_issues = validate_mapping_for_processing(detected_sheet_names, default_mapping)
+                mapping_counts = _mapping_workspace_counts(default_mapping, detected_sheet_names)
+                _render_metric_strip(
+                    [
+                        ("ไฟล์สำรวจ", "โหลดแล้ว", "", uploaded_file.name, "พร้อม"),
+                        ("Sheet ที่พบ", mapping_counts["detected_sheets"], "sheet", "ตรวจจาก workbook", "พร้อม"),
+                        ("แถว Mapping", mapping_counts["rows"], "แถว", "source of truth", "พร้อม" if mapping_counts["rows"] else "ต้องตรวจสอบ"),
+                        ("Movement ที่ใช้", mapping_counts["included"], "แถว", f"ไม่รวม {mapping_counts['excluded']:,} แถว", "พร้อม" if mapping_counts["included"] else "ต้องตรวจสอบ"),
+                        ("รวมหลาย source", mapping_counts["duplicate_movements"], "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if mapping_counts["duplicate_movements"] else "พร้อม"),
+                        ("สถานะ Mapping", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ", "", "ประมวลผลได้" if mapping_issues.empty else f"{len(mapping_issues):,} รายการ", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ"),
+                    ],
+                    columns=6,
+                )
+
+                action_col, readiness_col = st.columns([0.82, 1.18])
+                with action_col:
+                    run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty, key="process_tmc_mapping_top")
+                with readiness_col:
+                    if mapping_issues.empty:
+                        _render_alert("การกำหนดทิศทางพร้อมสำหรับประมวลผล", "success")
+                    else:
+                        _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
                 mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
                 for warning_message in mapping_control_warnings(default_mapping):
-                    st.warning(_thai_mapping_control_warning(warning_message))
+                    _render_alert(_thai_mapping_control_warning(warning_message), "warning")
                 movement_code_options = selectbox_options_with_existing_values(
                     ["", *MOVEMENT_CODE_OPTIONS],
                     default_mapping["movement_code"] if "movement_code" in default_mapping else None,
                 )
+                with st.expander("Sheet ทิศทางที่ตรวจพบ", expanded=False):
+                    st.dataframe(preview_summary, width="stretch")
+                _render_section_header("ตาราง Mapping", "ตารางนี้เป็น source of truth สำหรับการจับคู่ movement")
                 mapping_view = st.radio(
                     "มุมมองตาราง Mapping",
                     options=["Basic", "Advanced"],
@@ -3265,7 +3354,7 @@ def _run_streamlit_app() -> None:
                         "raw_sheet": st.column_config.TextColumn("Sheet ต้นทาง", disabled=True),
                         "raw_direction": st.column_config.TextColumn("ทิศทางต้นทาง", disabled=True),
                         "movement_code": st.column_config.SelectboxColumn(
-                            "movement_code สำหรับรายงาน",
+                            "output_movement_code",
                             options=movement_code_options,
                             required=True,
                         ),
@@ -3299,20 +3388,29 @@ def _run_streamlit_app() -> None:
                 mapping = _merge_mapping_editor_result(default_mapping, pd.DataFrame(mapping))
                 st.session_state["mapping_table"] = mapping.to_dict("records")
                 st.session_state["tmc_mapping_table_from_session"] = False
+                mapping_counts = _mapping_workspace_counts(mapping, detected_sheet_names)
 
-                with st.expander("ตรวจสอบการรวม movement", expanded=False):
-                    for aggregation_message in movement_aggregation_messages(mapping):
-                        st.info(_thai_aggregation_message(aggregation_message))
+                aggregation_preview = _mapping_aggregation_preview(mapping)
+                if not aggregation_preview.empty:
+                    _render_alert("พบ movement ที่รวมจากหลาย source stream", "info")
+                    with st.expander("Audit: movement ที่รวมจากหลาย source stream", expanded=False):
+                        st.dataframe(aggregation_preview, width="stretch", hide_index=True)
+                        for aggregation_message in movement_aggregation_messages(mapping):
+                            st.caption(_thai_aggregation_message(aggregation_message))
     
                 mapping_issues = validate_mapping_for_processing(detected_sheet_names, mapping)
                 if mapping_issues.empty:
-                    st.success("การกำหนดทิศทางพร้อมสำหรับประมวลผล")
+                    _render_alert("Mapping พร้อมใช้งาน", "success")
                 else:
-                    st.warning("กรุณาตรวจสอบ Mapping ก่อนประมวลผล")
-                    st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
+                    _render_alert("มีรายการที่ต้องตรวจสอบก่อนประมวลผล", "warning")
+                    with st.expander("รายการที่ต้องตรวจสอบ", expanded=True):
+                        st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
+                if mapping_counts["blank_source_stream"]:
+                    _render_alert(f"พบ source_stream ว่าง {mapping_counts['blank_source_stream']:,} แถว ระบบจะใช้ค่าเริ่มต้นตามพฤติกรรมเดิมเมื่อรวมข้อมูล", "info")
+                if mapping_counts["excluded"]:
+                    _render_alert(f"มีแถวที่ไม่แสดงในรายงาน {mapping_counts['excluded']:,} แถว", "info")
 
-                run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty)
-                if run:
+                if run and mapping_issues.empty:
                     try:
                         raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
                         result = process_tmc(
@@ -3456,16 +3554,34 @@ def _run_streamlit_app() -> None:
                             _mark_batch_export_stale_now()
 
         if active_tab == "กำหนดทิศทาง":
-            st.header("กำหนดทิศทาง Batch")
-            with st.container(border=True):
-                _render_section_header("Mapping Preset", "Mapping Preset เดียวจะถูกใช้กับทุกไฟล์ที่อัปโหลด")
-                if loaded_batch_preset:
-                    st.success(f"โหลด Mapping Preset แล้ว: {batch_preset_name}")
-                    preset_rows = pd.DataFrame(loaded_batch_preset.get("mapping_rows") or loaded_batch_preset.get("rows") or [])
-                    if not preset_rows.empty:
-                        st.dataframe(_ordered_mapping_frame(preset_rows), width="stretch")
-                else:
-                    _render_empty_state("ยังไม่มี Mapping Preset", "เปิด Mapping Preset ใน sidebar เพื่อใช้กับทุกไฟล์")
+            _render_section_header(
+                "กำหนดทิศทาง Batch",
+                "ใช้ Mapping Preset เดียวกันสำหรับไฟล์สำรวจหลายวันของจุดเดียวกัน",
+            )
+            preset_rows = _mapping_preset_rows_frame(loaded_batch_preset)
+            preset_code_column = "output_movement_code" if "output_movement_code" in preset_rows else "movement_code"
+            preset_included = 0
+            preset_duplicate_count = 0
+            if not preset_rows.empty:
+                preset_include = preset_rows["include_in_report"].fillna(True).astype(bool) if "include_in_report" in preset_rows else pd.Series(True, index=preset_rows.index)
+                preset_codes = preset_rows[preset_code_column].fillna("").astype(str).str.strip() if preset_code_column in preset_rows else pd.Series("", index=preset_rows.index)
+                preset_included = int((preset_include & (preset_codes != "")).sum())
+                preset_duplicate_count = int((preset_codes[preset_include & (preset_codes != "")].value_counts() > 1).sum())
+
+            _render_metric_strip(
+                [
+                    ("Mapping Preset", "โหลดแล้ว" if loaded_batch_preset else "ยังไม่โหลด", "", batch_preset_name if loaded_batch_preset else "เปิดไฟล์ Preset ที่ sidebar", "พร้อม" if loaded_batch_preset else "ต้องตรวจสอบ"),
+                    ("แถว Mapping", len(preset_rows), "แถว", "shared preset", "พร้อม" if loaded_batch_preset else "ต้องตรวจสอบ"),
+                    ("Movement ที่ใช้", preset_included, "แถว", "include_in_report", "พร้อม" if preset_included else "ต้องตรวจสอบ"),
+                    ("รวมหลาย source", preset_duplicate_count, "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if preset_duplicate_count else "พร้อม"),
+                ],
+                columns=4,
+            )
+
+            if not batch_uploads:
+                _render_action_hint("อัปโหลดไฟล์ TMC หลายไฟล์ที่แถบด้านซ้ายก่อนตรวจ Mapping")
+            if not loaded_batch_preset:
+                _render_action_hint("เปิด Mapping Preset เพื่อใช้กับไฟล์ Batch")
 
             with st.container(border=True):
                 _render_section_header("Sheet matching status", "ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
@@ -3477,18 +3593,62 @@ def _run_streamlit_app() -> None:
                         try:
                             detected = detect_raw_direction_sheet_names(BytesIO(file.getvalue()))
                             apply_result = apply_mapping_preset_to_detected_sheets(loaded_batch_preset, detected)
+                            missing_sheets = ", ".join(apply_result.missing_detected_sheets)
+                            extra_sheets = ", ".join(apply_result.extra_preset_sheets)
                             status_rows.append(
                                 {
                                     "file_name": Path(file.name).name,
-                                    "matched sheets": apply_result.matched_sheet_count,
-                                    "missing detected sheets": apply_result.missing_detected_sheet_count,
-                                    "preset rows not found": apply_result.extra_preset_row_count,
-                                    "status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
+                                    "detected_sheets": len(detected),
+                                    "matched_sheets": apply_result.matched_sheet_count,
+                                    "missing_detected_sheets": apply_result.missing_detected_sheet_count,
+                                    "preset_rows_not_found": apply_result.extra_preset_row_count,
+                                    "mapping_status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
+                                    "notes": missing_sheets or extra_sheets or "",
                                 }
                             )
                         except Exception as exc:
-                            status_rows.append({"file_name": Path(file.name).name, "matched sheets": 0, "missing detected sheets": 0, "preset rows not found": 0, "status": str(exc)})
-                    st.dataframe(pd.DataFrame(status_rows), width="stretch")
+                            status_rows.append(
+                                {
+                                    "file_name": Path(file.name).name,
+                                    "detected_sheets": 0,
+                                    "matched_sheets": 0,
+                                    "missing_detected_sheets": 0,
+                                    "preset_rows_not_found": 0,
+                                    "mapping_status": "อ่านไฟล์ไม่สำเร็จ",
+                                    "notes": str(exc),
+                                }
+                            )
+                    st.dataframe(pd.DataFrame(status_rows), width="stretch", hide_index=True)
+
+            if loaded_batch_preset and not preset_rows.empty:
+                with st.expander("ตัวอย่าง Mapping Preset", expanded=False):
+                    preview_columns = [
+                        column
+                        for column in [
+                            "raw_sheet",
+                            "raw_direction",
+                            "source_stream",
+                            "raw_movement_label",
+                            "output_movement_code",
+                            "include_in_report",
+                            "include_in_peak",
+                            "aggregation_method",
+                        ]
+                        if column in preset_rows.columns
+                    ]
+                    st.dataframe(preset_rows[preview_columns].head(50) if preview_columns else preset_rows.head(50), width="stretch", hide_index=True)
+
+            _render_section_header("ความพร้อม Batch", "ตรวจรายการจำเป็นก่อนวิเคราะห์ในแท็บ ตรวจ Peak")
+            _render_readiness_checklist(
+                [
+                    ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
+                    ("Mapping Preset ready", mapping_ready, batch_preset_name if mapping_ready else "ยังไม่เปิด Preset"),
+                    ("PCE ready", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจค่า PCE ในแท็บตั้งค่า"),
+                    ("Metadata ready", bool(batch_metadata_rows), f"{len(batch_metadata_rows):,} แถว" if batch_metadata_rows else "ตั้งค่ารายไฟล์ในแท็บตั้งค่า"),
+                ]
+            )
+            if mapping_ready:
+                _render_action_hint("เมื่อ Mapping พร้อมแล้ว ไปที่แท็บ ตรวจ Peak เพื่อวิเคราะห์ Batch")
 
         if active_tab == "ตรวจ Peak":
             _render_section_header("ตรวจ Peak รายไฟล์", "ตรวจกราฟและยืนยัน AM/PM Peak แยกตามไฟล์ ก่อนสร้าง Batch ZIP")
