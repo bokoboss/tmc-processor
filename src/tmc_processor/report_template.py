@@ -250,10 +250,14 @@ def _set_cell(
     cell_ref: str | None,
     value: Any,
     protected_formula_ranges: list[str] | None = None,
+    formula_overwrite_ranges: list[str] | None = None,
 ) -> None:
     if cell_ref:
         cell = worksheet[cell_ref]
-        if _is_protected_formula_cell(worksheet, cell_ref, protected_formula_ranges or []):
+        if (
+            _is_protected_formula_cell(worksheet, cell_ref, protected_formula_ranges or [])
+            and not _cell_in_ranges(cell_ref, formula_overwrite_ranges or [])
+        ):
             return
         if not isinstance(cell, MergedCell):
             cell.value = _excel_value(value)
@@ -284,26 +288,29 @@ def _movement_formula_targets(mapping: dict[str, Any]):
 def _write_metadata(worksheet, mapping: dict[str, Any], setup: dict[str, Any]) -> None:
     values = _metadata_values(setup)
     protected_formula_ranges = list(mapping.get("protected_formula_ranges") or [])
+    formula_overwrite_ranges = list(mapping.get("formula_overwrite_ranges") or [])
     for key, info in mapping.get("metadata_cells", {}).items():
         _set_cell(
             worksheet,
             info.get("value_cell") or info.get("cell"),
             values.get(key, ""),
             protected_formula_ranges,
+            formula_overwrite_ranges,
         )
 
     movement_info = mapping.get("movement_diagram_cells", {})
     diagram_title = movement_info.get("diagram_title", {}).get("cell")
     diagram_date = movement_info.get("diagram_date", {}).get("cell")
     caption = movement_info.get("caption", {}).get("cell")
-    _set_cell(worksheet, diagram_title, values.get("survey_point", ""), protected_formula_ranges)
-    _set_cell(worksheet, diagram_date, values.get("survey_date", ""), protected_formula_ranges)
+    _set_cell(worksheet, diagram_title, values.get("survey_point", ""), protected_formula_ranges, formula_overwrite_ranges)
+    _set_cell(worksheet, diagram_date, values.get("survey_date", ""), protected_formula_ranges, formula_overwrite_ranges)
     for direction, info in movement_info.get("direction_labels", {}).items():
         _set_cell(
             worksheet,
             info.get("cell"),
             _mapped_label_value(setup, direction),
             protected_formula_ranges,
+            formula_overwrite_ranges,
         )
     for label_key, info in movement_info.get("road_labels", {}).items():
         _set_cell(
@@ -311,8 +318,9 @@ def _write_metadata(worksheet, mapping: dict[str, Any], setup: dict[str, Any]) -
             info.get("cell"),
             _mapped_label_value(setup, label_key),
             protected_formula_ranges,
+            formula_overwrite_ranges,
         )
-    _set_cell(worksheet, caption, setup.get("caption_text") or "", protected_formula_ranges)
+    _set_cell(worksheet, caption, setup.get("caption_text") or "", protected_formula_ranges, formula_overwrite_ranges)
 
 
 def _direction_label_value(setup: dict[str, Any], direction: str) -> str:

@@ -2151,6 +2151,7 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
             "east_road": _state_value("east_road_input"),
             "west_road": _state_value("west_road_input"),
             "caption_text": _state_value("caption_text_input"),
+            "show_u_turn": bool(_state_value("show_u_turn_checkbox", True)),
         },
         mapping=_current_mapping_for_session(),
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
@@ -2382,11 +2383,35 @@ def _batch_analysis_signature(
 def _batch_export_signature(
     *,
     metadata_rows: list[dict[str, object]],
+    shared_setup: dict[str, object] | None = None,
     export_mode: str | None,
     confirmed_peaks: dict[str, dict[str, str]] | None,
 ) -> tuple[object, ...]:
+    setup = shared_setup or {}
     return (
         _metadata_signature(metadata_rows),
+        tuple(
+            (field, str(setup.get(field, "")))
+            for field in (
+                "project_name",
+                "tmc_id",
+                "tmc_title",
+                "survey_point",
+                "weather",
+                "responsible_party",
+                "survey_period",
+                "north_label",
+                "south_label",
+                "east_label",
+                "west_label",
+                "north_road",
+                "south_road",
+                "east_road",
+                "west_road",
+                "caption_text",
+                "show_u_turn",
+            )
+        ),
         str(export_mode or ""),
         tuple(
             sorted(
@@ -3498,6 +3523,7 @@ def _run_streamlit_app() -> None:
         batch_result = st.session_state.get("tmc_batch_export_result")
         batch_export_signature = _batch_export_signature(
             metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+            shared_setup=setup,
             export_mode=batch_export_mode,
             confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
         )
@@ -3898,6 +3924,7 @@ def _run_streamlit_app() -> None:
                 st.session_state["tmc_batch_export_stale"] = False
                 st.session_state["tmc_batch_export_signature"] = _batch_export_signature(
                     metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                    shared_setup=setup,
                     export_mode=batch_export_mode,
                     confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
                 )

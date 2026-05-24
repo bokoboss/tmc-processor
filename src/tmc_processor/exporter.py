@@ -86,7 +86,22 @@ def _export_metadata_frame(
         ("export_mode", export_mode or ""),
         ("source_file_name", Path(str(source_file_name or "")).name),
         ("report_title", metadata_values.get("report_title", "")),
+        ("project", metadata_values.get("project", "")),
         ("survey_point", metadata_values.get("survey_point", "")),
+        ("survey_date", metadata_values.get("survey_date", "")),
+        ("weather", metadata_values.get("weather", "")),
+        ("responsible_party", metadata_values.get("responsible_party", "")),
+        ("survey_period", metadata_values.get("survey_period", "")),
+        ("north_label", setup.get("north_label", "")),
+        ("south_label", setup.get("south_label", "")),
+        ("east_label", setup.get("east_label", "")),
+        ("west_label", setup.get("west_label", "")),
+        ("north_road", setup.get("north_road", "")),
+        ("south_road", setup.get("south_road", "")),
+        ("east_road", setup.get("east_road", "")),
+        ("west_road", setup.get("west_road", "")),
+        ("caption_text", setup.get("caption_text", "")),
+        ("show_u_turn", setup.get("show_u_turn", "")),
     ]
     return pd.DataFrame(rows, columns=["field", "value"])
 
@@ -484,6 +499,10 @@ def _setup_survey_point_formula() -> str:
     return f"=IF(LEN({survey_point})>0,{survey_point},{joined_legacy})"
 
 
+def _setup_report_title_formula() -> str:
+    return _setup_first_lookup_formula("report_title", "tmc_title", "tmc_name")
+
+
 def _diagram_data_formula(
     value_column: str,
     movement_cell: str,
@@ -725,7 +744,7 @@ def _insert_tmc_report_sheet(writer, setup: dict[str, Any], peaks: pd.DataFrame,
     thin_border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     worksheet.merge_cells("A1:AH1")
-    worksheet["A1"] = "ข้อมูลปริมาณจราจรบริเวณทางแยก (Turning Movement Count)"
+    worksheet["A1"] = _setup_report_title_formula()
     worksheet["A1"].fill = dark_blue
     worksheet["A1"].font = Font(color="FFFFFF", bold=True, size=16)
     worksheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
@@ -1032,7 +1051,6 @@ def export_workbook(
     generated_at: datetime | str | None = None,
     template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
-    original_setup = dict(setup)
     setup = setup_with_metadata(setup)
     mapping = clean_mapping(mapping)
     peaks = _resolved_peaks_for_export(setup, normalized, peaks)
@@ -1071,7 +1089,7 @@ def export_workbook(
 
             require_excel_com()
             return _export_workbook_with_excel_com(
-                setup=original_setup,
+                setup=setup,
                 sheets=sheets,
                 hourly_movement=hourly_movement,
                 template_path=template_path,
