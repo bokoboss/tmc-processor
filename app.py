@@ -258,23 +258,42 @@ def get_active_tab() -> str:
     return set_active_tab(str(st.session_state.get("active_workflow_tab") or DEFAULT_WORKFLOW_TAB))
 
 
-def _sync_workflow_tab_from_control() -> None:
-    set_active_tab(str(st.session_state.get("active_workflow_tab_control") or DEFAULT_WORKFLOW_TAB))
+def workflow_tab_choices() -> list[str]:
+    return list(WORKFLOW_TAB_LABELS)
+
+
+def _workflow_tab_button_key(index: int) -> str:
+    return f"workflow_tab_{index}"
+
+
+def render_workflow_tab_nav(active_tab: str, tabs: list[str]) -> str:
+    available_tabs = list(tabs)
+    if not available_tabs:
+        return set_active_tab(DEFAULT_WORKFLOW_TAB)
+
+    active = active_tab if active_tab in available_tabs else DEFAULT_WORKFLOW_TAB
+    if active not in available_tabs:
+        active = available_tabs[0]
+
+    tab_columns = st.columns(len(available_tabs), gap="small")
+    for index, tab_name in enumerate(available_tabs):
+        with tab_columns[index]:
+            clicked = st.button(
+                tab_name,
+                key=_workflow_tab_button_key(index),
+                type="primary" if tab_name == active else "secondary",
+                use_container_width=True,
+            )
+        if clicked and tab_name != active:
+            set_active_tab(tab_name)
+            st.rerun()
+
+    return active
 
 
 def render_workflow_navigation() -> str:
     active_tab = get_active_tab()
-    if st.session_state.get("active_workflow_tab_control") != active_tab:
-        st.session_state["active_workflow_tab_control"] = active_tab
-    selected_tab = st.radio(
-        "Workflow navigation",
-        options=WORKFLOW_TAB_LABELS,
-        index=WORKFLOW_TAB_LABELS.index(active_tab),
-        key="active_workflow_tab_control",
-        horizontal=True,
-        label_visibility="collapsed",
-        on_change=_sync_workflow_tab_from_control,
-    )
+    selected_tab = render_workflow_tab_nav(active_tab, workflow_tab_choices())
     return set_active_tab(selected_tab)
 
 
@@ -804,18 +823,39 @@ def _inject_global_css() -> None:
         .tmc-workflow-summary .tmc-chip {
             font-weight: 600;
         }
-        div[data-testid="stRadio"] label:has(input[name="active_workflow_tab_control"]) {
-            border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-sm);
-            padding: 0.42rem 0.72rem;
-            background: var(--tmc-surface);
-            min-width: 0;
+        div[class*="st-key-workflow_tab_"] {
+            margin-bottom: var(--tmc-space-4);
+            border-bottom: 1px solid var(--tmc-border);
         }
-        div[data-testid="stRadio"] label:has(input[name="active_workflow_tab_control"]:checked) {
-            border-color: var(--tmc-primary);
-            background: var(--tmc-primary-subtle);
-            color: var(--tmc-primary);
+        div[class*="st-key-workflow_tab_"] button {
+            min-height: 2.15rem;
+            border: 0 !important;
+            border-bottom: 2px solid transparent !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            color: var(--tmc-text-muted) !important;
+            padding: 0.42rem 0.5rem 0.36rem !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-workflow_tab_"] button:hover,
+        div[class*="st-key-workflow_tab_"] button:focus-visible {
+            border-bottom-color: var(--tmc-primary-soft) !important;
+            background: var(--tmc-surface-muted) !important;
+            color: var(--tmc-text) !important;
+        }
+        div[class*="st-key-workflow_tab_"] button[kind="primary"] {
+            border-bottom-color: var(--tmc-primary) !important;
+            background: var(--tmc-primary-subtle) !important;
+            color: var(--tmc-primary) !important;
             font-weight: 650;
+        }
+        div[class*="st-key-workflow_tab_"] button p {
+            color: inherit !important;
+            font-size: var(--tmc-font-sm);
+            line-height: 1.25;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .tmc-peak-am {
             border-top-color: var(--tmc-success);
@@ -1347,7 +1387,7 @@ def _chip_kind_from_text(value: str) -> str:
         "ผ่าน",
         "สำเร็จ",
         "เสร็จสิ้น",
-        "ยืนยันแล้ว",
+        "กำหนดแล้ว",
         "พร้อม",
         "พร้อมใช้งาน",
         "โหลดแล้ว",
@@ -1536,34 +1576,34 @@ def _render_top_status_bar(
     export_mode: str | None,
     excel_com_status: ExcelComStatus,
 ) -> None:
-    mode_value = "Single file" if is_single_file_mode else "Batch"
+    mode_value = "ไฟล์เดียว" if is_single_file_mode else "Batch"
     if is_single_file_mode:
-        source_value = uploaded_name or "No source file"
-        source_note = "Ready for mapping" if uploaded_name else "Upload from sidebar"
+        source_value = uploaded_name or "ยังไม่มีไฟล์สำรวจ"
+        source_note = "พร้อมกำหนด Mapping" if uploaded_name else "อัปโหลดจากแถบด้านซ้าย"
         mapping_rows = len(st.session_state.get("mapping_table") or [])
-        mapping_value = f"{mapping_rows:,} rows" if mapping_rows else "Not ready"
-        mapping_note = "Mapping table loaded" if mapping_rows else "Awaiting sheet mapping"
+        mapping_value = f"{mapping_rows:,} แถว" if mapping_rows else "ยังไม่พร้อม"
+        mapping_note = "โหลดตาราง Mapping แล้ว" if mapping_rows else "รอกำหนดทิศทาง"
     else:
-        source_value = f"{uploaded_count:,} files" if uploaded_count else "No batch files"
-        source_note = "Batch upload loaded" if uploaded_count else "Upload from sidebar"
-        mapping_value = "Preset loaded" if batch_mapping_ready else "Preset required"
-        mapping_note = "Shared across batch" if batch_mapping_ready else "Open Mapping Preset"
+        source_value = f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่มีไฟล์ Batch"
+        source_note = "โหลดไฟล์ Batch แล้ว" if uploaded_count else "อัปโหลดจากแถบด้านซ้าย"
+        mapping_value = "โหลด Preset แล้ว" if batch_mapping_ready else "ต้องมี Preset"
+        mapping_note = "ใช้ร่วมกันทุกไฟล์" if batch_mapping_ready else "เปิด Mapping Preset"
 
-    excel_value = "Excel COM ready" if getattr(excel_com_status, "available", False) else "PNG fallback"
+    excel_value = "Excel COM พร้อม" if getattr(excel_com_status, "available", False) else "โหมดสำรอง PNG"
     excel_note = (
         f"Excel {excel_com_status.version}"
         if getattr(excel_com_status, "available", False) and getattr(excel_com_status, "version", "")
         else (str(getattr(excel_com_status, "reason", "")) or "COM unavailable")
     )
-    export_note = export_mode or "Export mode pending"
+    export_note = export_mode or "รอเลือกโหมดส่งออก"
 
     html = (
         '<div class="tmc-topbar">'
-        + _topbar_item("Mode", mode_value, export_note)
-        + _topbar_item("Source", source_value, source_note)
+        + _topbar_item("โหมดงาน", mode_value, export_note)
+        + _topbar_item("ไฟล์สำรวจ", source_value, source_note)
         + _topbar_item("Mapping", mapping_value, mapping_note)
-        + _topbar_item("Engine", excel_value, excel_note)
-        + _topbar_item("Version", f"App v{APP_VERSION}", f"Template {TEMPLATE_VERSION}")
+        + _topbar_item("เครื่องมือส่งออก", excel_value, excel_note)
+        + _topbar_item("เวอร์ชัน", f"App v{APP_VERSION}", f"Template {TEMPLATE_VERSION}")
         + "</div>"
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -1621,10 +1661,10 @@ def _render_status_cards(
     session_status = "โหลดแล้ว" if st.session_state.get("tmc_loaded_project_session") else "ยังไม่ได้โหลด"
     mapping_status = "พร้อมใช้งาน" if mapping_rows else ("ต้องตรวจสอบ" if uploaded_name else "ยังไม่ได้โหลด")
     processing_status = "เสร็จสิ้น" if processed else ("ต้องตรวจสอบ" if mapping_rows else "ยังไม่ได้โหลด")
-    peak_status = "ยืนยันแล้ว" if all(
+    peak_status = "กำหนดแล้ว" if all(
         confirmed.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end")
     ) else ("ต้องตรวจสอบ" if processed else "ยังไม่ได้โหลด")
-    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "ยืนยันแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
+    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "กำหนดแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
 
     card_items = [
         ("ไฟล์สำรวจ", raw_status, uploaded_name or ""),
@@ -1771,7 +1811,7 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
         steps[3] = "active"
         next_action = "ประมวลผลไฟล์หลัง Mapping พร้อมใช้งาน"
     elif not peaks_ready:
-        next_action = "ยืนยันช่วง Peak ก่อนส่งออก"
+        next_action = "กำหนดช่วง Peak ก่อนส่งออก"
     elif not output_ready:
         next_action = "พร้อมส่งออกรายงาน"
     else:
@@ -1848,7 +1888,7 @@ def derive_batch_workflow_state(
     elif not batch_analysis:
         next_action = "วิเคราะห์ Batch หลังไฟล์และ Mapping Preset พร้อม"
     elif successful_items and not peaks_ready:
-        next_action = "ยืนยันช่วง Peak ให้ครบทุกไฟล์ที่วิเคราะห์สำเร็จ"
+        next_action = "กำหนดช่วง Peak ให้ครบทุกไฟล์ที่วิเคราะห์สำเร็จ"
     elif peaks_ready and batch_export_stale:
         next_action = "ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่"
     elif peaks_ready and not batch_result:
@@ -2541,8 +2581,8 @@ def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFra
             "mapping_status": "สถานะ Mapping",
             "AM suggested": "AM แนะนำ",
             "PM suggested": "PM แนะนำ",
-            "AM confirmed": "AM ยืนยัน",
-            "PM confirmed": "PM ยืนยัน",
+            "AM confirmed": "AM กำหนดแล้ว",
+            "PM confirmed": "PM กำหนดแล้ว",
             "total PCU": "PCU รวม",
             "QC errors": "QC ผิดพลาด",
             "QC warnings": "QC เตือน",
@@ -2619,7 +2659,7 @@ def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> N
         card_class = f"{card_class} tmc-peak-am"
     elif "pm" in title_text or "เย็น" in title_text:
         card_class = f"{card_class} tmc-peak-pm"
-    badge = "ยืนยันแล้ว" if is_confirmed else "แนะนำ"
+    badge = "กำหนดแล้ว" if is_confirmed else "แนะนำ"
     pcu_text = f"{pcu} PCU" if pcu else "ไม่มีข้อมูล PCU"
     st.markdown(
         f'<div class="tmc-card tmc-peak-card {card_class}">'
@@ -3312,7 +3352,7 @@ def _run_streamlit_app() -> None:
                     [
                         ("ไฟล์สำรวจ", "โหลดแล้ว", "", uploaded_file.name, "พร้อม"),
                         ("Sheet ที่พบ", mapping_counts["detected_sheets"], "sheet", "ตรวจจาก workbook", "พร้อม"),
-                        ("แถว Mapping", mapping_counts["rows"], "แถว", "source of truth", "พร้อม" if mapping_counts["rows"] else "ต้องตรวจสอบ"),
+                        ("แถว Mapping", mapping_counts["rows"], "แถว", "ข้อมูลหลักสำหรับประมวลผล", "พร้อม" if mapping_counts["rows"] else "ต้องตรวจสอบ"),
                         ("Movement ที่ใช้", mapping_counts["included"], "แถว", f"ไม่รวม {mapping_counts['excluded']:,} แถว", "พร้อม" if mapping_counts["included"] else "ต้องตรวจสอบ"),
                         ("รวมหลาย source", mapping_counts["duplicate_movements"], "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if mapping_counts["duplicate_movements"] else "พร้อม"),
                         ("สถานะ Mapping", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ", "", "ประมวลผลได้" if mapping_issues.empty else f"{len(mapping_issues):,} รายการ", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ"),
@@ -3338,7 +3378,7 @@ def _run_streamlit_app() -> None:
                 )
                 with st.expander("Sheet ทิศทางที่ตรวจพบ", expanded=False):
                     st.dataframe(preview_summary, width="stretch")
-                _render_section_header("ตาราง Mapping", "ตารางนี้เป็น source of truth สำหรับการจับคู่ movement")
+                _render_section_header("ตาราง Mapping", "ตารางนี้เป็นข้อมูลหลักสำหรับการจับคู่ movement")
                 mapping_view = st.radio(
                     "มุมมองตาราง Mapping",
                     options=["Basic", "Advanced"],
@@ -3704,14 +3744,14 @@ def _run_streamlit_app() -> None:
                 successful_count = len(successful_items)
                 status_items = [
                     ("ไฟล์ทั้งหมด", f"{len(batch_analysis.items):,}", "ไฟล์", ""),
-                    ("ยืนยัน Peak", f"{confirmed_count:,}/{successful_count:,}", "ไฟล์", "ไฟล์ที่วิเคราะห์สำเร็จ"),
-                    ("ไฟล์ไม่สำเร็จ", f"{sum(1 for item in batch_analysis.items if item.status == 'failed'):,}", "ไฟล์", "ไม่ต้องยืนยัน Peak"),
+                    ("กำหนด Peak", f"{confirmed_count:,}/{successful_count:,}", "ไฟล์", "ไฟล์ที่วิเคราะห์สำเร็จ"),
+                    ("ไฟล์ไม่สำเร็จ", f"{sum(1 for item in batch_analysis.items if item.status == 'failed'):,}", "ไฟล์", "ไม่ต้องกำหนด Peak"),
                 ]
                 _render_metric_strip(status_items, columns=3)
                 if successful_count and confirmed_count == successful_count:
-                    _render_alert("ยืนยัน Peak ครบแล้ว — พร้อมส่งออก Batch", "success")
+                    _render_alert("กำหนด Peak ครบแล้ว พร้อมส่งออก Batch", "success")
                 elif successful_count:
-                    _render_alert("ยังมีไฟล์ที่ต้องยืนยัน Peak", "warning")
+                    _render_alert("ยังมีไฟล์ที่ต้องกำหนด Peak", "warning")
                 st.dataframe(_batch_peak_review_display_frame(batch_analysis), width="stretch", hide_index=True)
 
                 if successful_items:
@@ -3748,11 +3788,11 @@ def _run_streamlit_app() -> None:
                             ],
                             columns=3,
                         )
-                    _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนยืนยันช่วง Peak")
+                    _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนกำหนดช่วง Peak")
                     _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
-                    _render_section_header("ยืนยัน Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่ยืนยันในหน้านี้สำหรับรายงานของไฟล์นี้")
+                    _render_section_header("กำหนด Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่กำหนดในหน้านี้สำหรับรายงานของไฟล์นี้")
                     peak_cols = st.columns(2)
                     if option_labels:
                         stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
@@ -3765,32 +3805,32 @@ def _run_streamlit_app() -> None:
                         with peak_cols[0]:
                             _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_AM_peak"] or "", "", "auto_suggested")
                             selected_am = st.selectbox(
-                                "ช่วงที่ยืนยัน AM",
+                                "ช่วงที่กำหนด AM",
                                 options=option_labels,
                                 index=option_labels.index(am_default) if am_default in option_labels else 0,
                                 key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
                             )
-                            _render_status_chip("ยืนยันแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
-                            _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
+                            _render_status_chip("กำหนดแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                         with peak_cols[1]:
                             _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_PM_peak"] or "", "", "auto_suggested")
                             selected_pm = st.selectbox(
-                                "ช่วงที่ยืนยัน PM",
+                                "ช่วงที่กำหนด PM",
                                 options=option_labels,
                                 index=option_labels.index(pm_default) if pm_default in option_labels else 0,
                                 key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
                             )
-                            _render_status_chip("ยืนยันแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
-                            _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
+                            _render_status_chip("กำหนดแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                         if stored.get("AM") != selected_am or stored.get("PM") != selected_pm:
                             _mark_batch_export_stale_now()
                         batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
                         selected_item.confirmed_AM_peak = selected_am
                         selected_item.confirmed_PM_peak = selected_pm
                     else:
-                        _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak ของไฟล์นี้", "warning")
+                        _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak ของไฟล์นี้", "warning")
                 if batch_analysis.has_failures:
-                    _render_alert("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องยืนยัน Peak", "warning")
+                    _render_alert("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องกำหนด Peak", "warning")
             else:
                 _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด วิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
@@ -3846,7 +3886,7 @@ def _run_streamlit_app() -> None:
                             ("อัปโหลดไฟล์แล้ว", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
                             ("Mapping Preset พร้อม", mapping_ready, "ใช้ Preset เดียวกันทุกไฟล์"),
                             ("วิเคราะห์ Batch แล้วและข้อมูลไม่ stale", bool(batch_analysis and not batch_stale), ""),
-                            ("ยืนยัน Peak ของไฟล์ที่สำเร็จแล้ว", peaks_ready, ""),
+                            ("กำหนด Peak ของไฟล์ที่สำเร็จแล้ว", peaks_ready, ""),
                             ("output_stem ใช้งานได้", output_stems_valid, "ใช้เป็นชื่อโฟลเดอร์และชื่อรายงาน"),
                             ("โหมดส่งออกพร้อม", export_mode_ready, ""),
                         ]
@@ -3861,7 +3901,7 @@ def _run_streamlit_app() -> None:
                 batch_stale=batch_stale,
             )
             generate_disabled = bool(block_reason) or not output_stems_valid or not export_mode_ready
-            _render_section_header("สร้าง Batch ZIP", "สร้างแพ็กเกจหลังจากตรวจและยืนยัน Peak ครบทุกไฟล์แล้ว")
+            _render_section_header("สร้าง Batch ZIP", "สร้างแพ็กเกจหลังจากตรวจและกำหนด Peak ครบทุกไฟล์แล้ว")
             if not output_stems_valid and not block_reason:
                 block_reason = "ตรวจสอบ output_stem ในแท็บตั้งค่า Batch ก่อนสร้าง ZIP"
             if not export_mode_ready and not block_reason:
@@ -3933,7 +3973,7 @@ def _run_streamlit_app() -> None:
                     key="download_batch_zip",
                 )
             elif not batch_analysis:
-                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
+                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และกำหนด Peak ก่อนสร้าง ZIP")
             elif not peaks_ready:
                 st.warning(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False))
 
@@ -3975,8 +4015,8 @@ def _run_streamlit_app() -> None:
                         "วันที่สำรวจ",
                         "ชื่อส่งออก",
                         "สถานะ",
-                        "AM ยืนยัน",
-                        "PM ยืนยัน",
+                        "AM กำหนดแล้ว",
+                        "PM กำหนดแล้ว",
                         "PCU รวม",
                         "QC ผิดพลาด",
                         "QC เตือน",
@@ -3989,7 +4029,7 @@ def _run_streamlit_app() -> None:
 
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
-                    _render_alert("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ ไฟล์เหล่านี้ไม่ต้องยืนยัน Peak", "warning")
+                    _render_alert("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ ไฟล์เหล่านี้ไม่ต้องกำหนด Peak", "warning")
                     failed_columns = _existing_columns(failed, ["file_name", "output_stem", "status", "notes"])
                     st.dataframe(failed[failed_columns] if failed_columns else failed, width="stretch")
 
@@ -4061,7 +4101,7 @@ def _run_streamlit_app() -> None:
 
     if is_single_file_mode:
         if active_tab == "ตรวจ Peak":
-            _render_section_header("ตรวจ Peak", "ตรวจสอบรูปแบบปริมาณจราจรรายชั่วโมง และยืนยันช่วง AM/PM Peak สำหรับใช้ในรายงาน")
+            _render_section_header("ตรวจ Peak", "ตรวจสอบรูปแบบปริมาณจราจรรายชั่วโมง และกำหนดช่วง AM/PM Peak สำหรับใช้ในรายงาน")
             if pce_results_stale:
                 _render_alert("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจ Peak หรือส่งออกรายงาน", "warning")
             if result is None:
@@ -4070,7 +4110,7 @@ def _run_streamlit_app() -> None:
                     "เมื่อประมวลผลแล้ว ระบบจะแสดงกราฟ PCU รายชั่วโมงและตัวเลือกยืนยัน AM/PM Peak",
                 )
             else:
-                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็น source of truth")
+                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็นค่าหลัก")
                 _render_hourly_pcu_line_chart(hourly_movement)
 
                 am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
@@ -4091,16 +4131,16 @@ def _run_streamlit_app() -> None:
                     pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
 
                     _render_section_header(
-                        "ยืนยันช่วง Peak",
-                        "ระบบตรวจจับอัตโนมัติเป็นค่าแนะนำ ผู้ตรวจต้องยืนยันช่วงที่จะใช้ในรายงาน",
+                        "กำหนดช่วง Peak",
+                        "ระบบตรวจจับอัตโนมัติเป็นค่าแนะนำ ผู้ตรวจกำหนดช่วงที่จะใช้ในรายงาน",
                     )
                     confirm_cols = st.columns(2)
                     with confirm_cols[0]:
                         _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
-                        am_peak_label = st.selectbox("ช่วงที่ยืนยัน AM", option_labels, index=am_index, key="am_peak_period_select")
+                        am_peak_label = st.selectbox("ช่วงที่กำหนด AM", option_labels, index=am_index, key="am_peak_period_select")
                     with confirm_cols[1]:
                         _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
-                        pm_peak_label = st.selectbox("ช่วงที่ยืนยัน PM", option_labels, index=pm_index, key="pm_peak_period_select")
+                        pm_peak_label = st.selectbox("ช่วงที่กำหนด PM", option_labels, index=pm_index, key="pm_peak_period_select")
                     confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
                     confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
@@ -4111,20 +4151,20 @@ def _run_streamlit_app() -> None:
                     confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
                     _render_metric_strip(
                         [
-                            ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่ยืนยัน", "ยืนยันแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
-                            ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่ยืนยัน", "ยืนยันแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
+                            ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
+                            ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
                             ("AM PCU", _interval_total_pcu(hourly_movement, confirmed_am_label) or am_pcu or "-", "PCU", "Peak PCU"),
                             ("PM PCU", _interval_total_pcu(hourly_movement, confirmed_pm_label) or pm_pcu or "-", "PCU", "Peak PCU"),
                         ],
                         columns=4,
                     )
-                    _render_action_hint("ใช้ช่วงนี้เป็น source of truth สำหรับรายงาน")
+                    _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                     if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
-                        _render_alert("ยืนยันช่วง Peak แล้ว — พร้อมส่งออก", "success")
+                        _render_alert("กำหนดช่วง Peak แล้ว พร้อมส่งออก", "success")
                     else:
-                        _render_alert("กรุณายืนยัน AM Peak และ PM Peak ก่อนส่งออก", "warning")
+                        _render_alert("กรุณากำหนด AM Peak และ PM Peak ก่อนส่งออก", "warning")
                 else:
-                    _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak", "warning")
+                    _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak", "warning")
 
                 _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
                 _render_metric_strip(
@@ -4402,7 +4442,7 @@ def _run_streamlit_app() -> None:
             else:
                 _render_empty_state(
                     "ยังไม่มีไฟล์ส่งออก",
-                    "ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
+                    "กำหนดช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
                 )
 
     if is_single_file_mode:

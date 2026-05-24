@@ -95,6 +95,27 @@ def test_export_action_keeps_active_tab_as_export() -> None:
     assert app.get_active_tab() == "ส่งออก"
 
 
+def test_invalid_active_tab_falls_back_to_default_setup() -> None:
+    _reset_state()
+    st.session_state["active_workflow_tab"] = "ไม่ใช่แท็บ"
+
+    assert app.get_active_tab() == "ตั้งค่า"
+    assert st.session_state["active_workflow_tab"] == "ตั้งค่า"
+
+
+def test_work_mode_switch_does_not_reset_valid_active_tab() -> None:
+    _reset_state()
+    app.set_active_tab("ส่งออก")
+
+    st.session_state["work_mode"] = "ประมวลผลหลายไฟล์"
+
+    assert app.get_active_tab() == "ส่งออก"
+
+
+def test_workflow_tab_choices_match_required_labels() -> None:
+    assert app.workflow_tab_choices() == ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
+
+
 def test_single_generated_report_marks_export_completed() -> None:
     _reset_state()
     st.session_state["mapping_table"] = [{"raw_sheet": "North", "movement_code": "NB"}]
