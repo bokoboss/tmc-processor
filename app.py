@@ -8,6 +8,7 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 import sys
+from typing import MutableMapping
 import warnings
 
 import altair as alt
@@ -123,6 +124,38 @@ BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = EXCEL_TEMPLATE_EXPORT_MODE
 BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอง"
 WORKFLOW_TAB_LABELS = ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
 DEFAULT_WORKFLOW_TAB = "ตั้งค่า"
+SETUP_STATE_KEY = "tmc_setup_state"
+SETUP_FIELD_WIDGET_KEYS = {
+    "project_name": "project_name_input",
+    "tmc_id": "tmc_id_input",
+    "tmc_title": "tmc_title_input",
+    "survey_point": "survey_point_input",
+    "survey_date_text": "survey_date_text_input",
+    "weather": "weather_input",
+    "responsible_party": "responsible_party_input",
+    "survey_period": "survey_period_input",
+    "north_label": "north_label_input",
+    "south_label": "south_label_input",
+    "east_label": "east_label_input",
+    "west_label": "west_label_input",
+    "north_road": "north_road_input",
+    "south_road": "south_road_input",
+    "east_road": "east_road_input",
+    "west_road": "west_road_input",
+    "caption_text": "caption_text_input",
+    "peak_mode": "peak_mode_select",
+    "am_peak_window_start": "am_peak_window_start_input",
+    "am_peak_window_end": "am_peak_window_end_input",
+    "pm_peak_window_start": "pm_peak_window_start_input",
+    "pm_peak_window_end": "pm_peak_window_end_input",
+    "show_u_turn": "show_u_turn_checkbox",
+}
+SETUP_TIME_FIELDS = {
+    "am_peak_window_start",
+    "am_peak_window_end",
+    "pm_peak_window_start",
+    "pm_peak_window_end",
+}
 
 CHART_PRIMARY_COLOR = "#0E4A2A"
 CHART_PM_COLOR = "#B57A22"
@@ -250,6 +283,178 @@ def _setup_from_inputs(
             "show_u_turn": show_u_turn,
         }
     )
+
+
+def _setup_state_defaults(uploaded_filename_default: str = "") -> dict[str, object]:
+    peak_defaults = default_peak_window_state()
+    return {
+        "project_name": "",
+        "tmc_id": "",
+        "tmc_title": uploaded_filename_default,
+        "survey_point": uploaded_filename_default,
+        "survey_date_text": "",
+        "weather": DEFAULT_WEATHER,
+        "responsible_party": DEFAULT_RESPONSIBLE_PARTY,
+        "survey_period": DEFAULT_SURVEY_PERIOD,
+        "north_label": "",
+        "south_label": "",
+        "east_label": "",
+        "west_label": "",
+        "north_road": "",
+        "south_road": "",
+        "east_road": "",
+        "west_road": "",
+        "caption_text": DEFAULT_CAPTION_TEXT,
+        "peak_mode": DEFAULT_PEAK_MODE,
+        "am_peak_window_start": peak_defaults["am_peak_window_start_input"],
+        "am_peak_window_end": peak_defaults["am_peak_window_end_input"],
+        "pm_peak_window_start": peak_defaults["pm_peak_window_start_input"],
+        "pm_peak_window_end": peak_defaults["pm_peak_window_end_input"],
+        "show_u_turn": True,
+    }
+
+
+def _setup_state_mapping(state: MutableMapping[str, object] | None = None) -> MutableMapping[str, object]:
+    return st.session_state if state is None else state
+
+
+def _coerce_setup_time(value: object, default: time) -> time:
+    if isinstance(value, time):
+        return value
+    text = str(value or "").strip()
+    if text:
+        try:
+            hour, minute = text[:5].split(":")
+            return time(int(hour), int(minute))
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def _coerce_setup_value(field: str, value: object) -> object:
+    defaults = _setup_state_defaults()
+    if field == "show_u_turn":
+        return bool(value)
+    if field == "peak_mode":
+        return value if value in PEAK_MODE_OPTIONS else DEFAULT_PEAK_MODE
+    if field in SETUP_TIME_FIELDS:
+        return _coerce_setup_time(value, defaults[field])
+    if value is None:
+        return ""
+    return value
+
+
+def _normalized_setup_state(values: dict[str, object] | None, uploaded_filename_default: str = "") -> dict[str, object]:
+    defaults = _setup_state_defaults(uploaded_filename_default)
+    normalized = dict(defaults)
+    for field in SETUP_FIELD_WIDGET_KEYS:
+        if isinstance(values, dict) and field in values:
+            normalized[field] = _coerce_setup_value(field, values[field])
+    return normalized
+
+
+def update_setup_state_from_widgets(state: MutableMapping[str, object] | None = None) -> list[str]:
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    changed: list[str] = []
+    for field, widget_key in SETUP_FIELD_WIDGET_KEYS.items():
+        if widget_key not in state:
+            continue
+        value = _coerce_setup_value(field, state[widget_key])
+        if setup_state.get(field) != value:
+            changed.append(field)
+        setup_state[field] = value
+    state[SETUP_STATE_KEY] = setup_state
+    return changed
+
+
+def _hydrate_setup_widgets_from_state(state: MutableMapping[str, object] | None = None, *, force: bool = False) -> None:
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    state[SETUP_STATE_KEY] = setup_state
+    for field, widget_key in SETUP_FIELD_WIDGET_KEYS.items():
+        if force or widget_key not in state:
+            state[widget_key] = setup_state[field]
+
+
+def initialize_setup_state_once(
+    uploaded_filename_default: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    state = _setup_state_mapping(state)
+    existing = state.get(SETUP_STATE_KEY)
+    if isinstance(existing, dict):
+        state[SETUP_STATE_KEY] = _normalized_setup_state(existing, uploaded_filename_default)
+    else:
+        state[SETUP_STATE_KEY] = _setup_state_defaults(uploaded_filename_default)
+    update_setup_state_from_widgets(state)
+    _hydrate_setup_widgets_from_state(state)
+    return dict(state[SETUP_STATE_KEY])
+
+
+def apply_uploaded_filename_defaults_to_setup_state(
+    uploaded_filename_default: str,
+    state: MutableMapping[str, object] | None = None,
+) -> list[str]:
+    state = _setup_state_mapping(state)
+    if not uploaded_filename_default:
+        return []
+    initialize_setup_state_once(uploaded_filename_default, state)
+    setup_state = dict(state[SETUP_STATE_KEY])
+    changed: list[str] = []
+    for field in ("tmc_title", "survey_point"):
+        widget_key = SETUP_FIELD_WIDGET_KEYS[field]
+        if not str(setup_state.get(field, "") or "").strip():
+            setup_state[field] = uploaded_filename_default
+            changed.append(field)
+        if not str(state.get(widget_key, "") or "").strip():
+            state[widget_key] = uploaded_filename_default
+    state[SETUP_STATE_KEY] = setup_state
+    return changed
+
+
+def get_current_setup_from_state(
+    uploaded_filename: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    state = _setup_state_mapping(state)
+    if SETUP_STATE_KEY not in state:
+        initialize_setup_state_once(state=state)
+    update_setup_state_from_widgets(state)
+    values = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    return _setup_from_inputs(
+        project_name=str(values["project_name"] or ""),
+        tmc_id=str(values["tmc_id"] or ""),
+        tmc_title=str(values["tmc_title"] or ""),
+        survey_point=str(values["survey_point"] or ""),
+        survey_date_text=str(values["survey_date_text"] or ""),
+        weather=str(values["weather"] or ""),
+        responsible_party=str(values["responsible_party"] or ""),
+        survey_period=str(values["survey_period"] or ""),
+        north_label=str(values["north_label"] or ""),
+        south_label=str(values["south_label"] or ""),
+        east_label=str(values["east_label"] or ""),
+        west_label=str(values["west_label"] or ""),
+        north_road=str(values["north_road"] or ""),
+        south_road=str(values["south_road"] or ""),
+        east_road=str(values["east_road"] or ""),
+        west_road=str(values["west_road"] or ""),
+        caption_text=str(values["caption_text"] or ""),
+        uploaded_filename=uploaded_filename,
+        peak_mode=str(values["peak_mode"] or DEFAULT_PEAK_MODE),
+        am_peak_window_start=_coerce_setup_time(values["am_peak_window_start"], _time_from_text(AM_WINDOW[0])),
+        am_peak_window_end=_coerce_setup_time(values["am_peak_window_end"], _time_from_text(AM_WINDOW[1])),
+        pm_peak_window_start=_coerce_setup_time(values["pm_peak_window_start"], _time_from_text(PM_WINDOW[0])),
+        pm_peak_window_end=_coerce_setup_time(values["pm_peak_window_end"], _time_from_text(PM_WINDOW[1])),
+        show_u_turn=bool(values["show_u_turn"]),
+    )
+
+
+def build_setup_for_processing(
+    uploaded_filename: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    return get_current_setup_from_state(uploaded_filename, state)
 
 
 def _peak_row(peaks: pd.DataFrame, period: str) -> pd.Series | None:
@@ -2176,36 +2381,37 @@ def _confirmed_peaks_from_state() -> dict[str, str]:
 
 
 def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | None) -> dict[str, object]:
+    setup = get_current_setup_from_state(uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""))
     peak_settings = {
-        "peak_mode": _state_value("peak_mode_select", DEFAULT_PEAK_MODE),
-        "am_peak_window_start": _state_value("am_peak_window_start_input", _time_from_text(AM_WINDOW[0])),
-        "am_peak_window_end": _state_value("am_peak_window_end_input", _time_from_text(AM_WINDOW[1])),
-        "pm_peak_window_start": _state_value("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0])),
-        "pm_peak_window_end": _state_value("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1])),
+        "peak_mode": setup.get("peak_mode", DEFAULT_PEAK_MODE),
+        "am_peak_window_start": setup.get("am_peak_window_start", AM_WINDOW[0]),
+        "am_peak_window_end": setup.get("am_peak_window_end", AM_WINDOW[1]),
+        "pm_peak_window_start": setup.get("pm_peak_window_start", PM_WINDOW[0]),
+        "pm_peak_window_end": setup.get("pm_peak_window_end", PM_WINDOW[1]),
         **_confirmed_peaks_from_state(),
     }
     return build_project_session(
         metadata={
-            "project_name": _state_value("project_name_input"),
-            "tmc_id": _state_value("tmc_id_input"),
-            "tmc_title": _state_value("tmc_title_input"),
-            "survey_point": _state_value("survey_point_input"),
-            "survey_date_text": _state_value("survey_date_text_input"),
-            "weather": _state_value("weather_input"),
-            "responsible_party": _state_value("responsible_party_input"),
-            "survey_period": _state_value("survey_period_input"),
+            "project_name": setup.get("project_name", ""),
+            "tmc_id": setup.get("tmc_id", ""),
+            "tmc_title": setup.get("tmc_title", ""),
+            "survey_point": setup.get("survey_point", ""),
+            "survey_date_text": setup.get("survey_date_text", ""),
+            "weather": setup.get("weather", ""),
+            "responsible_party": setup.get("responsible_party", ""),
+            "survey_period": setup.get("survey_period", ""),
         },
         directions={
-            "north_label": _state_value("north_label_input"),
-            "south_label": _state_value("south_label_input"),
-            "east_label": _state_value("east_label_input"),
-            "west_label": _state_value("west_label_input"),
-            "north_road": _state_value("north_road_input"),
-            "south_road": _state_value("south_road_input"),
-            "east_road": _state_value("east_road_input"),
-            "west_road": _state_value("west_road_input"),
-            "caption_text": _state_value("caption_text_input"),
-            "show_u_turn": bool(_state_value("show_u_turn_checkbox", True)),
+            "north_label": setup.get("north_label", ""),
+            "south_label": setup.get("south_label", ""),
+            "east_label": setup.get("east_label", ""),
+            "west_label": setup.get("west_label", ""),
+            "north_road": setup.get("north_road", ""),
+            "south_road": setup.get("south_road", ""),
+            "east_road": setup.get("east_road", ""),
+            "west_road": setup.get("west_road", ""),
+            "caption_text": setup.get("caption_text", ""),
+            "show_u_turn": bool(setup.get("show_u_turn", True)),
         },
         mapping=_current_mapping_for_session(),
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
@@ -2275,6 +2481,8 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
             st.write(preview)
         if st.button("ใช้ค่าจาก Session ที่โหลด", key="apply_project_session"):
             changed = apply_session_to_state(loaded_session, st.session_state)
+            update_setup_state_from_widgets()
+            _hydrate_setup_widgets_from_state()
             for stale_key in ["tmc_processed", "tmc_output", "tmc_pce_results_stale", "am_peak_period_select", "pm_peak_period_select"]:
                 st.session_state.pop(stale_key, None)
             st.success(f"ใช้ค่า Session แล้ว อัปเดตค่าปัจจุบัน {len(changed)} รายการ")
@@ -3164,6 +3372,7 @@ def _run_streamlit_app() -> None:
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
     uploaded_filename_default = _default_text_from_filename(uploaded_file.name if uploaded_file is not None else None)
+    initialize_setup_state_once(uploaded_filename_default)
 
     if uploaded_identity and st.session_state.get("tmc_uploaded_identity") != uploaded_identity:
         st.session_state.pop("tmc_output", None)
@@ -3177,33 +3386,9 @@ def _run_streamlit_app() -> None:
         for key in ["am_peak_period_select", "pm_peak_period_select"]:
             st.session_state.pop(key, None)
         st.session_state["tmc_uploaded_identity"] = uploaded_identity
-        if uploaded_filename_default:
-            if not str(st.session_state.get("tmc_title_input", "")).strip():
-                st.session_state["tmc_title_input"] = uploaded_filename_default
-            if not str(st.session_state.get("survey_point_input", "")).strip():
-                st.session_state["survey_point_input"] = uploaded_filename_default
+        apply_uploaded_filename_defaults_to_setup_state(uploaded_filename_default)
+    _hydrate_setup_widgets_from_state()
 
-    st.session_state.setdefault("project_name_input", "")
-    st.session_state.setdefault("tmc_id_input", "")
-    st.session_state.setdefault("tmc_title_input", uploaded_filename_default)
-    st.session_state.setdefault("survey_point_input", uploaded_filename_default)
-    st.session_state.setdefault("survey_date_text_input", "")
-    st.session_state.setdefault("weather_input", DEFAULT_WEATHER)
-    st.session_state.setdefault("responsible_party_input", DEFAULT_RESPONSIBLE_PARTY)
-    st.session_state.setdefault("survey_period_input", DEFAULT_SURVEY_PERIOD)
-    st.session_state.setdefault("north_label_input", "")
-    st.session_state.setdefault("south_label_input", "")
-    st.session_state.setdefault("east_label_input", "")
-    st.session_state.setdefault("west_label_input", "")
-    st.session_state.setdefault("north_road_input", "")
-    st.session_state.setdefault("south_road_input", "")
-    st.session_state.setdefault("east_road_input", "")
-    st.session_state.setdefault("west_road_input", "")
-    st.session_state.setdefault("caption_text_input", DEFAULT_CAPTION_TEXT)
-    st.session_state.setdefault("peak_mode_select", DEFAULT_PEAK_MODE)
-    for _peak_key, _peak_default in default_peak_window_state().items():
-        st.session_state.setdefault(_peak_key, _peak_default)
-    st.session_state.setdefault("show_u_turn_checkbox", True)
     st.session_state.setdefault("mapping_editor_version", 0)
     st.session_state.setdefault("tmc_batch_file_metadata_table", [])
     st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
@@ -3441,32 +3626,30 @@ def _run_streamlit_app() -> None:
         show_u_turn = st.session_state.get("show_u_turn_checkbox", True)
         selected_pce_factors = _current_pce_factors_from_state()
 
-    setup = _setup_from_inputs(
-        project_name=project_name,
-        tmc_id=tmc_id,
-        tmc_title=tmc_title,
-        survey_point=survey_point,
-        survey_date_text=survey_date_text,
-        weather=weather,
-        responsible_party=responsible_party,
-        survey_period=survey_period,
-        north_label=north_label,
-        south_label=south_label,
-        east_label=east_label,
-        west_label=west_label,
-        north_road=north_road,
-        south_road=south_road,
-        east_road=east_road,
-        west_road=west_road,
-        caption_text=caption_text,
-        uploaded_filename=uploaded_file.name if uploaded_file is not None else "",
-        peak_mode=peak_mode,
-        am_peak_window_start=am_peak_window_start,
-        am_peak_window_end=am_peak_window_end,
-        pm_peak_window_start=pm_peak_window_start,
-        pm_peak_window_end=pm_peak_window_end,
-        show_u_turn=show_u_turn,
-    )
+    setup = build_setup_for_processing(uploaded_file.name if uploaded_file is not None else "")
+    project_name = str(setup.get("project_name", "") or "")
+    tmc_id = str(setup.get("tmc_id", "") or "")
+    tmc_title = str(setup.get("tmc_title", "") or "")
+    survey_point = str(setup.get("survey_point", "") or "")
+    survey_date_text = str(setup.get("survey_date_text", "") or "")
+    weather = str(setup.get("weather", DEFAULT_WEATHER) or "")
+    responsible_party = str(setup.get("responsible_party", DEFAULT_RESPONSIBLE_PARTY) or "")
+    survey_period = str(setup.get("survey_period", DEFAULT_SURVEY_PERIOD) or "")
+    north_label = str(setup.get("north_label", "") or "")
+    south_label = str(setup.get("south_label", "") or "")
+    east_label = str(setup.get("east_label", "") or "")
+    west_label = str(setup.get("west_label", "") or "")
+    north_road = str(setup.get("north_road", "") or "")
+    south_road = str(setup.get("south_road", "") or "")
+    east_road = str(setup.get("east_road", "") or "")
+    west_road = str(setup.get("west_road", "") or "")
+    caption_text = str(setup.get("caption_text", DEFAULT_CAPTION_TEXT) or "")
+    peak_mode = str(setup.get("peak_mode", DEFAULT_PEAK_MODE) or DEFAULT_PEAK_MODE)
+    am_peak_window_start = _coerce_setup_time(setup.get("am_peak_window_start"), _time_from_text(AM_WINDOW[0]))
+    am_peak_window_end = _coerce_setup_time(setup.get("am_peak_window_end"), _time_from_text(AM_WINDOW[1]))
+    pm_peak_window_start = _coerce_setup_time(setup.get("pm_peak_window_start"), _time_from_text(PM_WINDOW[0]))
+    pm_peak_window_end = _coerce_setup_time(setup.get("pm_peak_window_end"), _time_from_text(PM_WINDOW[1]))
+    show_u_turn = bool(setup.get("show_u_turn", True))
     peak_windows = {
         "AM": (setup["am_peak_window_start"], setup["am_peak_window_end"]),
         "PM": (setup["pm_peak_window_start"], setup["pm_peak_window_end"]),
