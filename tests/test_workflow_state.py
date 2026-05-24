@@ -135,6 +135,22 @@ def test_single_processed_result_peak_summary_uses_suggested_not_no_results() ->
     assert peak_chip == ("Peak", "ใช้ค่าแนะนำ", "success")
 
 
+def test_single_confirmed_peak_summary_uses_release_status_wording() -> None:
+    _reset_state()
+    st.session_state["mapping_table"] = [{"raw_sheet": "North", "movement_code": "NB"}]
+    st.session_state["tmc_processed"] = {"result": _processed_result()}
+    st.session_state["tmc_confirmed_am_peak_start"] = "09:00"
+    st.session_state["tmc_confirmed_am_peak_end"] = "10:00"
+    st.session_state["tmc_confirmed_pm_peak_start"] = "17:00"
+    st.session_state["tmc_confirmed_pm_peak_end"] = "18:00"
+    st.session_state["am_peak_period_select"] = "09:00-10:00"
+
+    state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
+
+    peak_chip = next(item for item in state["summary"] if item[0] == "Peak")
+    assert peak_chip == ("Peak", "กำหนดแล้ว", "success")
+
+
 def test_batch_analyzed_peaks_export_ready_not_completed() -> None:
     _reset_state()
     st.session_state["tmc_batch_file_metadata_table"] = [{"file_name": "a.xlsx", "output_stem": "a"}]

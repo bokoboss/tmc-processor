@@ -11,7 +11,7 @@ from tmc_processor.metadata import APP_VERSION, TEMPLATE_VERSION, get_app_versio
 
 def test_app_version_is_available_from_central_metadata() -> None:
     assert get_app_version() == APP_VERSION
-    assert APP_VERSION
+    assert APP_VERSION == "0.2.0"
     assert TEMPLATE_VERSION == "four_leg_v1"
 
 

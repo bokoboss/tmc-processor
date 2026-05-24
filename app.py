@@ -625,7 +625,7 @@ def _inject_global_css() -> None:
 
             --tmc-text: #151713;
             --tmc-text-muted: #5F625B;
-            --tmc-text-soft: #8A8D85;
+            --tmc-text-soft: #73776E;
 
             --tmc-border: #DDD8CE;
             --tmc-border-soft: #ECE7DD;
@@ -740,18 +740,14 @@ def _inject_global_css() -> None:
             font-weight: 650;
             line-height: 1.28;
             margin-top: 0.18rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
         .tmc-topbar-note {
             color: var(--tmc-text-soft);
             font-size: 0.7rem;
             line-height: 1.25;
             margin-top: 0.08rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
         .tmc-workflow {
             color: var(--tmc-text-soft);
@@ -786,6 +782,7 @@ def _inject_global_css() -> None:
             font-weight: 650;
             line-height: 1.35;
             text-align: right;
+            overflow-wrap: anywhere;
         }
         .tmc-status-grid {
             display: grid;
@@ -894,15 +891,16 @@ def _inject_global_css() -> None:
             font-size: var(--tmc-font-xs);
             font-weight: 650;
             line-height: 1.35;
-            white-space: nowrap;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
         .tmc-chip-success {
-            color: var(--tmc-success);
+            color: #0A4F2A;
             background: var(--tmc-success-soft);
             border-color: #cfe3d4;
         }
         .tmc-chip-warning {
-            color: var(--tmc-warning);
+            color: #8A5100;
             background: var(--tmc-warning-soft);
             border-color: var(--tmc-bronze-soft);
         }
@@ -1020,9 +1018,7 @@ def _inject_global_css() -> None:
             position: relative;
             z-index: 1;
             text-align: center;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
             width: 100%;
         }
         .tmc-workflow-step-state {
@@ -1112,9 +1108,7 @@ def _inject_global_css() -> None:
             color: inherit !important;
             font-size: var(--tmc-font-sm);
             line-height: 1.25;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
         .tmc-peak-am {
             border-top-color: var(--tmc-success);
@@ -1128,9 +1122,7 @@ def _inject_global_css() -> None:
         .tmc-status-card .tmc-card-value,
         .tmc-status-card .tmc-card-note {
             max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
         .tmc-status-gray { border-left: 3px solid var(--tmc-border); }
         .tmc-status-blue { border-left: 3px solid var(--tmc-primary); }
@@ -2015,10 +2007,10 @@ def _single_effective_peak_state(result: object | None = None) -> dict[str, obje
     loaded_peaks = bool(st.session_state.get("tmc_loaded_confirmed_peaks"))
     if user_adjusted:
         source = PEAK_SELECTION_USER_CONFIRMED
-        summary_text = "ปรับโดยผู้ใช้"
+        summary_text = "กำหนดแล้ว"
     elif loaded_peaks:
         source = str(confirmed.get("peak_selection_source") or PEAK_SELECTION_USER_CONFIRMED)
-        summary_text = "ปรับโดยผู้ใช้"
+        summary_text = "กำหนดแล้ว"
     else:
         source = PEAK_SELECTION_AUTO
         summary_text = "ใช้ค่าแนะนำ"
