@@ -2610,6 +2610,10 @@ def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
     }
 
 
+def _existing_columns(frame: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [column for column in columns if column in frame.columns]
+
+
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
@@ -3774,49 +3778,99 @@ def _run_streamlit_app() -> None:
                 st.warning(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False))
 
         if active_tab == "ตรวจสอบข้อมูล":
-            st.header("ตรวจสอบข้อมูล Batch")
+            _render_section_header(
+                "ตรวจสอบข้อมูล Batch",
+                "ตรวจสอบสถานะรายไฟล์, QC รวม, และรายละเอียด Batch_QC ก่อนนำผลไปใช้ต่อ",
+            )
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             status_frame = _batch_status_frame(batch_analysis, batch_result)
-            if status_frame.empty:
-                _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
+            if batch_analysis and batch_stale:
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
+            elif batch_analysis and batch_export_stale:
+                _render_alert("ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่", "warning")
+
+            if not batch_analysis:
+                _render_empty_state("กรุณาวิเคราะห์ Batch ก่อนตรวจสอบผลรวม", "ผลรวมรายไฟล์และ Batch_QC จะแสดงหลังการวิเคราะห์ Batch")
             else:
                 counts = _batch_summary_counts(status_frame)
                 _render_metric_strip(
                     [
-                        ("ไฟล์ทั้งหมด", f"{counts['total_files']:,}", "", ""),
-                        ("สำเร็จ", f"{counts['successful_files']:,}", "", "", "success" if counts["successful_files"] else "pending"),
-                        ("ล้มเหลว", f"{counts['failed_files']:,}", "", "", "failed" if counts["failed_files"] else "พร้อม"),
-                        ("QC error", f"{counts['QC_errors']:,}", "", "", "error" if counts["QC_errors"] else "พร้อม"),
-                        ("QC warning", f"{counts['QC_warnings']:,}", "", "", "warning" if counts["QC_warnings"] else "พร้อม"),
-                        ("QC info", f"{counts['QC_info']:,}", "", "", "info" if counts["QC_info"] else "พร้อม"),
+                        ("ไฟล์ทั้งหมด", f"{counts['total_files']:,}", "ไฟล์", ""),
+                        ("สำเร็จ", f"{counts['successful_files']:,}", "ไฟล์", "", "success" if counts["successful_files"] else "รอตรวจ"),
+                        ("ล้มเหลว", f"{counts['failed_files']:,}", "ไฟล์", "", "failed" if counts["failed_files"] else "พร้อม"),
+                        ("QC ผิดพลาด", f"{counts['QC_errors']:,}", "รายการ", "", "error" if counts["QC_errors"] else "พร้อม"),
+                        ("QC เตือน", f"{counts['QC_warnings']:,}", "รายการ", "", "warning" if counts["QC_warnings"] else "พร้อม"),
+                        ("QC ข้อมูล", f"{counts['QC_info']:,}", "รายการ", "", "info" if counts["QC_info"] else "พร้อม"),
                     ],
                     columns=6,
                 )
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
+
+                _render_section_header("สถานะรายไฟล์", "ตารางตรวจสอบผลวิเคราะห์และความพร้อมส่งออกของแต่ละไฟล์")
+                status_display = _batch_status_display_frame(batch_analysis, batch_result)
+                status_columns = _existing_columns(
+                    status_display,
+                    [
+                        "ชื่อไฟล์",
+                        "วันที่สำรวจ",
+                        "ชื่อส่งออก",
+                        "สถานะ",
+                        "AM ยืนยัน",
+                        "PM ยืนยัน",
+                        "PCU รวม",
+                        "QC ผิดพลาด",
+                        "QC เตือน",
+                        "QC ข้อมูล",
+                        "สถานะส่งออก",
+                        "หมายเหตุ",
+                    ],
+                )
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch")
+
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
-                    st.warning("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ")
-                    st.dataframe(failed[["file_name", "notes"]], width="stretch")
+                    _render_alert("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ ไฟล์เหล่านี้ไม่ต้องยืนยัน Peak", "warning")
+                    failed_columns = _existing_columns(failed, ["file_name", "output_stem", "status", "notes"])
+                    st.dataframe(failed[failed_columns] if failed_columns else failed, width="stretch")
+
                 batch_qc = _batch_qc_rows_for_ui(batch_analysis, batch_result)
                 if not batch_qc.empty:
-                    st.markdown("#### Batch_QC preview")
-                    compact_columns = [
-                        "file_name",
-                        "output_stem",
-                        "severity",
-                        "category",
-                        "check",
-                        "message",
-                    ]
-                    st.dataframe(batch_qc[compact_columns].head(25), width="stretch")
+                    _render_section_header("Batch_QC", "ตัวอย่างรายการ QC รวมสำหรับตรวจสอบก่อนใช้ผลต่อ")
+                    compact_columns = _existing_columns(
+                        batch_qc,
+                        [
+                            "file_name",
+                            "output_stem",
+                            "severity",
+                            "category",
+                            "check",
+                            "message",
+                            "detail",
+                            "movement_code",
+                            "raw_sheet",
+                        ],
+                    )
+                    st.dataframe(batch_qc[compact_columns].head(25) if compact_columns else batch_qc.head(25), width="stretch")
                     with st.expander("Batch_QC รายละเอียดทั้งหมด", expanded=False):
                         st.dataframe(batch_qc, width="stretch")
                 else:
-                    st.caption("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ")
-                with st.expander("Batch QC summary by file", expanded=True):
-                    st.dataframe(status_frame[["file_name", "QC errors", "QC warnings", "QC info"]], width="stretch")
-                with st.expander("Batch diagnostic details", expanded=False):
+                    _render_alert("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ", "success")
+
+                if batch_result:
+                    _render_section_header("ร่องรอย Batch ZIP", "ตรวจสอบองค์ประกอบหลักของแพ็กเกจส่งออกล่าสุด")
+                    _render_readiness_checklist(
+                        [
+                            ("สร้าง batch_summary.xlsx แล้ว", True, ""),
+                            ("มี Sheet Batch_Summary", True, ""),
+                            ("มี Sheet Batch_QC", True, ""),
+                            ("ไม่รวม raw input Excel", True, ""),
+                        ]
+                    )
+
+                with st.expander("สรุป QC รายไฟล์", expanded=False):
+                    qc_summary_columns = _existing_columns(status_frame, ["file_name", "QC errors", "QC warnings", "QC info"])
+                    st.dataframe(status_frame[qc_summary_columns] if qc_summary_columns else status_frame, width="stretch")
+                with st.expander("รายละเอียดวิเคราะห์ Batch", expanded=False):
                     if batch_analysis:
                         st.write(
                             [
@@ -4193,44 +4247,26 @@ def _run_streamlit_app() -> None:
 
     if is_single_file_mode:
         if active_tab == "ตรวจสอบข้อมูล":
-            st.header("ตรวจสอบข้อมูล / ขั้นสูง")
-            if uploaded_file is None:
+            _render_section_header(
+                "ตรวจสอบข้อมูล",
+                "ตรวจสอบ QC, ข้อมูลที่ประมวลผลแล้ว และรายการ Audit ก่อนนำผลไปใช้ในรายงาน",
+            )
+            if result is None:
                 _render_empty_state(
-                    "ยังไม่มี Workbook สำหรับ QA",
-                    "อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และตรวจสอบข้อมูล",
+                    "กรุณาประมวลผลข้อมูลก่อนตรวจสอบรายละเอียด",
+                    "QC, ตารางข้อมูล และรายการ Audit จะแสดงหลังมีผลประมวลผลแล้ว",
                 )
             else:
-                with st.expander("รายละเอียดการอ่านไฟล์", expanded=False):
-                    st.dataframe(preview_summary, width="stretch")
-                    for sheet_name, preview in previews.items():
-                        st.markdown(f"**{sheet_name}**")
-                        st.dataframe(preview, width="stretch")
-                with st.expander("รายละเอียด Parser", expanded=False):
-                    for sheet_name, parsed in parsed_details.items():
-                        debug = parsed.debug
-                        st.markdown(f"**{sheet_name}**")
-                        st.write(
-                            {
-                                "detected_first_data_row": debug.first_data_row,
-                                "detected_time_columns": {
-                                    "time_start_col": debug.time_start_col,
-                                    "time_end_col": debug.time_end_col,
-                                },
-                                "detected_vehicle_class_columns": debug.vehicle_class_columns,
-                            }
-                        )
-                        st.dataframe(parsed.data.head(10), width="stretch")
-
-            if result is not None:
-                st.markdown("#### QC summary")
                 qc_counts = _qc_severity_counts(result.qc)
+                total_qc = sum(qc_counts.values())
                 _render_metric_strip(
                     [
-                        ("error", f"{qc_counts['error']:,}", "", "", "error" if qc_counts["error"] else "พร้อม"),
-                        ("warning", f"{qc_counts['warning']:,}", "", "", "warning" if qc_counts["warning"] else "พร้อม"),
-                        ("info", f"{qc_counts['info']:,}", "", "", "info" if qc_counts["info"] else "พร้อม"),
+                        ("QC ผิดพลาด", f"{qc_counts['error']:,}", "รายการ", "", "error" if qc_counts["error"] else "พร้อม"),
+                        ("QC เตือน", f"{qc_counts['warning']:,}", "รายการ", "", "warning" if qc_counts["warning"] else "พร้อม"),
+                        ("QC ข้อมูล", f"{qc_counts['info']:,}", "รายการ", "", "info" if qc_counts["info"] else "พร้อม"),
+                        ("QC รวม", f"{total_qc:,}", "รายการ", "", "พร้อม" if not total_qc else "ต้องตรวจ"),
                     ],
-                    columns=3,
+                    columns=4,
                 )
                 if qc_counts["error"]:
                     _render_alert("พบ QC error กรุณาตรวจรายละเอียดก่อนส่งออก", "error")
@@ -4240,27 +4276,84 @@ def _run_streamlit_app() -> None:
                     _render_alert("มีหมายเหตุ QC info สำหรับตรวจสอบ", "info")
                 else:
                     _render_alert("ไม่พบประเด็น QC", "success")
-                with st.expander("QC details", expanded=False):
-                    st.dataframe(result.qc, width="stretch")
-                with st.expander("Hourly summary", expanded=False):
-                    st.dataframe(result.hourly, width="stretch")
-                with st.expander("Peak PHF", expanded=False):
-                    st.dataframe(result.peaks, width="stretch")
-                with st.expander("ตัวอย่างข้อมูล Normalized", expanded=False):
-                    st.dataframe(result.normalized.head(1000), width="stretch")
-                with st.expander("Movement Aggregation Audit", expanded=False):
-                    st.caption("แสดง source stream ที่ถูกรวมเป็น movement_code สำหรับรายงาน")
-                    st.dataframe(movement_aggregation_audit(result.normalized, mapping_df), width="stretch")
-            else:
-                _render_empty_state(
-                    "ยังไม่มีผล QA จากการประมวลผล",
-                    "ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement",
-                )
 
-            with st.expander("รายละเอียดเทมเพลต", expanded=False):
-                _render_template_audit_notes()
-            with st.expander("รายละเอียด Excel COM", expanded=False):
-                _render_excel_com_status(excel_com_status)
+                _render_section_header("รายละเอียด QC", "รายการตรวจสอบที่ใช้ประกอบการพิจารณาก่อนส่งออกรายงาน")
+                qc_columns = _existing_columns(
+                    result.qc,
+                    [
+                        "severity",
+                        "category",
+                        "check",
+                        "message",
+                        "detail",
+                        "affected_field",
+                        "movement_code",
+                        "raw_sheet",
+                    ],
+                )
+                qc_display = result.qc[qc_columns] if qc_columns else result.qc
+                if qc_display.empty:
+                    _render_alert("ไม่พบรายการ QC ที่ต้องตรวจสอบ", "success")
+                elif len(qc_display) > 25:
+                    st.dataframe(qc_display.head(25), width="stretch")
+                    with st.expander("รายการ QC ทั้งหมด", expanded=False):
+                        st.dataframe(qc_display, width="stretch")
+                else:
+                    st.dataframe(qc_display, width="stretch")
+
+                with st.expander("Normalized Data", expanded=False):
+                    st.dataframe(result.normalized.head(1000), width="stretch")
+                with st.expander("Hourly Movement PCU", expanded=False):
+                    if not hourly_movement.empty:
+                        st.dataframe(hourly_movement, width="stretch")
+                    if not result.hourly.empty:
+                        st.caption("Hourly raw summary")
+                        st.dataframe(result.hourly, width="stretch")
+                with st.expander("Peak / PHF Data", expanded=False):
+                    st.dataframe(result.peaks, width="stretch")
+                with st.expander("Movement Aggregation Audit", expanded=False):
+                    st.caption("ตารางตรวจสอบ source movement, source stream และ output movement ที่ใช้รวมค่าในรายงาน")
+                    audit_frame = movement_aggregation_audit(result.normalized, mapping_df)
+                    st.dataframe(audit_frame, width="stretch")
+                with st.expander("รายละเอียดการอ่านไฟล์และ Parser", expanded=False):
+                    if uploaded_file is not None:
+                        st.dataframe(preview_summary, width="stretch")
+                        for sheet_name, preview in previews.items():
+                            st.markdown(f"**{sheet_name}**")
+                            st.dataframe(preview, width="stretch")
+                        for sheet_name, parsed in parsed_details.items():
+                            debug = parsed.debug
+                            st.markdown(f"**Parser: {sheet_name}**")
+                            st.write(
+                                {
+                                    "detected_first_data_row": debug.first_data_row,
+                                    "detected_time_columns": {
+                                        "time_start_col": debug.time_start_col,
+                                        "time_end_col": debug.time_end_col,
+                                    },
+                                    "detected_vehicle_class_columns": debug.vehicle_class_columns,
+                                }
+                            )
+                            st.dataframe(parsed.data.head(10), width="stretch")
+                    else:
+                        _render_action_hint("ไม่มี Workbook ที่อัปโหลดในรอบการทำงานนี้")
+                with st.expander("Export Metadata / Template Diagnostics", expanded=False):
+                    output = st.session_state.get("tmc_output")
+                    if output:
+                        st.write(
+                            {
+                                "workbook_filename": output.get("workbook_filename", ""),
+                                "export_mode": output.get("export_mode", ""),
+                                "generated_at": output.get("generated_at"),
+                                "template_version": TEMPLATE_VERSION,
+                                "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
+                                "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
+                            }
+                        )
+                    else:
+                        _render_action_hint("ยังไม่มี metadata การส่งออกในรอบนี้")
+                    _render_template_audit_notes()
+                    _render_excel_com_status(excel_com_status)
     
     
 if __name__ == "__main__":
