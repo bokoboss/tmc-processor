@@ -37,7 +37,9 @@
     "AP38:BA38",
     "AP40:BA40"
   ],
-  "formula_overwrite_ranges": [],
+  "formula_overwrite_ranges": [
+    "B2:B2"
+  ],
   "summary_formula_write_mode": "preserve_template",
   "workbook_structure": {
     "structural_check": {

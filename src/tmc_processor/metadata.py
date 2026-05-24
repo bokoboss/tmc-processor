@@ -19,16 +19,21 @@ TEMPLATE_VERSION = "four_leg_v1"
 def get_app_version() -> str:
     """Return the application version from installed metadata or pyproject.toml."""
 
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    try:
+        with pyproject_path.open("rb") as handle:
+            pyproject = tomllib.load(handle)
+    except OSError:
+        pyproject_version = ""
+    else:
+        pyproject_version = str(pyproject.get("project", {}).get("version") or "")
+    if pyproject_version:
+        return pyproject_version
+
     try:
         return package_metadata.version(PACKAGE_NAME)
     except package_metadata.PackageNotFoundError:
-        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-        try:
-            with pyproject_path.open("rb") as handle:
-                pyproject = tomllib.load(handle)
-        except OSError:
-            return "unknown"
-        return str(pyproject.get("project", {}).get("version") or "unknown")
+        return "unknown"
 
 
 APP_VERSION = get_app_version()

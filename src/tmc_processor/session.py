@@ -44,6 +44,7 @@ DIRECTION_FIELDS = (
     "east_road",
     "west_road",
     "caption_text",
+    "show_u_turn",
 )
 
 PEAK_FIELDS = (
@@ -299,7 +300,8 @@ def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, A
 
     for field in DIRECTION_FIELDS:
         if field in session.get("directions", {}):
-            updates[f"{field}_input"] = session["directions"][field]
+            key = "show_u_turn_checkbox" if field == "show_u_turn" else f"{field}_input"
+            updates[key] = session["directions"][field]
 
     peaks = session.get("peaks", {})
     if "peak_mode" in peaks:

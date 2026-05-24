@@ -8,17 +8,21 @@ from html import escape
 from io import BytesIO
 from pathlib import Path
 import sys
+from typing import MutableMapping
 import warnings
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from tmc_processor.batch import (
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
     BATCH_PACKAGE_MIME,
+    BATCH_SAFE_PNG_EXPORT_MODE,
     BatchItem,
     analyze_batch_files,
     batch_analysis_qc_rows,
+    batch_folder_name,
     batch_change_invalidates,
     batch_file_metadata_defaults,
     batch_inputs_ready,
@@ -27,10 +31,10 @@ from tmc_processor.batch import (
     batch_selected_file_preview,
     batch_zip_generation_block_reason,
     batch_zip_contents_preview,
-    BATCH_STALE_MESSAGE_TH,
     generate_batch_zip_from_reviewed_peaks,
     reviewed_peak_values_complete,
     safe_output_stem,
+    unique_safe_output_stems,
 )
 from tmc_processor.charts import report_chart_pngs
 from tmc_processor.constants import (
@@ -91,7 +95,7 @@ from tmc_processor.pcu import (
     pce_factors_equal,
     validate_pce_factors,
 )
-from tmc_processor.peaks import PEAK_SELECTION_USER_CONFIRMED
+from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED
 from tmc_processor.pipeline import process_tmc
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
 from tmc_processor.session import (
@@ -116,8 +120,47 @@ from tmc_processor.time_utils import (
 
 EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode — แนะนำ"
 SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode — โหมดสำรอง"
-BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = "Excel Template Mode — แนะนำสำหรับรายงานฉบับใช้งานจริง"
+BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = EXCEL_TEMPLATE_EXPORT_MODE
 BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอง"
+WORKFLOW_TAB_LABELS = ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
+DEFAULT_WORKFLOW_TAB = "ตั้งค่า"
+SETUP_STATE_KEY = "tmc_setup_state"
+SETUP_FIELD_WIDGET_KEYS = {
+    "project_name": "project_name_input",
+    "tmc_id": "tmc_id_input",
+    "tmc_title": "tmc_title_input",
+    "survey_point": "survey_point_input",
+    "survey_date_text": "survey_date_text_input",
+    "weather": "weather_input",
+    "responsible_party": "responsible_party_input",
+    "survey_period": "survey_period_input",
+    "north_label": "north_label_input",
+    "south_label": "south_label_input",
+    "east_label": "east_label_input",
+    "west_label": "west_label_input",
+    "north_road": "north_road_input",
+    "south_road": "south_road_input",
+    "east_road": "east_road_input",
+    "west_road": "west_road_input",
+    "caption_text": "caption_text_input",
+    "peak_mode": "peak_mode_select",
+    "am_peak_window_start": "am_peak_window_start_input",
+    "am_peak_window_end": "am_peak_window_end_input",
+    "pm_peak_window_start": "pm_peak_window_start_input",
+    "pm_peak_window_end": "pm_peak_window_end_input",
+    "show_u_turn": "show_u_turn_checkbox",
+}
+SETUP_TIME_FIELDS = {
+    "am_peak_window_start",
+    "am_peak_window_end",
+    "pm_peak_window_start",
+    "pm_peak_window_end",
+}
+
+CHART_PRIMARY_COLOR = "#0E4A2A"
+CHART_PM_COLOR = "#B57A22"
+CHART_GRID_COLOR = "#E6E1D8"
+CHART_TEXT_COLOR = "#151713"
 
 
 def _default_text_from_filename(filename: str | None) -> str:
@@ -133,6 +176,54 @@ def _time_from_text(value: str) -> time:
 
 def _time_text(value: time) -> str:
     return value.strftime("%H:%M")
+
+
+def _coerce_display_number(value: object) -> float | None:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(numeric) if pd.notna(numeric) else None
+
+
+def format_count(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:,.0f}"
+
+
+def format_pcu(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:,.0f}" if abs(numeric - round(numeric)) < 0.005 else f"{numeric:,.1f}"
+
+
+def format_percent(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    percent = numeric * 100 if abs(numeric) <= 1 else numeric
+    return f"{percent:,.1f}%"
+
+
+def format_phf(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:.2f}"
+
+
+def format_time_range(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    parts = hourly_interval_label_parts(text)
+    if parts is None:
+        return text.replace(".", ":")
+    return f"{parts[0]}–{parts[1]}"
+
+
+def format_vehicle_unit(value: object, unit: str = "คัน") -> str:
+    return f"{format_count(value)} {unit}"
 
 
 def _setup_from_inputs(
@@ -194,6 +285,178 @@ def _setup_from_inputs(
     )
 
 
+def _setup_state_defaults(uploaded_filename_default: str = "") -> dict[str, object]:
+    peak_defaults = default_peak_window_state()
+    return {
+        "project_name": "",
+        "tmc_id": "",
+        "tmc_title": uploaded_filename_default,
+        "survey_point": uploaded_filename_default,
+        "survey_date_text": "",
+        "weather": DEFAULT_WEATHER,
+        "responsible_party": DEFAULT_RESPONSIBLE_PARTY,
+        "survey_period": DEFAULT_SURVEY_PERIOD,
+        "north_label": "",
+        "south_label": "",
+        "east_label": "",
+        "west_label": "",
+        "north_road": "",
+        "south_road": "",
+        "east_road": "",
+        "west_road": "",
+        "caption_text": DEFAULT_CAPTION_TEXT,
+        "peak_mode": DEFAULT_PEAK_MODE,
+        "am_peak_window_start": peak_defaults["am_peak_window_start_input"],
+        "am_peak_window_end": peak_defaults["am_peak_window_end_input"],
+        "pm_peak_window_start": peak_defaults["pm_peak_window_start_input"],
+        "pm_peak_window_end": peak_defaults["pm_peak_window_end_input"],
+        "show_u_turn": True,
+    }
+
+
+def _setup_state_mapping(state: MutableMapping[str, object] | None = None) -> MutableMapping[str, object]:
+    return st.session_state if state is None else state
+
+
+def _coerce_setup_time(value: object, default: time) -> time:
+    if isinstance(value, time):
+        return value
+    text = str(value or "").strip()
+    if text:
+        try:
+            hour, minute = text[:5].split(":")
+            return time(int(hour), int(minute))
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def _coerce_setup_value(field: str, value: object) -> object:
+    defaults = _setup_state_defaults()
+    if field == "show_u_turn":
+        return bool(value)
+    if field == "peak_mode":
+        return value if value in PEAK_MODE_OPTIONS else DEFAULT_PEAK_MODE
+    if field in SETUP_TIME_FIELDS:
+        return _coerce_setup_time(value, defaults[field])
+    if value is None:
+        return ""
+    return value
+
+
+def _normalized_setup_state(values: dict[str, object] | None, uploaded_filename_default: str = "") -> dict[str, object]:
+    defaults = _setup_state_defaults(uploaded_filename_default)
+    normalized = dict(defaults)
+    for field in SETUP_FIELD_WIDGET_KEYS:
+        if isinstance(values, dict) and field in values:
+            normalized[field] = _coerce_setup_value(field, values[field])
+    return normalized
+
+
+def update_setup_state_from_widgets(state: MutableMapping[str, object] | None = None) -> list[str]:
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    changed: list[str] = []
+    for field, widget_key in SETUP_FIELD_WIDGET_KEYS.items():
+        if widget_key not in state:
+            continue
+        value = _coerce_setup_value(field, state[widget_key])
+        if setup_state.get(field) != value:
+            changed.append(field)
+        setup_state[field] = value
+    state[SETUP_STATE_KEY] = setup_state
+    return changed
+
+
+def _hydrate_setup_widgets_from_state(state: MutableMapping[str, object] | None = None, *, force: bool = False) -> None:
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    state[SETUP_STATE_KEY] = setup_state
+    for field, widget_key in SETUP_FIELD_WIDGET_KEYS.items():
+        if force or widget_key not in state:
+            state[widget_key] = setup_state[field]
+
+
+def initialize_setup_state_once(
+    uploaded_filename_default: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    state = _setup_state_mapping(state)
+    existing = state.get(SETUP_STATE_KEY)
+    if isinstance(existing, dict):
+        state[SETUP_STATE_KEY] = _normalized_setup_state(existing, uploaded_filename_default)
+    else:
+        state[SETUP_STATE_KEY] = _setup_state_defaults(uploaded_filename_default)
+    update_setup_state_from_widgets(state)
+    _hydrate_setup_widgets_from_state(state)
+    return dict(state[SETUP_STATE_KEY])
+
+
+def apply_uploaded_filename_defaults_to_setup_state(
+    uploaded_filename_default: str,
+    state: MutableMapping[str, object] | None = None,
+) -> list[str]:
+    state = _setup_state_mapping(state)
+    if not uploaded_filename_default:
+        return []
+    initialize_setup_state_once(uploaded_filename_default, state)
+    setup_state = dict(state[SETUP_STATE_KEY])
+    changed: list[str] = []
+    for field in ("tmc_title", "survey_point"):
+        widget_key = SETUP_FIELD_WIDGET_KEYS[field]
+        if not str(setup_state.get(field, "") or "").strip():
+            setup_state[field] = uploaded_filename_default
+            changed.append(field)
+        if not str(state.get(widget_key, "") or "").strip():
+            state[widget_key] = uploaded_filename_default
+    state[SETUP_STATE_KEY] = setup_state
+    return changed
+
+
+def get_current_setup_from_state(
+    uploaded_filename: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    state = _setup_state_mapping(state)
+    if SETUP_STATE_KEY not in state:
+        initialize_setup_state_once(state=state)
+    update_setup_state_from_widgets(state)
+    values = _normalized_setup_state(state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None)
+    return _setup_from_inputs(
+        project_name=str(values["project_name"] or ""),
+        tmc_id=str(values["tmc_id"] or ""),
+        tmc_title=str(values["tmc_title"] or ""),
+        survey_point=str(values["survey_point"] or ""),
+        survey_date_text=str(values["survey_date_text"] or ""),
+        weather=str(values["weather"] or ""),
+        responsible_party=str(values["responsible_party"] or ""),
+        survey_period=str(values["survey_period"] or ""),
+        north_label=str(values["north_label"] or ""),
+        south_label=str(values["south_label"] or ""),
+        east_label=str(values["east_label"] or ""),
+        west_label=str(values["west_label"] or ""),
+        north_road=str(values["north_road"] or ""),
+        south_road=str(values["south_road"] or ""),
+        east_road=str(values["east_road"] or ""),
+        west_road=str(values["west_road"] or ""),
+        caption_text=str(values["caption_text"] or ""),
+        uploaded_filename=uploaded_filename,
+        peak_mode=str(values["peak_mode"] or DEFAULT_PEAK_MODE),
+        am_peak_window_start=_coerce_setup_time(values["am_peak_window_start"], _time_from_text(AM_WINDOW[0])),
+        am_peak_window_end=_coerce_setup_time(values["am_peak_window_end"], _time_from_text(AM_WINDOW[1])),
+        pm_peak_window_start=_coerce_setup_time(values["pm_peak_window_start"], _time_from_text(PM_WINDOW[0])),
+        pm_peak_window_end=_coerce_setup_time(values["pm_peak_window_end"], _time_from_text(PM_WINDOW[1])),
+        show_u_turn=bool(values["show_u_turn"]),
+    )
+
+
+def build_setup_for_processing(
+    uploaded_filename: str = "",
+    state: MutableMapping[str, object] | None = None,
+) -> dict[str, object]:
+    return get_current_setup_from_state(uploaded_filename, state)
+
+
 def _peak_row(peaks: pd.DataFrame, period: str) -> pd.Series | None:
     if peaks.empty or "period" not in peaks:
         return None
@@ -210,7 +473,7 @@ def _peak_period_text(peaks: pd.DataFrame, period: str) -> tuple[str, str, str]:
     start_text = start.strftime("%H:%M") if isinstance(start, time) else str(start)[:5]
     end_text = end.strftime("%H:%M") if isinstance(end, time) else str(end)[:5]
     pcu = pd.to_numeric(pd.Series([row.get("hourly_pcu")]), errors="coerce").fillna(0).iloc[0]
-    return start_text, end_text, f"{pcu:,.0f}"
+    return start_text, end_text, format_pcu(pcu)
 
 
 def _hourly_interval_options(hourly_movement: pd.DataFrame, peaks: pd.DataFrame) -> list[tuple[str, str, str]]:
@@ -242,6 +505,81 @@ def _render_download_button(label: str, data: bytes | None, file_name: str, mime
         file_name=file_name,
         mime=mime,
     )
+
+
+def set_active_tab(tab_name: str) -> str:
+    active = tab_name if tab_name in WORKFLOW_TAB_LABELS else DEFAULT_WORKFLOW_TAB
+    st.session_state["active_workflow_tab"] = active
+    return active
+
+
+def get_active_tab() -> str:
+    return set_active_tab(str(st.session_state.get("active_workflow_tab") or DEFAULT_WORKFLOW_TAB))
+
+
+def workflow_tab_choices() -> list[str]:
+    return list(WORKFLOW_TAB_LABELS)
+
+
+def _workflow_tab_button_key(index: int) -> str:
+    return f"workflow_tab_{index}"
+
+
+def render_workflow_tab_nav(active_tab: str, tabs: list[str]) -> str:
+    available_tabs = list(tabs)
+    if not available_tabs:
+        return set_active_tab(DEFAULT_WORKFLOW_TAB)
+
+    active = active_tab if active_tab in available_tabs else DEFAULT_WORKFLOW_TAB
+    if active not in available_tabs:
+        active = available_tabs[0]
+
+    tab_columns = st.columns(len(available_tabs), gap="small")
+    for index, tab_name in enumerate(available_tabs):
+        with tab_columns[index]:
+            clicked = st.button(
+                tab_name,
+                key=_workflow_tab_button_key(index),
+                type="primary" if tab_name == active else "secondary",
+                use_container_width=True,
+            )
+        if clicked and tab_name != active:
+            set_active_tab(tab_name)
+            st.rerun()
+
+    return active
+
+
+def render_workflow_navigation() -> str:
+    active_tab = get_active_tab()
+    selected_tab = render_workflow_tab_nav(active_tab, workflow_tab_choices())
+    return set_active_tab(selected_tab)
+
+
+def apply_single_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
+    set_active_tab("ส่งออก")
+    if selected_mode == previous_mode:
+        return False
+    st.session_state["report_export_mode"] = selected_mode
+    st.session_state.pop("tmc_output", None)
+    return True
+
+
+def apply_batch_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
+    set_active_tab("ส่งออก")
+    if selected_mode == previous_mode:
+        return False
+    st.session_state["tmc_batch_export_mode"] = selected_mode
+    _mark_batch_export_stale_now()
+    return True
+
+
+def _use_template_layout_for_export(export_mode: str | None) -> bool:
+    return export_mode == EXCEL_TEMPLATE_EXPORT_MODE or str(export_mode or "").startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+
+
+def _use_excel_native_charts_for_export(export_mode: str | None, excel_com_status: ExcelComStatus) -> bool:
+    return bool(getattr(excel_com_status, "available", False) and _use_template_layout_for_export(export_mode))
 
 
 def _excel_com_status_fields(status: ExcelComStatus) -> dict[str, object]:
@@ -278,27 +616,47 @@ def _inject_global_css() -> None:
         """
         <style>
         :root {
-            --tmc-primary: #1f3a5f;
-            --tmc-primary-dark: #0f2340;
-            --tmc-primary-soft: #e8f0f8;
-            --tmc-bg: #f8fafc;
-            --tmc-surface: #ffffff;
-            --tmc-surface-muted: #f1f5f9;
-            --tmc-border: #e2e8f0;
-            --tmc-border-strong: #cbd5e1;
-            --tmc-text: #0f172a;
-            --tmc-muted: #64748b;
-            --tmc-success: #166534;
-            --tmc-warning: #92400e;
-            --tmc-error: #991b1b;
-            --tmc-slate: #475569;
+            --tmc-bg: #F8F6F1;
+            --tmc-surface: #FFFEFA;
+            --tmc-surface-muted: #F1EFE8;
+            --tmc-surface-raised: #FFFFFF;
+            --tmc-sidebar: #EEEAE0;
+            --tmc-sidebar-panel: #F8F6F1;
 
-            --tmc-font-family: "Prompt", "Sarabun", "Segoe UI", Tahoma, sans-serif;
+            --tmc-text: #151713;
+            --tmc-text-muted: #5F625B;
+            --tmc-text-soft: #73776E;
+
+            --tmc-border: #DDD8CE;
+            --tmc-border-soft: #ECE7DD;
+            --tmc-divider: #E6E1D8;
+
+            --tmc-primary: #0E4A2A;
+            --tmc-primary-hover: #0A3B21;
+            --tmc-primary-soft: #E8EFE7;
+            --tmc-primary-subtle: #F1F6F0;
+
+            --tmc-bronze: #B57A22;
+            --tmc-bronze-soft: #F7EAD4;
+            --tmc-bronze-subtle: #FCF6EA;
+
+            --tmc-success: #0E6B3A;
+            --tmc-success-soft: #E7F2EA;
+            --tmc-warning: #B56A00;
+            --tmc-warning-soft: #FAEBD2;
+            --tmc-danger: #A23B2A;
+            --tmc-danger-soft: #F8E7E3;
+            --tmc-info: #2F5F8F;
+            --tmc-info-soft: #E7EEF6;
+
+            --tmc-font-display: Georgia, "Times New Roman", serif;
+            --tmc-font-ui: "Noto Sans Thai", "IBM Plex Sans Thai", "Segoe UI", Tahoma, sans-serif;
+            --tmc-font-mono: "IBM Plex Mono", "Roboto Mono", Consolas, monospace;
             --tmc-font-xs: 0.75rem;
-            --tmc-font-sm: 0.86rem;
-            --tmc-font-md: 0.95rem;
-            --tmc-font-lg: 1.08rem;
-            --tmc-font-xl: 1.9rem;
+            --tmc-font-sm: 0.875rem;
+            --tmc-font-md: 0.96rem;
+            --tmc-font-lg: 1.12rem;
+            --tmc-font-xl: 2.15rem;
 
             --tmc-space-1: 0.25rem;
             --tmc-space-2: 0.5rem;
@@ -309,42 +667,122 @@ def _inject_global_css() -> None:
 
             --tmc-radius-sm: 6px;
             --tmc-radius-md: 8px;
-            --tmc-radius-lg: 10px;
-            --tmc-shadow-subtle: 0 1px 2px rgba(15, 23, 42, 0.04);
-            --tmc-shadow-card: 0 8px 22px rgba(15, 23, 42, 0.06);
+            --tmc-radius-lg: 8px;
+            --tmc-radius-xl: 10px;
+            --tmc-shadow-subtle: 0 1px 2px rgba(21, 23, 19, 0.04);
+            --tmc-shadow-soft: 0 8px 24px rgba(21, 23, 19, 0.06);
         }
         html, body, [class*="css"] {
-            font-family: var(--tmc-font-family);
+            font-family: var(--tmc-font-ui);
         }
         .stApp {
             background: var(--tmc-bg);
             color: var(--tmc-text);
-            font-family: var(--tmc-font-family);
+            font-family: var(--tmc-font-ui);
         }
         .block-container {
-            max-width: 1320px;
-            padding-top: var(--tmc-space-5);
+            max-width: 1240px;
+            padding-top: 1.15rem;
             padding-bottom: 2.5rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
         }
         .tmc-header {
-            padding: var(--tmc-space-1) 0 var(--tmc-space-4) 0;
+            padding: var(--tmc-space-1) 0 var(--tmc-space-3) 0;
+            border-bottom: 1px solid var(--tmc-divider);
+            margin-bottom: var(--tmc-space-3);
         }
         .tmc-title {
             color: var(--tmc-text);
-            font-size: var(--tmc-font-xl);
-            font-weight: 720;
+            font-size: 2rem;
+            font-family: var(--tmc-font-ui);
+            font-weight: 650;
             letter-spacing: 0;
             margin: 0;
+            line-height: 1.15;
         }
         .tmc-subtitle {
-            color: var(--tmc-slate);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-md);
-            margin-top: var(--tmc-space-1);
+            margin-top: 0.35rem;
+            line-height: 1.5;
+            max-width: 760px;
+        }
+        .tmc-topbar {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 0;
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            margin: 0 0 var(--tmc-space-3) 0;
+            overflow: hidden;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-topbar-item {
+            min-width: 0;
+            padding: 0.62rem 0.78rem;
+            border-right: 1px solid var(--tmc-divider);
+        }
+        .tmc-topbar-item:last-child {
+            border-right: 0;
+        }
+        .tmc-topbar-label {
+            color: var(--tmc-text-soft);
+            font-size: 0.68rem;
+            font-weight: 700;
+            line-height: 1.2;
+            text-transform: uppercase;
+        }
+        .tmc-topbar-value {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            font-weight: 650;
+            line-height: 1.28;
+            margin-top: 0.18rem;
+            overflow-wrap: anywhere;
+        }
+        .tmc-topbar-note {
+            color: var(--tmc-text-soft);
+            font-size: 0.7rem;
+            line-height: 1.25;
+            margin-top: 0.08rem;
+            overflow-wrap: anywhere;
         }
         .tmc-workflow {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-soft);
             font-size: var(--tmc-font-sm);
             margin-top: var(--tmc-space-2);
+        }
+        .tmc-workflow-shell {
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            padding: 0.72rem var(--tmc-space-4) 0.78rem;
+            margin: 0 0 var(--tmc-space-3) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-workflow-shell-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: var(--tmc-space-3);
+            margin-bottom: var(--tmc-space-2);
+        }
+        .tmc-workflow-mode {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            font-weight: 650;
+            line-height: 1.25;
+            text-transform: none;
+        }
+        .tmc-workflow-next {
+            color: var(--tmc-bronze);
+            font-size: var(--tmc-font-xs);
+            font-weight: 650;
+            line-height: 1.35;
+            text-align: right;
+            overflow-wrap: anywhere;
         }
         .tmc-status-grid {
             display: grid;
@@ -353,9 +791,9 @@ def _inject_global_css() -> None:
             margin: var(--tmc-space-2) 0 var(--tmc-space-5) 0;
         }
         .tmc-card {
-            background: var(--tmc-surface);
+            background: var(--tmc-surface-raised);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-3) var(--tmc-space-4);
             box-sizing: border-box;
             box-shadow: var(--tmc-shadow-subtle);
@@ -370,61 +808,350 @@ def _inject_global_css() -> None:
             min-width: 0;
         }
         .tmc-card-label {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-xs);
-            font-weight: 650;
+            font-weight: 600;
             letter-spacing: 0;
             line-height: 1.25;
         }
         .tmc-card-value {
             color: var(--tmc-text);
             font-size: var(--tmc-font-md);
-            font-weight: 700;
+            font-weight: 650;
             line-height: 1.28;
             overflow-wrap: anywhere;
         }
         .tmc-card-note {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-soft);
             font-size: var(--tmc-font-xs);
             line-height: 1.25;
             overflow-wrap: anywhere;
+        }
+        .tmc-panel {
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            padding: var(--tmc-space-4);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-panel-title {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-md);
+            font-weight: 650;
+            line-height: 1.3;
+            margin-bottom: 0.12rem;
+        }
+        .tmc-panel-description {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.4;
+        }
+        .tmc-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
+        }
+        .tmc-kpi-card {
+            min-height: 86px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.1rem;
+            overflow: hidden;
+        }
+        .tmc-kpi-value {
+            color: var(--tmc-text);
+            font-size: 1.32rem;
+            font-weight: 700;
+            line-height: 1.18;
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+        }
+        .tmc-kpi-unit {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-xs);
+            font-weight: 600;
+            margin-left: 0.2rem;
+        }
+        .tmc-kpi-detail {
+            color: var(--tmc-text-soft);
+            font-size: var(--tmc-font-xs);
+            line-height: 1.3;
+            overflow-wrap: anywhere;
+        }
+        .tmc-chip {
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            border: 1px solid var(--tmc-border-soft);
+            border-radius: var(--tmc-radius-sm);
+            padding: 0.1rem 0.46rem;
+            font-size: var(--tmc-font-xs);
+            font-weight: 650;
+            line-height: 1.35;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+        .tmc-chip-success {
+            color: #0A4F2A;
+            background: var(--tmc-success-soft);
+            border-color: #cfe3d4;
+        }
+        .tmc-chip-warning {
+            color: #8A5100;
+            background: var(--tmc-warning-soft);
+            border-color: var(--tmc-bronze-soft);
+        }
+        .tmc-chip-danger {
+            color: var(--tmc-danger);
+            background: var(--tmc-danger-soft);
+            border-color: #efd0c8;
+        }
+        .tmc-chip-info {
+            color: var(--tmc-info);
+            background: var(--tmc-info-soft);
+            border-color: #d0ddea;
+        }
+        .tmc-chip-neutral {
+            color: var(--tmc-text-muted);
+            background: var(--tmc-surface-muted);
+            border-color: var(--tmc-border);
+        }
+        .tmc-alert {
+            border: 1px solid var(--tmc-border-soft);
+            border-left-width: 3px;
+            border-radius: var(--tmc-radius-lg);
+            padding: var(--tmc-space-2) var(--tmc-space-3);
+            margin: var(--tmc-space-2) 0 var(--tmc-space-3) 0;
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.45;
+            background: var(--tmc-surface);
+        }
+        .tmc-alert-info {
+            border-left-color: var(--tmc-info);
+            background: var(--tmc-surface);
+        }
+        .tmc-alert-warning {
+            border-left-color: var(--tmc-warning);
+            background: var(--tmc-bronze-subtle);
+        }
+        .tmc-alert-error {
+            border-left-color: var(--tmc-danger);
+            background: var(--tmc-danger-soft);
+        }
+        .tmc-alert-success {
+            border-left-color: var(--tmc-success);
+            background: var(--tmc-success-soft);
+        }
+        .tmc-action-hint {
+            color: var(--tmc-text-muted);
+            font-size: var(--tmc-font-sm);
+            line-height: 1.4;
+            margin: -0.2rem 0 var(--tmc-space-2) 0;
+        }
+        .tmc-workflow-stepper {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 0;
+            align-items: start;
+            margin: 0.45rem 0 0.35rem;
+        }
+        .tmc-workflow-step {
+            position: relative;
+            display: grid;
+            grid-template-rows: 1.22rem auto;
+            justify-items: center;
+            row-gap: 0.24rem;
+            padding: 0.08rem var(--tmc-space-1) 0.12rem;
+            min-width: 0;
+        }
+        .tmc-workflow-step-rail {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-width: 0;
+            z-index: 0;
+        }
+        .tmc-workflow-step-rail::before {
+            content: "";
+            position: absolute;
+            left: calc(50% + 0.58rem);
+            right: calc(-50% + 0.58rem);
+            border-top: 1px solid var(--tmc-border);
+            z-index: 0;
+        }
+        .tmc-workflow-step:last-child .tmc-workflow-step-rail::before {
+            display: none;
+        }
+        .tmc-workflow-dot {
+            position: relative;
+            z-index: 2;
+            width: 1.16rem;
+            height: 1.16rem;
+            border-radius: 999px;
+            border: 1px solid var(--tmc-border);
+            background: var(--tmc-surface);
+            color: var(--tmc-text-soft);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .tmc-workflow-step-copy {
+            position: relative;
+            z-index: 1;
+            min-width: 0;
+            width: 100%;
+        }
+        .tmc-workflow-step-label {
+            color: var(--tmc-text-muted);
+            font-size: 0.76rem;
+            font-weight: 650;
+            line-height: 1.25;
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            overflow-wrap: anywhere;
+            width: 100%;
+        }
+        .tmc-workflow-step-state {
+            color: var(--tmc-text-soft);
+            font-size: 0.67rem;
+            line-height: 1.25;
+            margin-top: 0.1rem;
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            width: 100%;
+        }
+        .tmc-workflow-completed .tmc-workflow-dot {
+            color: #ffffff;
+            background: var(--tmc-success);
+            border-color: var(--tmc-success);
+        }
+        .tmc-workflow-completed .tmc-workflow-step-rail::before {
+            border-top-color: #aacdb5;
+        }
+        .tmc-workflow-ready .tmc-workflow-dot {
+            color: var(--tmc-primary);
+            background: var(--tmc-surface);
+            border-color: var(--tmc-success);
+            box-shadow: 0 0 0 2px var(--tmc-success-soft);
+        }
+        .tmc-workflow-ready .tmc-workflow-step-rail::before {
+            border-top-color: #aacdb5;
+        }
+        .tmc-workflow-ready .tmc-workflow-step-label {
+            color: var(--tmc-primary);
+        }
+        .tmc-workflow-active .tmc-workflow-dot {
+            color: var(--tmc-surface);
+            background: var(--tmc-primary);
+            border-color: var(--tmc-primary);
+        }
+        .tmc-workflow-active .tmc-workflow-step-label {
+            color: var(--tmc-primary);
+        }
+        .tmc-workflow-warning .tmc-workflow-dot {
+            color: #ffffff;
+            background: var(--tmc-bronze);
+            border-color: var(--tmc-bronze);
+        }
+        .tmc-workflow-warning .tmc-workflow-step-label {
+            color: var(--tmc-warning);
+        }
+        .tmc-workflow-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: 0.45rem;
+            padding-top: 0.48rem;
+            border-top: 1px solid var(--tmc-divider);
+        }
+        .tmc-workflow-summary .tmc-chip {
+            font-weight: 600;
+        }
+        div[class*="st-key-workflow_tab_"] {
+            margin-bottom: var(--tmc-space-4);
+            border-bottom: 1px solid var(--tmc-border);
+        }
+        div[class*="st-key-workflow_tab_"] button {
+            min-height: 2.15rem;
+            border: 0 !important;
+            border-bottom: 2px solid transparent !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            color: var(--tmc-text-muted) !important;
+            padding: 0.42rem 0.5rem 0.36rem !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-workflow_tab_"] button:hover,
+        div[class*="st-key-workflow_tab_"] button:focus-visible {
+            border-bottom-color: var(--tmc-primary-soft) !important;
+            background: var(--tmc-surface-muted) !important;
+            color: var(--tmc-text) !important;
+        }
+        div[class*="st-key-workflow_tab_"] button[kind="primary"] {
+            border-bottom-color: var(--tmc-primary) !important;
+            background: var(--tmc-primary-subtle) !important;
+            color: var(--tmc-primary) !important;
+            font-weight: 650;
+        }
+        div[class*="st-key-workflow_tab_"] button p {
+            color: inherit !important;
+            font-size: var(--tmc-font-sm);
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+        .tmc-peak-am {
+            border-top-color: var(--tmc-success);
+            background: var(--tmc-primary-subtle);
+        }
+        .tmc-peak-pm {
+            border-top-color: var(--tmc-bronze);
+            background: var(--tmc-bronze-subtle);
         }
         .tmc-status-card .tmc-card-label,
         .tmc-status-card .tmc-card-value,
         .tmc-status-card .tmc-card-note {
             max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
-        .tmc-status-gray { border-left: 3px solid var(--tmc-border-strong); }
+        .tmc-status-gray { border-left: 3px solid var(--tmc-border); }
         .tmc-status-blue { border-left: 3px solid var(--tmc-primary); }
         .tmc-status-green { border-left: 3px solid var(--tmc-success); }
-        .tmc-status-amber { border-left: 3px solid var(--tmc-warning); }
-        .tmc-status-red { border-left: 3px solid var(--tmc-error); }
+        .tmc-status-amber { border-left: 3px solid var(--tmc-bronze); }
+        .tmc-status-red { border-left: 3px solid var(--tmc-danger); }
 
         .tmc-section-header {
             display: flex;
             gap: var(--tmc-space-3);
             align-items: flex-start;
-            margin: var(--tmc-space-1) 0 var(--tmc-space-4) 0;
+            margin: 0 0 var(--tmc-space-3) 0;
         }
         .tmc-section-accent {
-            width: 4px;
+            width: 3px;
             min-height: 2.1rem;
-            border-radius: 999px;
+            border-radius: var(--tmc-radius-sm);
             background: var(--tmc-primary);
             margin-top: 0.08rem;
         }
         .tmc-section-title {
             color: var(--tmc-text);
-            font-size: var(--tmc-font-lg);
-            font-weight: 720;
+            font-size: 1.05rem;
+            font-weight: 650;
             line-height: 1.25;
             margin: 0;
         }
         .tmc-section-description {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-sm);
             line-height: 1.35;
             margin-top: 0.18rem;
@@ -432,40 +1159,40 @@ def _inject_global_css() -> None:
         .tmc-section {
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-4);
             margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
         }
         .tmc-empty-state {
             background: var(--tmc-surface);
-            border: 1px dashed var(--tmc-border-strong);
-            border-radius: var(--tmc-radius-md);
+            border: 1px dashed var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-5);
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
         }
         .tmc-empty-title {
             color: var(--tmc-text);
             font-size: var(--tmc-font-md);
-            font-weight: 700;
+            font-weight: 650;
             margin-bottom: var(--tmc-space-1);
         }
         .tmc-empty-description {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-sm);
             line-height: 1.45;
         }
         .tmc-peak-card {
             min-height: 116px;
-            border-top: 3px solid var(--tmc-slate);
+            border-top: 3px solid var(--tmc-text-soft);
         }
         .tmc-peak-suggested {
-            border-top-color: var(--tmc-slate);
-            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            border-top-color: var(--tmc-bronze);
+            background: var(--tmc-bronze-subtle);
         }
         .tmc-peak-confirmed {
             border-top-color: var(--tmc-primary);
-            background: linear-gradient(180deg, #ffffff 0%, var(--tmc-primary-soft) 100%);
+            background: var(--tmc-primary-subtle);
         }
         .tmc-peak-topline {
             display: flex;
@@ -475,53 +1202,110 @@ def _inject_global_css() -> None:
             margin-bottom: var(--tmc-space-2);
         }
         .tmc-peak-badge {
-            border-radius: 999px;
+            border-radius: var(--tmc-radius-sm);
             padding: 0.1rem 0.48rem;
             font-size: 0.68rem;
-            font-weight: 700;
+            font-weight: 650;
             line-height: 1.4;
             white-space: nowrap;
         }
         .tmc-peak-suggested .tmc-peak-badge {
-            color: var(--tmc-slate);
-            background: var(--tmc-surface-muted);
+            color: var(--tmc-warning);
+            background: var(--tmc-warning-soft);
         }
         .tmc-peak-confirmed .tmc-peak-badge {
-            color: var(--tmc-primary-dark);
+            color: var(--tmc-primary-hover);
             background: var(--tmc-primary-soft);
-            border: 1px solid #d2e3f3;
+            border: 1px solid var(--tmc-border-soft);
         }
         .tmc-peak-time {
             color: var(--tmc-text);
             font-size: 1.32rem;
-            font-weight: 760;
+            font-weight: 650;
             line-height: 1.25;
             overflow-wrap: anywhere;
         }
         .tmc-peak-pcu {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-sm);
             margin-top: var(--tmc-space-1);
         }
         div[data-testid="stMetric"] {
-            background: var(--tmc-surface);
+            background: var(--tmc-surface-raised);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-3) var(--tmc-space-4);
             box-shadow: var(--tmc-shadow-subtle);
         }
         section[data-testid="stSidebar"] {
-            background: #f3f6f9;
+            background: var(--tmc-sidebar);
             border-right: 1px solid var(--tmc-border);
+        }
+        section[data-testid="stSidebar"] > div {
+            padding-top: var(--tmc-space-4);
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        .tmc-sidebar-brand {
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            background: var(--tmc-sidebar-panel);
+            padding: 0.85rem 0.9rem;
+            margin: 0 0 var(--tmc-space-4) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-sidebar-mark {
+            color: var(--tmc-primary);
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+        .tmc-sidebar-title {
+            color: var(--tmc-text);
+            font-size: 1.05rem;
+            font-weight: 720;
+            line-height: 1.2;
+            margin-top: 0.28rem;
+        }
+        .tmc-sidebar-subtitle {
+            color: var(--tmc-text-muted);
+            font-size: 0.76rem;
+            line-height: 1.35;
+            margin-top: 0.22rem;
+        }
+        .tmc-sidebar-section {
+            color: var(--tmc-primary);
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1.25;
+            text-transform: uppercase;
+            border-top: 1px solid var(--tmc-divider);
+            padding-top: 0.78rem;
+            margin: 0.35rem 0 0.2rem 0;
+        }
+        .tmc-sidebar-section:first-child {
+            border-top: 0;
+            padding-top: 0;
         }
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3 {
             color: var(--tmc-primary);
+            font-weight: 650;
             letter-spacing: 0;
         }
+        section[data-testid="stSidebar"] h2 {
+            font-size: 1rem;
+        }
+        section[data-testid="stSidebar"] h3 {
+            font-size: 0.88rem;
+        }
         section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             line-height: 1.45;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+            gap: 0.8rem;
         }
         div[data-testid="stVerticalBlockBorderWrapper"] {
             border-color: var(--tmc-border);
@@ -529,33 +1313,37 @@ def _inject_global_css() -> None:
             box-shadow: var(--tmc-shadow-subtle);
         }
         div[data-testid="stTabs"] [data-baseweb="tab-list"] {
-            gap: var(--tmc-space-1);
+            gap: var(--tmc-space-2);
             border-bottom: 1px solid var(--tmc-border);
+            background: transparent;
+            margin-top: 0.15rem;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"] {
-            color: var(--tmc-muted);
-            border-radius: var(--tmc-radius-md) var(--tmc-radius-md) 0 0;
-            padding: 0.42rem 0.95rem;
+            color: var(--tmc-text-muted);
+            border-radius: 0;
+            padding: 0.5rem 0.25rem 0.58rem 0.25rem;
             margin-bottom: -1px;
             border-bottom: 3px solid transparent;
-            font-weight: 650;
+            font-weight: 560;
+            background: transparent;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {
-            color: var(--tmc-primary-dark);
-            background: var(--tmc-primary-soft);
+            color: var(--tmc-primary);
+            background: transparent;
             border-bottom-color: var(--tmc-primary);
-            font-weight: 760;
+            font-weight: 650;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"]:hover {
             color: var(--tmc-primary);
-            background: var(--tmc-surface-muted);
+            background: transparent;
         }
         div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
-            background-color: transparent;
+            background-color: transparent !important;
         }
         h2, h3, h4 {
             color: var(--tmc-text);
             letter-spacing: 0;
+            font-weight: 650;
         }
         h4 {
             font-size: 1rem !important;
@@ -575,16 +1363,18 @@ def _inject_global_css() -> None:
         div[data-testid="stTimeInput"] label,
         div[data-testid="stFileUploader"] label,
         div[data-testid="stRadio"] label {
-            color: #334155;
-            font-weight: 650;
+            color: var(--tmc-text);
+            font-weight: 600;
         }
         div.stButton > button,
         div.stDownloadButton > button {
             border-radius: var(--tmc-radius-sm);
-            border-color: var(--tmc-border-strong);
+            border-color: var(--tmc-border);
+            background: var(--tmc-surface-raised);
             color: var(--tmc-text);
             min-height: 2.35rem;
             box-shadow: none;
+            font-weight: 600;
         }
         div.stButton > button:hover,
         div.stDownloadButton > button:hover {
@@ -599,8 +1389,8 @@ def _inject_global_css() -> None:
         }
         div.stButton > button[kind="primary"]:hover,
         button[data-testid="stBaseButton-primary"]:hover {
-            background: var(--tmc-primary-dark);
-            border-color: var(--tmc-primary-dark);
+            background: var(--tmc-primary-hover);
+            border-color: var(--tmc-primary-hover);
             color: #ffffff;
         }
         div.stButton > button:disabled,
@@ -608,13 +1398,13 @@ def _inject_global_css() -> None:
         button[data-testid="stBaseButton-primary"]:disabled {
             background: var(--tmc-border) !important;
             border-color: var(--tmc-border) !important;
-            color: #94a3b8 !important;
+            color: var(--tmc-text-soft) !important;
             box-shadow: none;
         }
         .tmc-checklist {
-            background: var(--tmc-surface);
+            background: var(--tmc-surface-raised);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             box-shadow: var(--tmc-shadow-subtle);
             margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
             overflow: hidden;
@@ -624,7 +1414,7 @@ def _inject_global_css() -> None:
             align-items: center;
             gap: var(--tmc-space-2);
             background: transparent;
-            border-bottom: 1px solid var(--tmc-border);
+            border-bottom: 1px solid var(--tmc-divider);
             padding: 0.44rem var(--tmc-space-3);
             color: var(--tmc-text);
             font-size: var(--tmc-font-sm);
@@ -640,61 +1430,61 @@ def _inject_global_css() -> None:
             justify-content: center;
             width: 1.15rem;
             height: 1.15rem;
-            border-radius: 999px;
+            border-radius: var(--tmc-radius-sm);
             flex: 0 0 auto;
-            font-weight: 800;
+            font-weight: 700;
             font-size: 0.72rem;
         }
         .tmc-check-ready .tmc-check-icon {
             color: var(--tmc-success);
-            background: #ecfdf5;
+            background: var(--tmc-success-soft);
         }
         .tmc-check-warn .tmc-check-icon {
             color: var(--tmc-warning);
-            background: #fffbeb;
+            background: var(--tmc-warning-soft);
         }
         .tmc-check-body {
             flex: 1 1 auto;
             min-width: 0;
         }
         .tmc-check-label {
-            font-weight: 650;
+            font-weight: 600;
             line-height: 1.3;
         }
         .tmc-check-status {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-xs);
             line-height: 1.3;
         }
         .tmc-check-detail {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-xs);
             line-height: 1.35;
         }
         .tmc-mode-note {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-muted);
             font-size: var(--tmc-font-sm);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-2) var(--tmc-space-3);
             margin-bottom: var(--tmc-space-3);
         }
         .tmc-mode-note-success {
-            color: var(--tmc-primary-dark);
+            color: var(--tmc-primary-hover);
             background: var(--tmc-primary-soft);
-            border-color: #d2e3f3;
+            border-color: var(--tmc-border-soft);
             border-left: 3px solid var(--tmc-primary);
         }
         .tmc-mode-note-warning {
             color: var(--tmc-warning);
-            background: #fffbeb;
-            border-color: #fde68a;
+            background: var(--tmc-warning-soft);
+            border-color: var(--tmc-bronze-soft);
             border-left: 3px solid var(--tmc-warning);
         }
         .tmc-sidebar-badge {
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-2) var(--tmc-space-3);
             margin: var(--tmc-space-2) 0 var(--tmc-space-3) 0;
             font-size: var(--tmc-font-sm);
@@ -707,21 +1497,82 @@ def _inject_global_css() -> None:
         .tmc-sidebar-badge-success { border-left: 3px solid var(--tmc-success); }
         .tmc-sidebar-badge-warning { border-left: 3px solid var(--tmc-warning); }
         .tmc-version-stamp {
-            color: var(--tmc-muted);
+            color: var(--tmc-text-soft);
             font-size: var(--tmc-font-xs);
             line-height: 1.35;
             margin-top: var(--tmc-space-3);
         }
         div[data-testid="stAlert"] {
-            border-radius: var(--tmc-radius-md);
+            border-radius: var(--tmc-radius-lg);
+            background: transparent;
+            color: var(--tmc-text);
+            box-shadow: none;
+        }
+        div[data-testid="stAlert"] .stAlertContainer {
+            background: var(--tmc-surface) !important;
+            border: 1px solid var(--tmc-border-soft) !important;
+            border-left: 3px solid var(--tmc-primary) !important;
+            border-radius: var(--tmc-radius-lg) !important;
+            color: var(--tmc-text) !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
+            color: inherit;
+        }
+        div[data-testid="stDataFrame"],
+        div[data-testid="stDataEditor"] {
+            border-radius: var(--tmc-radius-lg);
+            overflow: hidden;
+            border: 1px solid var(--tmc-border-soft);
+        }
+        code, pre {
+            font-family: var(--tmc-font-mono);
         }
         @media (max-width: 900px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            .tmc-topbar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .tmc-topbar-item {
+                border-bottom: 1px solid var(--tmc-divider);
+            }
+            .tmc-topbar-item:nth-child(2n) {
+                border-right: 0;
+            }
             .tmc-status-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
+            .tmc-kpi-grid,
+            .tmc-workflow-stepper {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                row-gap: var(--tmc-space-2);
+            }
+            .tmc-workflow-shell-head {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+            .tmc-workflow-next {
+                text-align: left;
+            }
+            .tmc-workflow-step-rail::before {
+                display: none;
+            }
         }
         @media (max-width: 640px) {
+            .tmc-topbar {
+                grid-template-columns: 1fr;
+            }
+            .tmc-topbar-item {
+                border-right: 0;
+            }
             .tmc-status-grid {
+                grid-template-columns: 1fr;
+            }
+            .tmc-kpi-grid,
+            .tmc-workflow-stepper {
                 grid-template-columns: 1fr;
             }
             .tmc-title {
@@ -763,11 +1614,123 @@ def _render_empty_state(title: str, description: str = "") -> None:
     )
 
 
+def _render_panel(title: str, description: str = "") -> None:
+    description_html = (
+        f'<div class="tmc-panel-description">{escape(description)}</div>' if description else ""
+    )
+    st.markdown(
+        '<div class="tmc-panel">'
+        f'<div class="tmc-panel-title">{escape(title)}</div>'
+        f"{description_html}"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _chip_kind_from_text(value: str) -> str:
+    text = str(value).casefold()
+    success_terms = {
+        "success",
+        "complete",
+        "ready",
+        "loaded",
+        "ผ่าน",
+        "สำเร็จ",
+        "เสร็จสิ้น",
+        "พร้อม",
+        "พร้อมใช้งาน",
+        "โหลดแล้ว",
+        "กำหนดแล้ว",
+        "เสร็จแล้ว",
+        "วิเคราะห์แล้ว",
+        "สร้างแล้ว",
+    }
+    warning_terms = {
+        "warning",
+        "warn",
+        "needs review",
+        "pending",
+        "active",
+        "ต้องตรวจสอบ",
+        "ต้องวิเคราะห์ใหม่",
+        "รอตรวจสอบ",
+    }
+    danger_terms = {"error", "failed", "fail", "danger", "ผิดพลาด", "ล้มเหลว", "ไม่สำเร็จ"}
+    info_terms = {"info", "technical", "ข้อมูล"}
+    if any(term in text for term in danger_terms):
+        return "danger"
+    if any(term in text for term in warning_terms):
+        return "warning"
+    if any(term in text for term in success_terms):
+        return "success"
+    if any(term in text for term in info_terms):
+        return "info"
+    return "neutral"
+
+
+def _status_chip_html(label: str, kind: str = "neutral") -> str:
+    allowed = {"success", "warning", "danger", "info", "neutral"}
+    chip_kind = kind if kind in allowed else "neutral"
+    return f'<span class="tmc-chip tmc-chip-{chip_kind}">{escape(label)}</span>'
+
+
+def _render_status_chip(label: str, kind: str = "neutral") -> None:
+    st.markdown(_status_chip_html(label, kind), unsafe_allow_html=True)
+
+
+def _kpi_card_html(label: str, value: object, unit: str = "", detail: str = "", status: str | None = None) -> str:
+    unit_html = f'<span class="tmc-kpi-unit">{escape(unit)}</span>' if unit else ""
+    detail_html = f'<div class="tmc-kpi-detail">{escape(detail)}</div>' if detail else '<div class="tmc-kpi-detail">&nbsp;</div>'
+    status_html = _status_chip_html(status, _chip_kind_from_text(status)) if status else ""
+    return (
+        '<div class="tmc-card tmc-kpi-card">'
+        f'<div class="tmc-card-label">{escape(label)}</div>'
+        f'<div class="tmc-kpi-value">{escape(str(value))}{unit_html}</div>'
+        f"{detail_html}"
+        f"{status_html}"
+        "</div>"
+    )
+
+
+def _render_kpi_card(label: str, value: object, unit: str = "", detail: str = "", status: str | None = None) -> None:
+    st.markdown(_kpi_card_html(label, value, unit, detail, status), unsafe_allow_html=True)
+
+
+def _render_metric_strip(items: list[tuple[str, object, str, str] | tuple[str, object, str, str, str]], columns: int = 4) -> None:
+    column_count = max(1, min(columns, 6))
+    grid_style = f' style="grid-template-columns: repeat({column_count}, minmax(0, 1fr));"'
+    html = ['<div class="tmc-kpi-grid"' + grid_style + ">"]
+    for item in items:
+        label, value, unit, detail, *rest = item
+        status = rest[0] if rest else None
+        html.append(_kpi_card_html(str(label), value, str(unit or ""), str(detail or ""), status))
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def _render_alert(message: str, kind: str = "info") -> None:
+    allowed = {"info", "warning", "error", "success"}
+    alert_kind = kind if kind in allowed else "info"
+    st.markdown(
+        f'<div class="tmc-alert tmc-alert-{alert_kind}">{escape(message)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_action_hint(message: str) -> None:
+    if message:
+        st.markdown(f'<div class="tmc-action-hint">{escape(message)}</div>', unsafe_allow_html=True)
+
+
 def _status_tone(status: str) -> str:
     text = str(status).casefold()
-    if text in {"complete", "confirmed", "ready", "loaded", "เสร็จสิ้น", "ยืนยันแล้ว", "พร้อมใช้งาน", "โหลดแล้ว"}:
+    if _chip_kind_from_text(status) == "success":
         return "green"
-    if text in {"needs review", "ต้องตรวจสอบ", "active", "กำลังใช้งาน"}:
+    if _chip_kind_from_text(status) == "danger":
+        return "red"
+    if _chip_kind_from_text(status) == "warning":
+        return "amber"
+    if _chip_kind_from_text(status) == "info":
         return "blue"
     return "gray"
 
@@ -775,10 +1738,16 @@ def _status_tone(status: str) -> str:
 def _status_card_html(label: str, status: str, note: str = "", tone: str | None = None) -> str:
     tone = tone or _status_tone(status)
     note_html = f'<div class="tmc-card-note">{escape(note)}</div>' if note else '<div class="tmc-card-note">&nbsp;</div>'
+    chip_kind = {
+        "green": "success",
+        "amber": "warning",
+        "red": "danger",
+        "blue": "info",
+    }.get(tone, _chip_kind_from_text(status))
     return (
         f'<div class="tmc-card tmc-status-card tmc-status-{tone}">'
         f'<div class="tmc-card-label">{escape(label)}</div>'
-        f'<div class="tmc-card-value">{escape(status)}</div>'
+        f'<div class="tmc-card-value">{_status_chip_html(status, chip_kind)}</div>'
         f"{note_html}"
         "</div>"
     )
@@ -812,6 +1781,122 @@ def _render_version_stamp() -> None:
     )
 
 
+def _render_sidebar_brand() -> None:
+    st.markdown(
+        '<div class="tmc-sidebar-brand">'
+        '<div class="tmc-sidebar-mark">TMC Processor</div>'
+        '<div class="tmc-sidebar-title">Engineering Workstation</div>'
+        '<div class="tmc-sidebar-subtitle">Turning Movement Count processing and report control</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_section(label: str) -> None:
+    st.markdown(f'<div class="tmc-sidebar-section">{escape(label)}</div>', unsafe_allow_html=True)
+
+
+def _render_app_header() -> None:
+    st.markdown(
+        """
+        <div class="tmc-header">
+            <h1 class="tmc-title">TMC Processor</h1>
+            <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _topbar_item(label: str, value: str, note: str = "") -> str:
+    note_html = f'<div class="tmc-topbar-note">{escape(note)}</div>' if note else ""
+    return (
+        '<div class="tmc-topbar-item">'
+        f'<div class="tmc-topbar-label">{escape(label)}</div>'
+        f'<div class="tmc-topbar-value">{escape(value)}</div>'
+        f"{note_html}"
+        "</div>"
+    )
+
+
+def _render_top_status_bar(
+    *,
+    is_single_file_mode: bool,
+    uploaded_name: str | None,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    export_mode: str | None,
+    excel_com_status: ExcelComStatus,
+) -> None:
+    mode_value = "ไฟล์เดียว" if is_single_file_mode else "Batch"
+    if is_single_file_mode:
+        source_value = "โหลดแล้ว" if uploaded_name else "ยังไม่มีไฟล์สำรวจ"
+        source_note = "พร้อมกำหนด Mapping" if uploaded_name else "อัปโหลดจากแถบด้านซ้าย"
+        mapping_rows = len(st.session_state.get("mapping_table") or [])
+        mapping_value = "พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"
+        mapping_note = f"{mapping_rows:,} แถว" if mapping_rows else "รอกำหนดทิศทาง"
+    else:
+        source_value = f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่มีไฟล์ Batch"
+        source_note = "โหลดไฟล์ Batch แล้ว" if uploaded_count else "อัปโหลดจากแถบด้านซ้าย"
+        mapping_value = "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม"
+        mapping_note = "Mapping Preset ใช้ร่วมกันทุกไฟล์" if batch_mapping_ready else "เปิด Mapping Preset"
+
+    excel_value = "Excel COM พร้อม" if getattr(excel_com_status, "available", False) else "โหมดสำรอง PNG"
+    excel_note = (
+        f"Excel {excel_com_status.version}"
+        if getattr(excel_com_status, "available", False) and getattr(excel_com_status, "version", "")
+        else (str(getattr(excel_com_status, "reason", "")) or "COM unavailable")
+    )
+    export_note = export_mode or "รอเลือกโหมดส่งออก"
+
+    html = (
+        '<div class="tmc-topbar">'
+        + _topbar_item("โหมดงาน", mode_value, export_note)
+        + _topbar_item("ไฟล์สำรวจ", source_value, source_note)
+        + _topbar_item("Mapping", mapping_value, mapping_note)
+        + _topbar_item("เครื่องมือส่งออก", excel_value, excel_note)
+        + _topbar_item("เวอร์ชัน", f"App v{APP_VERSION}", f"Template {TEMPLATE_VERSION}")
+        + "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _workflow_step_statuses(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> list[str]:
+    mapping_ready = bool(st.session_state.get("mapping_table"))
+    processed = "tmc_processed" in st.session_state
+    output_ready = "tmc_output" in st.session_state
+    batch_analysis_ready = st.session_state.get("tmc_batch_analysis_result") is not None
+    batch_export_ready = st.session_state.get("tmc_batch_export_result") is not None
+    if is_single_file_mode:
+        done = [uploaded, uploaded, mapping_ready, processed, processed, output_ready]
+    else:
+        batch_files_ready = bool(st.session_state.get("tmc_batch_file_metadata_table"))
+        preset_ready = batch_mapping_ready
+        done = [uploaded, batch_files_ready, preset_ready, batch_analysis_ready, batch_analysis_ready, batch_export_ready]
+    active_index = next((index for index, value in enumerate(done) if not value), len(done) - 1)
+    return ["done" if value else ("active" if index == active_index else "pending") for index, value in enumerate(done)]
+
+
+def _render_workflow_stepper(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> None:
+    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "Peak Review", "Export"]
+    state_text = {"done": "พร้อม", "active": "ขั้นตอนปัจจุบัน", "pending": "รอดำเนินการ"}
+    statuses = _workflow_step_statuses(
+        is_single_file_mode=is_single_file_mode,
+        uploaded=uploaded,
+        batch_mapping_ready=batch_mapping_ready,
+    )
+    html = ['<div class="tmc-workflow-stepper">']
+    for label, status in zip(labels, statuses):
+        html.append(
+            f'<div class="tmc-workflow-step tmc-workflow-{status}">'
+            f'<div class="tmc-workflow-step-label">{escape(label)}</div>'
+            f'<div class="tmc-workflow-step-state">{escape(state_text[status])}</div>'
+            "</div>"
+        )
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
 def _render_status_cards(
     *,
     uploaded_name: str | None,
@@ -828,10 +1913,10 @@ def _render_status_cards(
     session_status = "โหลดแล้ว" if st.session_state.get("tmc_loaded_project_session") else "ยังไม่ได้โหลด"
     mapping_status = "พร้อมใช้งาน" if mapping_rows else ("ต้องตรวจสอบ" if uploaded_name else "ยังไม่ได้โหลด")
     processing_status = "เสร็จสิ้น" if processed else ("ต้องตรวจสอบ" if mapping_rows else "ยังไม่ได้โหลด")
-    peak_status = "ยืนยันแล้ว" if all(
+    peak_status = "กำหนดแล้ว" if all(
         confirmed.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end")
     ) else ("ต้องตรวจสอบ" if processed else "ยังไม่ได้โหลด")
-    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "ยืนยันแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
+    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "กำหนดแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
 
     card_items = [
         ("ไฟล์สำรวจ", raw_status, uploaded_name or ""),
@@ -848,12 +1933,303 @@ def _render_status_cards(
         unsafe_allow_html=True,
     )
 
+def _workflow_status_label(status: str) -> str:
+    return {
+        "completed": "เสร็จแล้ว",
+        "ready": "พร้อม",
+        "active": "ขั้นตอนถัดไป",
+        "pending": "รอดำเนินการ",
+        "warning": "ต้องตรวจสอบ",
+        "blocked": "ติดเงื่อนไข",
+    }.get(status, "รอดำเนินการ")
+
+
+def _workflow_summary_chip(label: str, value: str, kind: str = "neutral") -> str:
+    return _status_chip_html(f"{label}: {value}", kind)
+
+
+def _processed_result_from_state() -> object | None:
+    processed = st.session_state.get("tmc_processed")
+    if not processed or bool(st.session_state.get("tmc_pce_results_stale")):
+        return None
+    if isinstance(processed, dict):
+        return processed.get("result")
+    return processed
+
+
+def _suggested_peaks_from_result(result: object | None) -> dict[str, str]:
+    peaks = getattr(result, "peaks", None)
+    if peaks is None:
+        return {}
+    am_start, am_end, _ = _peak_period_text(peaks, "AM")
+    pm_start, pm_end, _ = _peak_period_text(peaks, "PM")
+    return {
+        "am_peak_start": am_start,
+        "am_peak_end": am_end,
+        "pm_peak_start": pm_start,
+        "pm_peak_end": pm_end,
+    }
+
+
+def _single_effective_peak_state(result: object | None = None) -> dict[str, object]:
+    result = _processed_result_from_state() if result is None else result
+    if result is None:
+        return {
+            "ready": False,
+            "source": "",
+            "summary_text": "ยังไม่มีผลประมวลผล",
+            "summary_kind": "neutral",
+            "values": {},
+        }
+
+    suggested = _suggested_peaks_from_result(result)
+    confirmed = _confirmed_peaks_from_state()
+    values = dict(suggested)
+    for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end"):
+        if confirmed.get(key):
+            values[key] = str(confirmed[key])
+    ready = all(values.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end"))
+    if not ready:
+        return {
+            "ready": False,
+            "source": "",
+            "summary_text": "ขาด AM/PM Peak",
+            "summary_kind": "warning",
+            "values": values,
+        }
+
+    suggested_am = f"{suggested.get('am_peak_start', '')}-{suggested.get('am_peak_end', '')}".strip("-")
+    suggested_pm = f"{suggested.get('pm_peak_start', '')}-{suggested.get('pm_peak_end', '')}".strip("-")
+    effective_am = f"{values.get('am_peak_start', '')}-{values.get('am_peak_end', '')}".strip("-")
+    effective_pm = f"{values.get('pm_peak_start', '')}-{values.get('pm_peak_end', '')}".strip("-")
+    selector_touched = "am_peak_period_select" in st.session_state or "pm_peak_period_select" in st.session_state
+    user_adjusted = selector_touched and (effective_am != suggested_am or effective_pm != suggested_pm)
+    loaded_peaks = bool(st.session_state.get("tmc_loaded_confirmed_peaks"))
+    if user_adjusted:
+        source = PEAK_SELECTION_USER_CONFIRMED
+        summary_text = "กำหนดแล้ว"
+    elif loaded_peaks:
+        source = str(confirmed.get("peak_selection_source") or PEAK_SELECTION_USER_CONFIRMED)
+        summary_text = "กำหนดแล้ว"
+    else:
+        source = PEAK_SELECTION_AUTO
+        summary_text = "ใช้ค่าแนะนำ"
+    return {
+        "ready": True,
+        "source": source,
+        "summary_text": summary_text,
+        "summary_kind": "success",
+        "values": values,
+    }
+
+
+def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
+    mapping_rows = len(st.session_state.get("mapping_table") or [])
+    processed = _processed_result_from_state() is not None
+    output_ready = st.session_state.get("tmc_output") is not None
+    peak_state = _single_effective_peak_state()
+    peaks_ready = bool(peak_state["ready"])
+    excel_ready = bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
+    preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
+    mapping_needs_review = bool(uploaded_name and (not mapping_rows or int(preset_info.get("missing", 0) or 0) > 0))
+
+    steps = ["pending"] * 6
+    if uploaded_name:
+        steps[0] = "completed"
+        steps[1] = "completed"
+    if mapping_rows and not mapping_needs_review:
+        steps[2] = "completed"
+    elif mapping_needs_review:
+        steps[2] = "warning"
+    if processed:
+        steps[3] = "completed"
+    elif st.session_state.get("tmc_pce_results_stale"):
+        steps[3] = "warning"
+    if peaks_ready:
+        steps[4] = "ready"
+    elif processed:
+        steps[4] = "warning"
+    if output_ready:
+        steps[5] = "completed"
+    elif processed and peaks_ready and excel_ready:
+        steps[5] = "ready"
+
+    if not uploaded_name:
+        steps[0] = "active"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif mapping_needs_review:
+        next_action = "ตรวจสอบ Mapping ก่อนประมวลผล"
+    elif not processed:
+        steps[3] = "active"
+        next_action = "ประมวลผลไฟล์หลัง Mapping พร้อมใช้งาน"
+    elif not peaks_ready:
+        next_action = "กำหนดช่วง Peak ก่อนส่งออก"
+    elif not output_ready:
+        next_action = "พร้อมส่งออกรายงาน"
+    else:
+        next_action = "สร้างรายงานแล้ว พร้อมดาวน์โหลดไฟล์"
+
+    summary = [
+        ("ไฟล์สำรวจ", "โหลดแล้ว" if uploaded_name else "ยังไม่ได้โหลด", "success" if uploaded_name else "neutral"),
+        ("Mapping", "ต้องตรวจสอบ" if mapping_needs_review else ("พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"), "warning" if mapping_needs_review else ("success" if mapping_rows else "neutral")),
+        ("ประมวลผล", "เสร็จแล้ว" if processed else "ยังไม่ได้ประมวลผล", "success" if processed else "neutral"),
+        ("Peak", str(peak_state["summary_text"]), str(peak_state["summary_kind"])),
+        ("ส่งออก", "สร้างแล้ว" if output_ready else ("พร้อมสร้างรายงาน" if processed and peaks_ready and excel_ready else "ยังไม่พร้อม"), "success" if output_ready or (processed and peaks_ready and excel_ready) else "neutral"),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action}
+
+
+def derive_batch_workflow_state(
+    *,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    batch_signature: tuple[object, ...],
+) -> dict[str, object]:
+    metadata_rows = st.session_state.get("tmc_batch_file_metadata_table") or []
+    pce_ready = bool(_current_pce_factors_from_state())
+    batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+    batch_result = st.session_state.get("tmc_batch_export_result")
+    batch_export_stale = bool(st.session_state.get("tmc_batch_export_stale"))
+    previous_signature = st.session_state.get("tmc_batch_input_signature")
+    batch_stale = bool(st.session_state.get("tmc_batch_stale")) or batch_change_invalidates(
+        previous_signature,
+        batch_signature,
+        batch_analysis is not None,
+    )
+    successful_items = list(batch_analysis.successful_items) if batch_analysis else []
+    successful_count = len(successful_items)
+    confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
+    peaks_ready = bool(successful_items) and confirmed_count == successful_count
+
+    steps = ["pending"] * 6
+    if uploaded_count:
+        steps[0] = "completed"
+    else:
+        steps[0] = "active"
+    if uploaded_count and metadata_rows and pce_ready:
+        steps[1] = "completed"
+    elif uploaded_count:
+        steps[1] = "active"
+    if batch_mapping_ready:
+        steps[2] = "completed"
+    elif uploaded_count:
+        steps[2] = "active"
+    if batch_analysis and not batch_stale:
+        steps[3] = "completed"
+    elif batch_stale:
+        steps[3] = "warning"
+    elif uploaded_count and batch_mapping_ready and pce_ready:
+        steps[3] = "active"
+    if peaks_ready:
+        steps[4] = "ready"
+    elif batch_analysis and successful_items:
+        steps[4] = "warning" if confirmed_count else "active"
+    if batch_result and not batch_export_stale:
+        steps[5] = "completed"
+    elif peaks_ready and not batch_stale and batch_export_stale:
+        steps[5] = "warning"
+    elif peaks_ready and not batch_stale:
+        steps[5] = "ready"
+
+    if not uploaded_count:
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif not batch_mapping_ready:
+        next_action = "เปิด Mapping Preset สำหรับ Batch ที่แถบด้านซ้าย"
+    elif batch_stale:
+        next_action = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
+    elif not batch_analysis:
+        next_action = "วิเคราะห์ Batch หลังไฟล์และ Mapping Preset พร้อม"
+    elif successful_items and not peaks_ready:
+        next_action = "กำหนดช่วง Peak ให้ครบทุกไฟล์ที่วิเคราะห์สำเร็จ"
+    elif peaks_ready and batch_export_stale:
+        next_action = "ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่"
+    elif peaks_ready and not batch_result:
+        next_action = "พร้อมสร้าง Batch ZIP"
+    else:
+        next_action = "สร้าง Batch ZIP แล้ว พร้อมดาวน์โหลดไฟล์"
+
+    summary = [
+        ("ไฟล์สำรวจ", f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่ได้โหลด", "success" if uploaded_count else "neutral"),
+        ("Mapping Preset", "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม", "success" if batch_mapping_ready else "neutral"),
+        ("Batch Analysis", "ต้องวิเคราะห์ใหม่" if batch_stale else ("วิเคราะห์แล้ว" if batch_analysis else "ยังไม่ได้วิเคราะห์"), "warning" if batch_stale else ("success" if batch_analysis else "neutral")),
+        ("Peak", f"กำหนดแล้ว {confirmed_count:,}/{successful_count:,} ไฟล์" if successful_count else "ยังไม่มีไฟล์สำเร็จ", "success" if peaks_ready else ("warning" if successful_count else "neutral")),
+        ("ส่งออก", "ต้องสร้าง ZIP ใหม่" if batch_export_stale and peaks_ready and not batch_stale else ("สร้าง Batch ZIP แล้ว" if batch_result else ("พร้อมสร้าง Batch ZIP" if peaks_ready and not batch_stale else "ยังไม่พร้อม")), "warning" if batch_export_stale and peaks_ready and not batch_stale else ("success" if batch_result or (peaks_ready and not batch_stale) else "neutral")),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action}
+
+
+def _render_workflow_shell(
+    *,
+    is_single_file_mode: bool,
+    uploaded_name: str | None,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    batch_signature: tuple[object, ...],
+    export_mode: str | None,
+    excel_com_status: ExcelComStatus,
+) -> None:
+    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "ตรวจ Peak", "ส่งออก"]
+    state = (
+        derive_single_workflow_state(uploaded_name, export_mode, excel_com_status)
+        if is_single_file_mode
+        else derive_batch_workflow_state(
+            uploaded_count=uploaded_count,
+            batch_mapping_ready=batch_mapping_ready,
+            batch_signature=batch_signature,
+        )
+    )
+    mode_label = "ประมวลผลไฟล์เดียว" if is_single_file_mode else "ประมวลผลหลายไฟล์"
+    html = [
+        '<div class="tmc-workflow-shell">',
+        '<div class="tmc-workflow-shell-head">',
+        f'<div class="tmc-workflow-mode">{escape(mode_label)}</div>',
+        f'<div class="tmc-workflow-next">{escape(str(state["next_action"]))}</div>',
+        "</div>",
+        '<div class="tmc-workflow-stepper">',
+    ]
+    for index, (label, status) in enumerate(zip(labels, state["steps"]), start=1):
+        dot = "✓" if status in {"completed", "ready"} else ("!" if status == "warning" else str(index))
+        html.append(
+            f'<div class="tmc-workflow-step tmc-workflow-{escape(str(status))}">'
+            '<div class="tmc-workflow-step-rail">'
+            f'<div class="tmc-workflow-dot">{escape(dot)}</div>'
+            "</div>"
+            '<div class="tmc-workflow-step-copy">'
+            f'<div class="tmc-workflow-step-label">{escape(label)}</div>'
+            f'<div class="tmc-workflow-step-state">{escape(_workflow_status_label(str(status)))}</div>'
+            "</div>"
+            "</div>"
+        )
+    html.append("</div>")
+    html.append('<div class="tmc-workflow-summary">')
+    for label, value, kind in state["summary"]:
+        html.append(_workflow_summary_chip(str(label), str(value), str(kind)))
+    html.append("</div></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
 
 def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
     status_key = "tmc_excel_com_status"
     if force or status_key not in st.session_state:
         st.session_state[status_key] = probe_excel_com()
     return st.session_state[status_key]
+
+
+def _single_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
+    return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE] if excel_com_status.available else [SAFE_PNG_EXPORT_MODE]
+
+
+def _batch_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
+    return [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
+
+
+def _coerce_export_mode(value: str | None, options: list[str], fallback: str) -> str:
+    return value if value in options else fallback
+
+
+def _flash_and_rerun(message: str, kind: str = "success") -> None:
+    st.session_state["tmc_flash_message"] = {"message": message, "kind": kind}
+    st.rerun()
 
 
 def _state_value(key: str, default: object = "") -> object:
@@ -960,6 +2336,17 @@ def _render_pce_factor_editor() -> dict[str, float]:
     return _current_pce_factors_from_state()
 
 
+def _pce_override_summary(selected_pce_factors: dict[str, float]) -> tuple[bool, str]:
+    traceability = pce_factor_traceability_frame(selected_pce_factors)
+    overrides = traceability[traceability["source"] == "user_override"]
+    if overrides.empty:
+        return False, "ใช้ค่าเริ่มต้น"
+    override_text = ", ".join(
+        f"{row.vehicle_class}={float(row.pce_factor):g}" for row in overrides.itertuples(index=False)
+    )
+    return True, override_text
+
+
 def _current_mapping_for_session() -> pd.DataFrame | None:
     mapping_value = st.session_state.get("mapping_table")
     if mapping_value is None:
@@ -986,43 +2373,45 @@ def _confirmed_peaks_from_state() -> dict[str, str]:
 
 
 def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | None) -> dict[str, object]:
+    setup = get_current_setup_from_state(uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""))
     peak_settings = {
-        "peak_mode": _state_value("peak_mode_select", DEFAULT_PEAK_MODE),
-        "am_peak_window_start": _state_value("am_peak_window_start_input", _time_from_text(AM_WINDOW[0])),
-        "am_peak_window_end": _state_value("am_peak_window_end_input", _time_from_text(AM_WINDOW[1])),
-        "pm_peak_window_start": _state_value("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0])),
-        "pm_peak_window_end": _state_value("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1])),
+        "peak_mode": setup.get("peak_mode", DEFAULT_PEAK_MODE),
+        "am_peak_window_start": setup.get("am_peak_window_start", AM_WINDOW[0]),
+        "am_peak_window_end": setup.get("am_peak_window_end", AM_WINDOW[1]),
+        "pm_peak_window_start": setup.get("pm_peak_window_start", PM_WINDOW[0]),
+        "pm_peak_window_end": setup.get("pm_peak_window_end", PM_WINDOW[1]),
         **_confirmed_peaks_from_state(),
     }
     return build_project_session(
         metadata={
-            "project_name": _state_value("project_name_input"),
-            "tmc_id": _state_value("tmc_id_input"),
-            "tmc_title": _state_value("tmc_title_input"),
-            "survey_point": _state_value("survey_point_input"),
-            "survey_date_text": _state_value("survey_date_text_input"),
-            "weather": _state_value("weather_input"),
-            "responsible_party": _state_value("responsible_party_input"),
-            "survey_period": _state_value("survey_period_input"),
+            "project_name": setup.get("project_name", ""),
+            "tmc_id": setup.get("tmc_id", ""),
+            "tmc_title": setup.get("tmc_title", ""),
+            "survey_point": setup.get("survey_point", ""),
+            "survey_date_text": setup.get("survey_date_text", ""),
+            "weather": setup.get("weather", ""),
+            "responsible_party": setup.get("responsible_party", ""),
+            "survey_period": setup.get("survey_period", ""),
         },
         directions={
-            "north_label": _state_value("north_label_input"),
-            "south_label": _state_value("south_label_input"),
-            "east_label": _state_value("east_label_input"),
-            "west_label": _state_value("west_label_input"),
-            "north_road": _state_value("north_road_input"),
-            "south_road": _state_value("south_road_input"),
-            "east_road": _state_value("east_road_input"),
-            "west_road": _state_value("west_road_input"),
-            "caption_text": _state_value("caption_text_input"),
+            "north_label": setup.get("north_label", ""),
+            "south_label": setup.get("south_label", ""),
+            "east_label": setup.get("east_label", ""),
+            "west_label": setup.get("west_label", ""),
+            "north_road": setup.get("north_road", ""),
+            "south_road": setup.get("south_road", ""),
+            "east_road": setup.get("east_road", ""),
+            "west_road": setup.get("west_road", ""),
+            "caption_text": setup.get("caption_text", ""),
+            "show_u_turn": bool(setup.get("show_u_turn", True)),
         },
         mapping=_current_mapping_for_session(),
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
         pce_factors=_current_pce_factors_from_state(),
         peak_settings=peak_settings,
         export_settings={
-            "use_template_report_layout": bool(_state_value("use_template_report_layout_checkbox", True)),
-            "use_excel_com_native_charts": bool(_state_value("use_excel_com_native_charts_checkbox", False)),
+            "use_template_report_layout": _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
+            "use_excel_com_native_charts": _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
             "template_version": TEMPLATE_VERSION,
             "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
             "template_path": str(DEFAULT_TEMPLATE_PATH),
@@ -1084,6 +2473,8 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
             st.write(preview)
         if st.button("ใช้ค่าจาก Session ที่โหลด", key="apply_project_session"):
             changed = apply_session_to_state(loaded_session, st.session_state)
+            update_setup_state_from_widgets()
+            _hydrate_setup_widgets_from_state()
             for stale_key in ["tmc_processed", "tmc_output", "tmc_pce_results_stale", "am_peak_period_select", "pm_peak_period_select"]:
                 st.session_state.pop(stale_key, None)
             st.success(f"ใช้ค่า Session แล้ว อัปเดตค่าปัจจุบัน {len(changed)} รายการ")
@@ -1143,9 +2534,6 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str) -> pd.DataFrame
         "source_stream",
         "raw_movement_label",
         "movement_code",
-        "from_leg",
-        "to_leg",
-        "turn_type",
         "include_in_report",
         "include_in_peak",
     ]
@@ -1183,21 +2571,75 @@ def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
     if matched.empty:
         return ""
     value = pd.to_numeric(matched.iloc[0].get("Total"), errors="coerce")
-    return f"{value:,.0f}" if pd.notna(value) else ""
+    return format_pcu(value) if pd.notna(value) else ""
 
 
-def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame) -> None:
+def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame, am_peak_label: str = "", pm_peak_label: str = "") -> None:
     chart_frame = hourly_interval_rows(hourly_movement)
     if chart_frame.empty:
         _render_empty_state("No hourly PCU data", "Analyze the workbook before reviewing the hourly PCU chart.")
         return
     time_column = chart_frame.columns[0]
     if "Total" in chart_frame.columns:
-        st.line_chart(chart_frame.set_index(time_column)[["Total"]], width="stretch")
+        total = chart_frame[["Total"]].copy()
     else:
         value_columns = [column for column in chart_frame.columns if column != time_column]
-        fallback = chart_frame.set_index(time_column)[value_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1)
-        st.line_chart(fallback.rename("Total"), width="stretch")
+        total = pd.DataFrame({"Total": chart_frame[value_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1) if value_columns else 0})
+    display = pd.DataFrame(
+        {
+            "เวลา": chart_frame[time_column].astype(str).map(format_time_range),
+            "PCU": pd.to_numeric(total["Total"], errors="coerce").fillna(0),
+        }
+    )
+    time_order = display["เวลา"].tolist()
+    base = alt.Chart(display).encode(
+        x=alt.X("เวลา:N", axis=alt.Axis(title="เวลา", labelAngle=-35), sort=time_order),
+        tooltip=[
+            alt.Tooltip("เวลา:N", title="ช่วงเวลา"),
+            alt.Tooltip("PCU:Q", title="PCU/ชม.", format=",.0f"),
+        ],
+    )
+    area = base.mark_area(color=CHART_PRIMARY_COLOR, opacity=0.11).encode(y=alt.Y("PCU:Q"))
+    line = base.mark_line(color=CHART_PRIMARY_COLOR, strokeWidth=2.6).encode(
+        y=alt.Y(
+            "PCU:Q",
+            axis=alt.Axis(title="PCU/ชม.", grid=True, gridColor=CHART_GRID_COLOR),
+            scale=alt.Scale(zero=True),
+        )
+    )
+    points = base.mark_point(color=CHART_PRIMARY_COLOR, filled=True, size=48).encode(y=alt.Y("PCU:Q"))
+    layers = [area, line, points]
+    highlights = []
+    for label, period, color in (
+        ("AM Peak", am_peak_label, CHART_PRIMARY_COLOR),
+        ("PM Peak", pm_peak_label, CHART_PM_COLOR),
+    ):
+        formatted = format_time_range(period)
+        matched = display[display["เวลา"].eq(formatted)]
+        if not matched.empty:
+            row = matched.iloc[0]
+            highlights.append({"PCU": float(row["PCU"]), "ช่วง": label, "เวลา": formatted, "color": color})
+    if highlights:
+        highlight_frame = pd.DataFrame(highlights)
+        highlight_base = alt.Chart(highlight_frame).encode(
+            x=alt.X("เวลา:N", sort=time_order),
+            y=alt.Y("PCU:Q"),
+            color=alt.Color("color:N", scale=None, legend=None),
+            tooltip=[
+                alt.Tooltip("ช่วง:N", title="Peak"),
+                alt.Tooltip("เวลา:N", title="ช่วงเวลา"),
+                alt.Tooltip("PCU:Q", title="PCU/ชม.", format=",.0f"),
+            ],
+        )
+        layers.append(highlight_base.mark_rule(strokeWidth=1.8, opacity=0.55))
+        layers.append(highlight_base.mark_point(filled=True, size=110, stroke="white", strokeWidth=1.2))
+    chart = (
+        alt.layer(*layers)
+        .properties(height=320)
+        .configure_view(stroke=None)
+        .configure_axis(labelColor=CHART_TEXT_COLOR, titleColor=CHART_TEXT_COLOR, domainColor=CHART_GRID_COLOR, tickColor=CHART_GRID_COLOR)
+    )
+    st.altair_chart(chart, width="stretch")
 
 
 def _batch_upload_signature(files: list[object] | tuple[object, ...] | None) -> tuple[tuple[str, int, str], ...]:
@@ -1218,6 +2660,134 @@ def _metadata_signature(rows: list[dict[str, object]]) -> tuple[tuple[str, str, 
         )
         for row in rows
     )
+
+
+def _batch_peak_settings_signature(
+    peak_mode: str | None,
+    peak_windows: dict[str, tuple[str, str]] | None,
+) -> tuple[object, ...]:
+    return (
+        str(peak_mode or ""),
+        tuple(sorted((str(key), tuple(value)) for key, value in (peak_windows or {}).items())),
+    )
+
+
+def _batch_analysis_signature(
+    *,
+    uploads_signature: tuple[object, ...],
+    preset_signature: object,
+    pce_factors: dict[str, float] | None,
+    peak_mode: str | None,
+    peak_windows: dict[str, tuple[str, str]] | None,
+) -> tuple[object, ...]:
+    return (
+        uploads_signature,
+        preset_signature,
+        tuple(sorted((pce_factors or {}).items())),
+        _batch_peak_settings_signature(peak_mode, peak_windows),
+    )
+
+
+def _batch_export_signature(
+    *,
+    metadata_rows: list[dict[str, object]],
+    shared_setup: dict[str, object] | None = None,
+    export_mode: str | None,
+    confirmed_peaks: dict[str, dict[str, str]] | None,
+) -> tuple[object, ...]:
+    setup = shared_setup or {}
+    return (
+        _metadata_signature(metadata_rows),
+        tuple(
+            (field, str(setup.get(field, "")))
+            for field in (
+                "project_name",
+                "tmc_id",
+                "tmc_title",
+                "survey_point",
+                "weather",
+                "responsible_party",
+                "survey_period",
+                "north_label",
+                "south_label",
+                "east_label",
+                "west_label",
+                "north_road",
+                "south_road",
+                "east_road",
+                "west_road",
+                "caption_text",
+                "show_u_turn",
+            )
+        ),
+        str(export_mode or ""),
+        tuple(
+            sorted(
+                (
+                    str(folder),
+                    str(values.get("AM", "")),
+                    str(values.get("PM", "")),
+                )
+                for folder, values in (confirmed_peaks or {}).items()
+            )
+        ),
+    )
+
+
+def _mark_batch_export_stale_now() -> None:
+    if st.session_state.get("tmc_batch_export_result") is not None:
+        st.session_state["tmc_batch_export_stale"] = True
+    st.session_state.pop("tmc_batch_export_result", None)
+
+
+def _mark_batch_export_stale_if_inputs_changed(signature: tuple[object, ...]) -> bool:
+    previous = st.session_state.get("tmc_batch_export_signature")
+    st.session_state["tmc_batch_current_export_signature"] = signature
+    if previous is not None and previous != signature:
+        _mark_batch_export_stale_now()
+    return bool(st.session_state.get("tmc_batch_export_stale"))
+
+
+def _sync_batch_analysis_metadata_from_state() -> None:
+    batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+    if batch_analysis is None:
+        return
+
+    metadata_rows = st.session_state.get("tmc_batch_file_metadata_table") or []
+    metadata_by_name = {str(row.get("file_name", "")): row for row in metadata_rows}
+    analysis_items = list(getattr(batch_analysis, "items", []) or [])
+    batch_items = []
+    for item in analysis_items:
+        metadata = metadata_by_name.get(str(item.file_name), {})
+        batch_items.append(
+            BatchItem(
+                file_name=item.file_name,
+                workbook_bytes=getattr(item, "workbook_bytes", b""),
+                survey_date_text=str(metadata.get("survey_date_text", item.survey_date_text) or ""),
+                output_stem=safe_output_stem(str(metadata.get("output_stem", item.output_stem) or item.output_stem)),
+                notes=str(metadata.get("notes", item.notes) or ""),
+            )
+        )
+
+    output_stems = unique_safe_output_stems(batch_items)
+    old_to_new_folders: dict[str, str] = {}
+    for index, (item, batch_item) in enumerate(zip(analysis_items, batch_items), start=1):
+        old_folder = str(item.folder_name)
+        output_stem = output_stems[index - 1]
+        item.survey_date_text = batch_item.survey_date_text
+        item.output_stem = output_stem
+        item.folder_name = batch_folder_name(index, output_stem)
+        item.notes = batch_item.notes or item.notes
+        old_to_new_folders[old_folder] = item.folder_name
+
+    confirmed = st.session_state.get("tmc_batch_confirmed_peaks") or {}
+    remapped_confirmed = {}
+    for old_folder, values in confirmed.items():
+        remapped_confirmed[old_to_new_folders.get(str(old_folder), str(old_folder))] = values
+    st.session_state["tmc_batch_confirmed_peaks"] = remapped_confirmed
+    selected_review_file = str(st.session_state.get("tmc_batch_selected_review_file") or "")
+    if selected_review_file in old_to_new_folders:
+        st.session_state["tmc_batch_selected_review_file"] = old_to_new_folders[selected_review_file]
 
 
 def _sync_batch_metadata_state(batch_uploads: list[object] | tuple[object, ...] | None) -> list[dict[str, str]]:
@@ -1269,6 +2839,7 @@ def _mark_batch_stale_if_inputs_changed(signature: tuple[object, ...]) -> bool:
     st.session_state["tmc_batch_current_input_signature"] = signature
     if batch_change_invalidates(previous, signature, st.session_state.get("tmc_batch_analysis_result") is not None):
         st.session_state["tmc_batch_stale"] = True
+        st.session_state["tmc_batch_export_stale"] = True
         st.session_state.pop("tmc_batch_export_result", None)
     return bool(st.session_state.get("tmc_batch_stale"))
 
@@ -1276,6 +2847,7 @@ def _mark_batch_stale_if_inputs_changed(signature: tuple[object, ...]) -> bool:
 def _mark_batch_stale_now() -> None:
     if st.session_state.get("tmc_batch_analysis_result") is not None:
         st.session_state["tmc_batch_stale"] = True
+        st.session_state["tmc_batch_export_stale"] = True
         st.session_state.pop("tmc_batch_export_result", None)
 
 
@@ -1334,6 +2906,11 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
 
 def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
     display = _batch_status_frame(batch_analysis, batch_result)
+    if not display.empty:
+        for column in ("status", "mapping_status", "export_status"):
+            if column in display.columns:
+                display[column] = display[column].map(_display_status_label)
+        display = _format_display_columns(display)
     return display.rename(
         columns={
             "file_name": "ชื่อไฟล์",
@@ -1343,8 +2920,8 @@ def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFra
             "mapping_status": "สถานะ Mapping",
             "AM suggested": "AM แนะนำ",
             "PM suggested": "PM แนะนำ",
-            "AM confirmed": "AM ยืนยัน",
-            "PM confirmed": "PM ยืนยัน",
+            "AM confirmed": "AM กำหนดแล้ว",
+            "PM confirmed": "PM กำหนดแล้ว",
             "total PCU": "PCU รวม",
             "QC errors": "QC ผิดพลาด",
             "QC warnings": "QC เตือน",
@@ -1356,10 +2933,133 @@ def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFra
     )
 
 
+def _batch_peak_review_display_frame(batch_analysis) -> pd.DataFrame:
+    display = _batch_status_frame(batch_analysis)
+    if display.empty:
+        return display
+    columns = [
+        "file_name",
+        "survey_date_text",
+        "status",
+        "AM suggested",
+        "PM suggested",
+        "AM confirmed",
+        "PM confirmed",
+        "QC errors",
+        "QC warnings",
+        "QC info",
+        "notes",
+    ]
+    display = display[[column for column in columns if column in display.columns]]
+    if "status" in display.columns:
+        display["status"] = display["status"].map(_display_status_label)
+    display = _format_display_columns(display)
+    return display.rename(
+        columns={
+            "file_name": "ชื่อไฟล์",
+            "survey_date_text": "วันที่สำรวจ",
+            "status": "สถานะ",
+            "AM suggested": "AM แนะนำ",
+            "PM suggested": "PM แนะนำ",
+            "AM confirmed": "AM กำหนดแล้ว",
+            "PM confirmed": "PM กำหนดแล้ว",
+            "QC errors": "QC ผิดพลาด",
+            "QC warnings": "QC เตือน",
+            "QC info": "QC ข้อมูล",
+            "notes": "หมายเหตุ",
+        }
+    )
+
+
 def _batch_qc_rows_for_ui(batch_analysis, batch_result=None) -> pd.DataFrame:
     if batch_result:
         return batch_qc_frame(batch_result.qc_rows)
     return batch_qc_frame(batch_analysis_qc_rows(batch_analysis))
+
+
+def _display_status_label(value: object) -> str:
+    text = str(value or "").strip()
+    labels = {
+        "success": "สำเร็จ",
+        "failed": "ไม่สำเร็จ",
+        "error": "ผิดพลาด",
+        "warning": "เตือน",
+        "info": "ข้อมูล",
+        "ready": "พร้อม",
+        "pending": "รอตรวจสอบ",
+        "complete": "เสร็จสิ้น",
+    }
+    return labels.get(text.casefold(), text)
+
+
+def _format_display_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    display = pd.DataFrame(frame).copy()
+    if display.empty:
+        return display
+    count_terms = ("จำนวน", "count", "vehicles", "คัน", "errors", "warnings", "info", "rows")
+    pcu_terms = ("pcu", "PCU")
+    percent_terms = ("percent", "share", "สัดส่วน", "%")
+    for column in display.columns:
+        column_text = str(column)
+        lowered = column_text.casefold()
+        if any(term.casefold() in lowered for term in pcu_terms):
+            display[column] = display[column].map(format_pcu)
+        elif "phf" in lowered:
+            display[column] = display[column].map(format_phf)
+        elif any(term.casefold() in lowered for term in percent_terms):
+            display[column] = display[column].map(format_percent)
+        elif any(term.casefold() in lowered for term in count_terms):
+            display[column] = display[column].map(format_count)
+    return display
+
+
+def _qc_display_frame(qc: pd.DataFrame | None, *, thai_labels: bool = True) -> pd.DataFrame:
+    display = pd.DataFrame(qc).copy() if qc is not None else pd.DataFrame()
+    if display.empty:
+        return display
+    preferred = _existing_columns(
+        display,
+        [
+            "file_name",
+            "output_stem",
+            "severity",
+            "category",
+            "check",
+            "message",
+            "detail",
+            "affected_field",
+            "movement_code",
+            "raw_sheet",
+        ],
+    )
+    display = display[preferred] if preferred else display
+    if "severity" in display.columns:
+        display["severity"] = display["severity"].map(_display_status_label)
+    if not thai_labels:
+        return display
+    return display.rename(
+        columns={
+            "file_name": "ชื่อไฟล์",
+            "output_stem": "ชื่อส่งออก",
+            "severity": "ระดับ",
+            "category": "หมวด",
+            "check": "รายการตรวจ",
+            "message": "ข้อความ",
+            "detail": "รายละเอียด",
+            "affected_field": "ฟิลด์",
+            "movement_code": "Movement",
+            "raw_sheet": "Sheet ต้นทาง",
+        }
+    )
+
+
+def _batch_qc_preview_display_frame(batch_qc: pd.DataFrame) -> pd.DataFrame:
+    display = _qc_display_frame(batch_qc, thai_labels=True)
+    columns = _existing_columns(
+        display,
+        ["ชื่อไฟล์", "ชื่อส่งออก", "ระดับ", "หมวด", "รายการตรวจ", "ข้อความ", "รายละเอียด", "Movement", "Sheet ต้นทาง"],
+    )
+    return display[columns] if columns else display
 
 
 def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
@@ -1389,10 +3089,19 @@ def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
     }
 
 
+def _existing_columns(frame: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [column for column in columns if column in frame.columns]
+
+
 def _render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     is_confirmed = source == "user_confirmed"
     card_class = "tmc-peak-confirmed" if is_confirmed else "tmc-peak-suggested"
-    badge = "ยืนยันแล้ว" if is_confirmed else "แนะนำ"
+    title_text = str(title).casefold()
+    if "am" in title_text or "เช้า" in title_text:
+        card_class = f"{card_class} tmc-peak-am"
+    elif "pm" in title_text or "เย็น" in title_text:
+        card_class = f"{card_class} tmc-peak-pm"
+    badge = "กำหนดแล้ว" if is_confirmed else "แนะนำ"
     pcu_text = f"{pcu} PCU" if pcu else "ไม่มีข้อมูล PCU"
     st.markdown(
         f'<div class="tmc-card tmc-peak-card {card_class}">'
@@ -1485,6 +3194,75 @@ def _thai_aggregation_message(message: str) -> str:
     return message
 
 
+def _mapping_workspace_counts(mapping: pd.DataFrame, detected_sheet_names: list[str] | tuple[str, ...]) -> dict[str, int]:
+    frame = pd.DataFrame(mapping)
+    if frame.empty:
+        return {
+            "rows": 0,
+            "detected_sheets": len(detected_sheet_names or []),
+            "included": 0,
+            "excluded": 0,
+            "peak_included": 0,
+            "duplicate_movements": 0,
+            "blank_source_stream": 0,
+        }
+    include_report = frame["include_in_report"].fillna(True).astype(bool) if "include_in_report" in frame else pd.Series(True, index=frame.index)
+    include_peak = frame["include_in_peak"].fillna(True).astype(bool) if "include_in_peak" in frame else pd.Series(True, index=frame.index)
+    movement = frame["movement_code"].fillna("").astype(str).str.strip() if "movement_code" in frame else pd.Series("", index=frame.index)
+    included_movement = movement[include_report & (movement != "")]
+    source_stream = frame["source_stream"].fillna("").astype(str).str.strip() if "source_stream" in frame else pd.Series("", index=frame.index)
+    return {
+        "rows": int(len(frame)),
+        "detected_sheets": len(detected_sheet_names or []),
+        "included": int(include_report.sum()),
+        "excluded": int((~include_report).sum()),
+        "peak_included": int(include_peak.sum()),
+        "duplicate_movements": int((included_movement.value_counts() > 1).sum()),
+        "blank_source_stream": int((source_stream == "").sum()),
+    }
+
+
+def _mapping_aggregation_preview(mapping: pd.DataFrame) -> pd.DataFrame:
+    frame = pd.DataFrame(mapping)
+    columns = ["output_movement_code", "source_stream count", "raw_movement_label/source_direction", "aggregation_method"]
+    if frame.empty or "movement_code" not in frame:
+        return pd.DataFrame(columns=columns)
+    include_report = frame["include_in_report"].fillna(True).astype(bool) if "include_in_report" in frame else pd.Series(True, index=frame.index)
+    movement = frame["movement_code"].fillna("").astype(str).str.strip()
+    included = frame[include_report & (movement != "")].copy()
+    if included.empty:
+        return pd.DataFrame(columns=columns)
+    included["output_movement_code"] = included["movement_code"].fillna("").astype(str).str.strip()
+    for column in ("source_stream", "raw_movement_label", "raw_direction", "raw_sheet", "aggregation_method"):
+        if column not in included:
+            included[column] = ""
+        included[column] = included[column].fillna("").astype(str)
+    rows = []
+    for movement_code, group in included.groupby("output_movement_code", dropna=False):
+        if len(group) <= 1:
+            continue
+        label_parts = []
+        for _, row in group.iterrows():
+            label = str(row.get("raw_movement_label") or row.get("raw_direction") or row.get("raw_sheet") or "").strip()
+            if label:
+                label_parts.append(label)
+        rows.append(
+            {
+                "output_movement_code": movement_code,
+                "source_stream count": int(group["source_stream"].replace("", pd.NA).nunique(dropna=True) or len(group)),
+                "raw_movement_label/source_direction": ", ".join(label_parts[:4]),
+                "aggregation_method": ", ".join(sorted({str(value) for value in group["aggregation_method"] if str(value).strip()})),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _mapping_preset_rows_frame(preset: dict[str, object] | None) -> pd.DataFrame:
+    if not preset:
+        return pd.DataFrame()
+    return pd.DataFrame(preset.get("mapping_rows") or preset.get("rows") or [])
+
+
 def _thai_mapping_control_warning(message: str) -> str:
     if message.startswith("Unknown ") and " value(s) " in message:
         return f"พบค่าใน Mapping ที่อยู่นอกตัวเลือก ระบบโหลดแบบปลอดภัยแล้ว ({message})"
@@ -1550,7 +3328,8 @@ def _run_streamlit_app() -> None:
     batch_preset_upload = None
 
     with st.sidebar:
-        st.header("โหมดการทำงาน")
+        _render_sidebar_brand()
+        _render_sidebar_section("Work mode")
         work_mode = st.radio(
             "เลือกโหมดการทำงาน",
             options=work_mode_options,
@@ -1558,8 +3337,7 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
-        st.divider()
-        st.subheader("ข้อมูลนำเข้า")
+        _render_sidebar_section("Input")
         if is_single_file_mode:
             st.caption("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
             uploaded_file = st.file_uploader(
@@ -1586,6 +3364,7 @@ def _run_streamlit_app() -> None:
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
     uploaded_filename_default = _default_text_from_filename(uploaded_file.name if uploaded_file is not None else None)
+    initialize_setup_state_once(uploaded_filename_default)
 
     if uploaded_identity and st.session_state.get("tmc_uploaded_identity") != uploaded_identity:
         st.session_state.pop("tmc_output", None)
@@ -1599,35 +3378,9 @@ def _run_streamlit_app() -> None:
         for key in ["am_peak_period_select", "pm_peak_period_select"]:
             st.session_state.pop(key, None)
         st.session_state["tmc_uploaded_identity"] = uploaded_identity
-        if uploaded_filename_default:
-            if not str(st.session_state.get("tmc_title_input", "")).strip():
-                st.session_state["tmc_title_input"] = uploaded_filename_default
-            if not str(st.session_state.get("survey_point_input", "")).strip():
-                st.session_state["survey_point_input"] = uploaded_filename_default
+        apply_uploaded_filename_defaults_to_setup_state(uploaded_filename_default)
+    _hydrate_setup_widgets_from_state()
 
-    st.session_state.setdefault("project_name_input", "")
-    st.session_state.setdefault("tmc_id_input", "")
-    st.session_state.setdefault("tmc_title_input", uploaded_filename_default)
-    st.session_state.setdefault("survey_point_input", uploaded_filename_default)
-    st.session_state.setdefault("survey_date_text_input", "")
-    st.session_state.setdefault("weather_input", DEFAULT_WEATHER)
-    st.session_state.setdefault("responsible_party_input", DEFAULT_RESPONSIBLE_PARTY)
-    st.session_state.setdefault("survey_period_input", DEFAULT_SURVEY_PERIOD)
-    st.session_state.setdefault("north_label_input", "")
-    st.session_state.setdefault("south_label_input", "")
-    st.session_state.setdefault("east_label_input", "")
-    st.session_state.setdefault("west_label_input", "")
-    st.session_state.setdefault("north_road_input", "")
-    st.session_state.setdefault("south_road_input", "")
-    st.session_state.setdefault("east_road_input", "")
-    st.session_state.setdefault("west_road_input", "")
-    st.session_state.setdefault("caption_text_input", DEFAULT_CAPTION_TEXT)
-    st.session_state.setdefault("peak_mode_select", DEFAULT_PEAK_MODE)
-    for _peak_key, _peak_default in default_peak_window_state().items():
-        st.session_state.setdefault(_peak_key, _peak_default)
-    st.session_state.setdefault("show_u_turn_checkbox", True)
-    st.session_state.setdefault("use_template_report_layout_checkbox", True)
-    st.session_state.setdefault("use_excel_com_native_charts_checkbox", bool(excel_com_status.available))
     st.session_state.setdefault("mapping_editor_version", 0)
     st.session_state.setdefault("tmc_batch_file_metadata_table", [])
     st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
@@ -1637,66 +3390,37 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
     _ensure_pce_factor_state()
+    single_export_options = _single_export_mode_options(excel_com_status)
+    export_mode = _coerce_export_mode(
+        st.session_state.get("report_export_mode"),
+        single_export_options,
+        SAFE_PNG_EXPORT_MODE,
+    )
+    st.session_state["report_export_mode"] = export_mode
+    use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
+    batch_export_options = _batch_export_mode_options(excel_com_status)
+    st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
+        st.session_state.get("tmc_batch_export_mode"),
+        batch_export_options,
+        BATCH_SAFE_PNG_EXPORT_LABEL,
+    )
 
     with st.sidebar:
         if is_single_file_mode:
+            _render_sidebar_section("Project session")
             _render_project_session_section(
                 uploaded_file.name if uploaded_file is not None else None,
                 len(file_bytes) if uploaded_file is not None else None,
                 compact=True,
             )
-            st.divider()
-            st.subheader("โหมดส่งออกไฟล์เดี่ยว")
-            if excel_com_status.available:
-                export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
-                if st.session_state.get("report_export_mode_radio") not in export_mode_options:
-                    if st.session_state.get("use_excel_com_native_charts_checkbox", True):
-                        st.session_state["report_export_mode_radio"] = EXCEL_TEMPLATE_EXPORT_MODE
-                    else:
-                        st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
-            else:
-                export_mode_options = [SAFE_PNG_EXPORT_MODE]
-                st.session_state["report_export_mode_radio"] = SAFE_PNG_EXPORT_MODE
-
-            export_mode = st.radio("โหมดส่งออกรายงาน", options=export_mode_options, key="report_export_mode_radio")
-            use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
-            st.session_state["use_excel_com_native_charts_checkbox"] = use_excel_com_native_charts
-            st.caption(
-                "ใช้ Excel Template เมื่อ COM พร้อมใช้งาน"
-                if use_excel_com_native_charts
-                else "โหมดสำรองใช้กราฟ PNG แบบคงที่"
-            )
-            st.divider()
         else:
-            export_mode = st.session_state.get("report_export_mode_radio", SAFE_PNG_EXPORT_MODE)
-            use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
-            st.subheader("โหมดส่งออก Batch")
-            batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
-            if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
-                st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
-            if st.session_state.get("tmc_batch_export_mode_radio") not in batch_export_options:
-                st.session_state.pop("tmc_batch_export_mode_radio", None)
-            selected_batch_export_mode = st.radio(
-                "Batch export mode",
-                options=batch_export_options,
-                index=batch_export_options.index(st.session_state["tmc_batch_export_mode"]),
-                key="tmc_batch_export_mode_radio",
-                help="Excel Template Mode preserves native Excel charts/formulas when Excel COM is available. Safe PNG Export Mode uses static PNG charts.",
-            )
-            st.session_state["tmc_batch_export_mode"] = selected_batch_export_mode
-            if selected_batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                st.caption("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
-                if len(batch_uploads or []) > 10:
-                    st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
-            else:
-                st.caption("Safe PNG Export Mode เป็นโหมดสำรองสำหรับตรวจงานเร็วขึ้น โดยใช้กราฟ PNG แบบคงที่")
-        st.divider()
-        st.subheader("Excel Engine")
+            use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
+        _render_sidebar_section("Engine status")
         previous_excel_com_available = bool(excel_com_status.available)
         if st.button("ทดสอบ Excel COM", key="test_excel_com"):
             excel_com_status = _probe_excel_com_for_ui(force=True)
-            if excel_com_status.available and not previous_excel_com_available:
-                st.session_state["report_export_mode_radio"] = EXCEL_TEMPLATE_EXPORT_MODE
+            if bool(excel_com_status.available) != previous_excel_com_available:
+                st.rerun()
 
         if excel_com_status.available:
             version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
@@ -1727,25 +3451,44 @@ def _run_streamlit_app() -> None:
         except (MappingPresetError, ValueError) as exc:
             st.sidebar.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
 
-    st.markdown(
-        """
-        <div class="tmc-header">
-            <h1 class="tmc-title">TMC Processor</h1>
-            <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
-            <div class="tmc-workflow">อัปโหลดไฟล์ → ตั้งค่างาน → กำหนดทิศทาง → ประมวลผล → ตรวจสอบช่วงเร่งด่วน → ส่งออกไฟล์</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    _render_app_header()
+    shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
+    shell_batch_signature = _batch_analysis_signature(
+        uploads_signature=_batch_upload_signature(batch_uploads),
+        preset_signature=batch_preset_signature,
+        pce_factors=_current_pce_factors_from_state(),
+        peak_mode=st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE),
+        peak_windows={
+            "AM": (
+                _time_text(st.session_state.get("am_peak_window_start_input", _time_from_text(AM_WINDOW[0]))),
+                _time_text(st.session_state.get("am_peak_window_end_input", _time_from_text(AM_WINDOW[1]))),
+            ),
+            "PM": (
+                _time_text(st.session_state.get("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0]))),
+                _time_text(st.session_state.get("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1]))),
+            ),
+        },
     )
-    if is_single_file_mode:
-        st.info("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
-        _render_status_cards(
-            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-            excel_com_status=excel_com_status,
-            export_mode=export_mode,
-        )
-    else:
-        st.info("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+    _render_top_status_bar(
+        is_single_file_mode=is_single_file_mode,
+        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+        uploaded_count=len(batch_uploads or []),
+        batch_mapping_ready=loaded_batch_preset is not None,
+        export_mode=export_mode if is_single_file_mode else shell_batch_export_mode,
+        excel_com_status=excel_com_status,
+    )
+    _render_workflow_shell(
+        is_single_file_mode=is_single_file_mode,
+        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+        uploaded_count=len(batch_uploads or []),
+        batch_mapping_ready=loaded_batch_preset is not None,
+        batch_signature=shell_batch_signature,
+        export_mode=export_mode,
+        excel_com_status=excel_com_status,
+    )
+    flash_message = st.session_state.pop("tmc_flash_message", None)
+    if flash_message:
+        _render_alert(str(flash_message.get("message", "")), str(flash_message.get("kind", "success")))
 
     detected_sheet_names: list[str] = []
     preview_summary = pd.DataFrame()
@@ -1764,58 +3507,90 @@ def _run_streamlit_app() -> None:
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
 
-    setup_tab, mapping_tab, dashboard_tab, export_tab, qa_tab = st.tabs(
-        ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
-    )
+    active_tab = render_workflow_navigation()
+
+    project_name = st.session_state.get("project_name_input", "")
+    tmc_id = st.session_state.get("tmc_id_input", "")
+    tmc_title = st.session_state.get("tmc_title_input", uploaded_filename_default)
+    survey_point = st.session_state.get("survey_point_input", uploaded_filename_default)
+    survey_date_text = st.session_state.get("survey_date_text_input", "")
+    weather = st.session_state.get("weather_input", DEFAULT_WEATHER)
+    responsible_party = st.session_state.get("responsible_party_input", DEFAULT_RESPONSIBLE_PARTY)
+    survey_period = st.session_state.get("survey_period_input", DEFAULT_SURVEY_PERIOD)
+    north_label = st.session_state.get("north_label_input", "")
+    south_label = st.session_state.get("south_label_input", "")
+    east_label = st.session_state.get("east_label_input", "")
+    west_label = st.session_state.get("west_label_input", "")
+    north_road = st.session_state.get("north_road_input", "")
+    south_road = st.session_state.get("south_road_input", "")
+    east_road = st.session_state.get("east_road_input", "")
+    west_road = st.session_state.get("west_road_input", "")
+    caption_text = st.session_state.get("caption_text_input", DEFAULT_CAPTION_TEXT)
+    peak_mode = st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE)
+    am_peak_window_start = st.session_state.get("am_peak_window_start_input", _time_from_text(AM_WINDOW[0]))
+    am_peak_window_end = st.session_state.get("am_peak_window_end_input", _time_from_text(AM_WINDOW[1]))
+    pm_peak_window_start = st.session_state.get("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0]))
+    pm_peak_window_end = st.session_state.get("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1]))
+    show_u_turn = st.session_state.get("show_u_turn_checkbox", True)
+    selected_pce_factors = _current_pce_factors_from_state()
 
     if is_single_file_mode:
-      with setup_tab:
-        st.header("ตั้งค่างาน")
-        with st.container(border=True):
-            _render_section_header("ข้อมูลรายงาน", "ข้อมูลหลักที่จะใช้ในหน้าแรกของรายงาน")
-            report_cols = st.columns(3)
-            project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
-            tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
-            tmc_title = report_cols[2].text_input("ชื่อจุดนับ", key="tmc_title_input")
-            info_cols = st.columns(4)
-            survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
-            survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
-            weather = info_cols[2].text_input("สภาพอากาศ", key="weather_input")
-            responsible_party = info_cols[3].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
+      if active_tab == "ตั้งค่า":
+        _render_section_header("ตั้งค่างาน", "ระบุข้อมูลงานและค่าที่ใช้ในการประมวลผลรายงาน")
+        if uploaded_file is None:
+            _render_action_hint("เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย")
 
-        with st.container(border=True):
-            _render_section_header("ค่าเริ่มต้นช่วงเร่งด่วน", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
-            period_row_1 = st.columns(4)
-            period_row_2 = st.columns(4)
-            survey_period = period_row_1[0].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
-            if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
-                st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
-            peak_mode = period_row_1[1].selectbox("รูปแบบการคำนวณ Peak", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
-            am_peak_window_start = period_row_1[2].time_input("เริ่มช่วง AM", step=900, key="am_peak_window_start_input")
-            am_peak_window_end = period_row_1[3].time_input("สิ้นสุดช่วง AM", step=900, key="am_peak_window_end_input")
-            pm_peak_window_start = period_row_2[0].time_input("เริ่มช่วง PM", step=900, key="pm_peak_window_start_input")
-            pm_peak_window_end = period_row_2[1].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
+        setup_left, setup_right = st.columns([1.15, 1])
+        with setup_left:
+            with st.container(border=True):
+                _render_section_header("ข้อมูลโครงการและรายงาน", "ข้อมูลหลักสำหรับปกและหัวรายงาน")
+                report_cols = st.columns(2)
+                project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
+                tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
+                tmc_title = st.text_input("ชื่อจุดนับ", key="tmc_title_input")
+                info_cols = st.columns(2)
+                survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
+                survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
+                weather = info_cols[0].text_input("สภาพอากาศ", key="weather_input")
+                responsible_party = info_cols[1].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
 
-        with st.container(border=True):
-            _render_section_header("ป้ายปลายทาง", "ข้อความปลายทางของแต่ละขาเข้า-ออก")
-            direction_cols = st.columns(4)
-            north_label = direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
-            south_label = direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
-            east_label = direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
-            west_label = direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+            with st.container(border=True):
+                _render_section_header("ช่วงสำรวจและ Peak", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
+                survey_period = st.text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+                if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
+                    st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
+                peak_mode = st.selectbox("รูปแบบการคำนวณ Peak", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
+                period_cols = st.columns(4)
+                am_peak_window_start = period_cols[0].time_input("เริ่มช่วง AM", step=900, key="am_peak_window_start_input")
+                am_peak_window_end = period_cols[1].time_input("สิ้นสุดช่วง AM", step=900, key="am_peak_window_end_input")
+                pm_peak_window_start = period_cols[2].time_input("เริ่มช่วง PM", step=900, key="pm_peak_window_start_input")
+                pm_peak_window_end = period_cols[3].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
 
-        with st.container(border=True):
-            _render_section_header("ชื่อถนน / ทางหลวง", "ชื่อถนนที่จะแสดงในแผนภาพและรายงาน")
-            road_cols = st.columns(4)
-            north_road = road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
-            south_road = road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
-            east_road = road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
-            west_road = road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
-            st.markdown("#### คำบรรยายรูป Diagram")
-            caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
-            show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
+        with setup_right:
+            with st.container(border=True):
+                _render_section_header("ป้ายปลายทางและถนน", "ข้อความที่ใช้ใน Diagram และรายงาน")
+                st.caption("ป้ายปลายทาง")
+                direction_cols = st.columns(2)
+                north_label = direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
+                south_label = direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
+                east_label = direction_cols[0].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
+                west_label = direction_cols[1].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+                st.caption("ชื่อถนน / ทางหลวง")
+                road_cols = st.columns(2)
+                north_road = road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
+                south_road = road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
+                east_road = road_cols[0].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
+                west_road = road_cols[1].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
+                caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
+                show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
 
-        selected_pce_factors = _render_pce_factor_editor()
+            with st.container(border=True):
+                _render_section_header("ค่า PCE", "แก้เฉพาะกรณีต้องใช้ค่าเทียบเท่ารถยนต์นั่งต่างจากค่าเริ่มต้น")
+                selected_pce_factors = _render_pce_factor_editor()
+                has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+                _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
+                if has_overrides:
+                    st.caption(override_text)
 
     if not is_single_file_mode:
         project_name = st.session_state.get("project_name_input", "")
@@ -1843,32 +3618,30 @@ def _run_streamlit_app() -> None:
         show_u_turn = st.session_state.get("show_u_turn_checkbox", True)
         selected_pce_factors = _current_pce_factors_from_state()
 
-    setup = _setup_from_inputs(
-        project_name=project_name,
-        tmc_id=tmc_id,
-        tmc_title=tmc_title,
-        survey_point=survey_point,
-        survey_date_text=survey_date_text,
-        weather=weather,
-        responsible_party=responsible_party,
-        survey_period=survey_period,
-        north_label=north_label,
-        south_label=south_label,
-        east_label=east_label,
-        west_label=west_label,
-        north_road=north_road,
-        south_road=south_road,
-        east_road=east_road,
-        west_road=west_road,
-        caption_text=caption_text,
-        uploaded_filename=uploaded_file.name if uploaded_file is not None else "",
-        peak_mode=peak_mode,
-        am_peak_window_start=am_peak_window_start,
-        am_peak_window_end=am_peak_window_end,
-        pm_peak_window_start=pm_peak_window_start,
-        pm_peak_window_end=pm_peak_window_end,
-        show_u_turn=show_u_turn,
-    )
+    setup = build_setup_for_processing(uploaded_file.name if uploaded_file is not None else "")
+    project_name = str(setup.get("project_name", "") or "")
+    tmc_id = str(setup.get("tmc_id", "") or "")
+    tmc_title = str(setup.get("tmc_title", "") or "")
+    survey_point = str(setup.get("survey_point", "") or "")
+    survey_date_text = str(setup.get("survey_date_text", "") or "")
+    weather = str(setup.get("weather", DEFAULT_WEATHER) or "")
+    responsible_party = str(setup.get("responsible_party", DEFAULT_RESPONSIBLE_PARTY) or "")
+    survey_period = str(setup.get("survey_period", DEFAULT_SURVEY_PERIOD) or "")
+    north_label = str(setup.get("north_label", "") or "")
+    south_label = str(setup.get("south_label", "") or "")
+    east_label = str(setup.get("east_label", "") or "")
+    west_label = str(setup.get("west_label", "") or "")
+    north_road = str(setup.get("north_road", "") or "")
+    south_road = str(setup.get("south_road", "") or "")
+    east_road = str(setup.get("east_road", "") or "")
+    west_road = str(setup.get("west_road", "") or "")
+    caption_text = str(setup.get("caption_text", DEFAULT_CAPTION_TEXT) or "")
+    peak_mode = str(setup.get("peak_mode", DEFAULT_PEAK_MODE) or DEFAULT_PEAK_MODE)
+    am_peak_window_start = _coerce_setup_time(setup.get("am_peak_window_start"), _time_from_text(AM_WINDOW[0]))
+    am_peak_window_end = _coerce_setup_time(setup.get("am_peak_window_end"), _time_from_text(AM_WINDOW[1]))
+    pm_peak_window_start = _coerce_setup_time(setup.get("pm_peak_window_start"), _time_from_text(PM_WINDOW[0]))
+    pm_peak_window_end = _coerce_setup_time(setup.get("pm_peak_window_end"), _time_from_text(PM_WINDOW[1]))
+    show_u_turn = bool(setup.get("show_u_turn", True))
     peak_windows = {
         "AM": (setup["am_peak_window_start"], setup["am_peak_window_end"]),
         "PM": (setup["pm_peak_window_start"], setup["pm_peak_window_end"]),
@@ -1876,43 +3649,65 @@ def _run_streamlit_app() -> None:
     mapping = pd.DataFrame(st.session_state.get("mapping_table") or [])
 
     if is_single_file_mode:
-        with mapping_tab:
-            st.header("กำหนดทิศทาง")
+        if active_tab == "กำหนดทิศทาง":
+            _render_section_header(
+                "กำหนดทิศทาง",
+                "จับคู่ข้อมูลจากชีตสำรวจเข้ากับรหัสการเคลื่อนที่มาตรฐาน ก่อนประมวลผลรายงาน",
+            )
             if uploaded_file is None:
                 _render_empty_state(
                     "ยังไม่มีไฟล์สำรวจ",
-                    "อัปโหลดไฟล์ Excel ในแถบด้านซ้ายเพื่อเริ่มกำหนดทิศทางจาก Sheet สำรวจ",
+                    "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย",
                 )
             elif not detected_sheet_names:
-                st.warning('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"')
+                _render_alert('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"', "warning")
             else:
-                st.markdown("#### Sheet ทิศทางที่ตรวจพบ")
-                st.dataframe(preview_summary, width="stretch")
-                _render_section_header(
-                    "ตารางกำหนดทิศทาง",
-                    "ตรวจสอบ Sheet สำรวจและกำหนด movement สำหรับรายงาน",
-                )
-                st.caption("หลายแถวสามารถ map ไปยัง movement เดียวกันได้ เช่น ทางหลักตรง + ทางคู่ขนานตรง → NS")
                 default_mapping = default_mapping_for_sheets(detected_sheet_names)
                 if st.session_state.get("mapping_table") is not None:
                     default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
-    
-                st.markdown("#### นำเข้า/ส่งออก Mapping")
-                mapping_excel_col, mapping_preset_col = st.columns(2)
-                with mapping_excel_col:
-                    st.markdown("**Mapping Excel**")
-                    st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
-                    mapping_upload = st.file_uploader(
-                        "โหลดไฟล์ Mapping Excel",
-                        type=["xlsx", "xlsm", "xls"],
-                        key="mapping_upload",
+                preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
+                preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
+                preset_bytes = serialize_mapping_preset(
+                    build_mapping_preset(
+                        preset_source,
+                        preset_name=str(preset_name_seed or "TMC Mapping Preset"),
                     )
-                    _render_download_button(
-                        "ดาวน์โหลดเทมเพลต Mapping",
-                        mapping_to_excel_bytes(default_mapping),
-                        "tmc_mapping_template.xlsx",
-                        EXCEL_MIME,
-                    )
+                )
+                st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
+                st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
+
+                with st.container(border=True):
+                    _render_section_header("นำเข้า/ส่งออก Mapping", "เลือกใช้ Mapping Excel สำหรับแก้ไขใน Excel หรือ Mapping Preset สำหรับนำค่าที่ตั้งไว้กลับมาใช้ซ้ำ")
+                    mapping_excel_col, mapping_preset_col = st.columns(2)
+                    with mapping_excel_col:
+                        st.markdown("**Mapping Excel**")
+                        st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
+                        mapping_upload = st.file_uploader(
+                            "โหลดไฟล์ Mapping Excel",
+                            type=["xlsx", "xlsm", "xls"],
+                            key="mapping_upload",
+                        )
+                        _render_download_button(
+                            "ดาวน์โหลดเทมเพลต Mapping",
+                            mapping_to_excel_bytes(default_mapping),
+                            "tmc_mapping_template.xlsx",
+                            EXCEL_MIME,
+                        )
+                    with mapping_preset_col:
+                        st.markdown("**Mapping Preset**")
+                        st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
+                        mapping_preset_upload = st.file_uploader(
+                            "เปิด Mapping Preset",
+                            type=["json"],
+                            key="mapping_preset_upload",
+                        )
+                        st.download_button(
+                            "ดาวน์โหลด Mapping Preset",
+                            data=download_buffer(preset_bytes),
+                            file_name=st.session_state["tmc_mapping_preset_filename"],
+                            mime=MAPPING_PRESET_MIME,
+                            key="download_mapping_preset",
+                        )
                 if mapping_upload is not None:
                     try:
                         mapping_upload_bytes = mapping_upload.getvalue()
@@ -1926,35 +3721,10 @@ def _run_streamlit_app() -> None:
                             st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
                             st.session_state["tmc_mapping_table_from_session"] = False
                             st.session_state["tmc_mapping_upload_identity"] = mapping_upload_identity
-                            st.success("โหลด Mapping และปรับใช้กับ Sheet ที่ตรวจพบแล้ว")
+                            _render_alert("โหลด Mapping และปรับใช้กับ Sheet ที่ตรวจพบแล้ว", "success")
                     except Exception as exc:  # pragma: no cover - UI guardrail
                         st.error(f"ไม่สามารถโหลดไฟล์ Mapping ได้: {exc}")
     
-                preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
-                preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
-                preset_bytes = serialize_mapping_preset(
-                    build_mapping_preset(
-                        preset_source,
-                        preset_name=str(preset_name_seed or "TMC Mapping Preset"),
-                    )
-                )
-                st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
-                st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
-                with mapping_preset_col:
-                    st.markdown("**Mapping Preset**")
-                    st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
-                    mapping_preset_upload = st.file_uploader(
-                        "เปิด Mapping Preset",
-                        type=["json"],
-                        key="mapping_preset_upload",
-                    )
-                    st.download_button(
-                        "ดาวน์โหลด Mapping Preset",
-                        data=download_buffer(preset_bytes),
-                        file_name=st.session_state["tmc_mapping_preset_filename"],
-                        mime=MAPPING_PRESET_MIME,
-                        key="download_mapping_preset",
-                    )
                 if mapping_preset_upload is not None:
                     try:
                         preset_upload_bytes = mapping_preset_upload.getvalue()
@@ -1980,22 +3750,49 @@ def _run_streamlit_app() -> None:
                         st.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
                 preset_info = st.session_state.get("tmc_mapping_preset_apply_info")
                 if preset_info:
-                    st.success("โหลด Mapping Preset สำเร็จ")
-                    st.info(
-                        f"{preset_info.get('matched', 0)} sheets matched; "
-                        f"{preset_info.get('missing', 0)} detected sheets still need review; "
-                        f"{preset_info.get('extra', 0)} preset rows were not found in current workbook."
+                    _render_alert("โหลด Mapping Preset สำเร็จ", "success")
+                    _render_alert(
+                        f"จับคู่ Sheet ได้ {preset_info.get('matched', 0)} รายการ; "
+                        f"ยังต้องตรวจสอบ Sheet ที่พบใหม่ {preset_info.get('missing', 0)} รายการ; "
+                        f"แถวจาก Preset ที่ไม่พบใน workbook นี้ {preset_info.get('extra', 0)} รายการ",
+                        "info",
                     )
                 for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
-                    st.warning(warning_message)
+                    _render_alert(warning_message, "warning")
+
+                mapping_issues = validate_mapping_for_processing(detected_sheet_names, default_mapping)
+                mapping_counts = _mapping_workspace_counts(default_mapping, detected_sheet_names)
+                _render_metric_strip(
+                    [
+                        ("ไฟล์สำรวจ", "โหลดแล้ว", "", uploaded_file.name, "พร้อม"),
+                        ("Sheet ที่พบ", mapping_counts["detected_sheets"], "sheet", "ตรวจจาก workbook", "พร้อม"),
+                        ("แถว Mapping", mapping_counts["rows"], "แถว", "ข้อมูลหลักสำหรับประมวลผล", "พร้อม" if mapping_counts["rows"] else "ต้องตรวจสอบ"),
+                        ("Movement ที่ใช้", mapping_counts["included"], "แถว", f"ไม่รวม {mapping_counts['excluded']:,} แถว", "พร้อม" if mapping_counts["included"] else "ต้องตรวจสอบ"),
+                        ("รวมหลาย source", mapping_counts["duplicate_movements"], "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if mapping_counts["duplicate_movements"] else "พร้อม"),
+                        ("สถานะ Mapping", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ", "", "ประมวลผลได้" if mapping_issues.empty else f"{len(mapping_issues):,} รายการ", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ"),
+                    ],
+                    columns=6,
+                )
+
+                action_col, readiness_col = st.columns([0.82, 1.18])
+                with action_col:
+                    run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty, key="process_tmc_mapping_top")
+                with readiness_col:
+                    if mapping_issues.empty:
+                        _render_alert("การกำหนดทิศทางพร้อมสำหรับประมวลผล", "success")
+                    else:
+                        _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
                 mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
                 for warning_message in mapping_control_warnings(default_mapping):
-                    st.warning(_thai_mapping_control_warning(warning_message))
+                    _render_alert(_thai_mapping_control_warning(warning_message), "warning")
                 movement_code_options = selectbox_options_with_existing_values(
                     ["", *MOVEMENT_CODE_OPTIONS],
                     default_mapping["movement_code"] if "movement_code" in default_mapping else None,
                 )
+                with st.expander("Sheet ทิศทางที่ตรวจพบ", expanded=False):
+                    st.dataframe(preview_summary, width="stretch")
+                _render_section_header("ตาราง Mapping", "ตารางนี้เป็นข้อมูลหลักสำหรับการจับคู่ movement")
                 mapping_view = st.radio(
                     "มุมมองตาราง Mapping",
                     options=["Basic", "Advanced"],
@@ -2011,7 +3808,7 @@ def _run_streamlit_app() -> None:
                         "raw_sheet": st.column_config.TextColumn("Sheet ต้นทาง", disabled=True),
                         "raw_direction": st.column_config.TextColumn("ทิศทางต้นทาง", disabled=True),
                         "movement_code": st.column_config.SelectboxColumn(
-                            "movement_code สำหรับรายงาน",
+                            "output_movement_code",
                             options=movement_code_options,
                             required=True,
                         ),
@@ -2045,20 +3842,29 @@ def _run_streamlit_app() -> None:
                 mapping = _merge_mapping_editor_result(default_mapping, pd.DataFrame(mapping))
                 st.session_state["mapping_table"] = mapping.to_dict("records")
                 st.session_state["tmc_mapping_table_from_session"] = False
+                mapping_counts = _mapping_workspace_counts(mapping, detected_sheet_names)
 
-                st.markdown("#### ตรวจสอบการรวม movement")
-                for aggregation_message in movement_aggregation_messages(mapping):
-                    st.info(_thai_aggregation_message(aggregation_message))
+                aggregation_preview = _mapping_aggregation_preview(mapping)
+                if not aggregation_preview.empty:
+                    _render_alert("พบ movement ที่รวมจากหลาย source stream", "info")
+                    with st.expander("Audit: movement ที่รวมจากหลาย source stream", expanded=False):
+                        st.dataframe(aggregation_preview, width="stretch", hide_index=True)
+                        for aggregation_message in movement_aggregation_messages(mapping):
+                            st.caption(_thai_aggregation_message(aggregation_message))
     
                 mapping_issues = validate_mapping_for_processing(detected_sheet_names, mapping)
                 if mapping_issues.empty:
-                    st.success("การกำหนดทิศทางพร้อมสำหรับประมวลผล")
+                    _render_alert("Mapping พร้อมใช้งาน", "success")
                 else:
-                    st.warning("กรุณาตรวจสอบ Mapping ก่อนประมวลผล")
-                    st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
+                    _render_alert("มีรายการที่ต้องตรวจสอบก่อนประมวลผล", "warning")
+                    with st.expander("รายการที่ต้องตรวจสอบ", expanded=True):
+                        st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
+                if mapping_counts["blank_source_stream"]:
+                    _render_alert(f"พบ source_stream ว่าง {mapping_counts['blank_source_stream']:,} แถว ระบบจะใช้ค่าเริ่มต้นตามพฤติกรรมเดิมเมื่อรวมข้อมูล", "info")
+                if mapping_counts["excluded"]:
+                    _render_alert(f"มีแถวที่ไม่แสดงในรายงาน {mapping_counts['excluded']:,} แถว", "info")
 
-                run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty)
-                if run:
+                if run and mapping_issues.empty:
                     try:
                         raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
                         result = process_tmc(
@@ -2083,7 +3889,8 @@ def _run_streamlit_app() -> None:
                         }
                         st.session_state.pop("tmc_output", None)
                         st.session_state.pop("tmc_pce_results_stale", None)
-                        st.success("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจสอบกราฟและช่วงเร่งด่วน”")
+                        set_active_tab("ตรวจ Peak")
+                        _flash_and_rerun("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจ Peak”")
 
     if not is_single_file_mode:
         batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
@@ -2095,88 +3902,156 @@ def _run_streamlit_app() -> None:
             mapping_available=mapping_ready,
             pce_factors_ready=pce_ready,
         )
-        batch_signature = (
-            _batch_upload_signature(batch_uploads),
-            batch_preset_signature,
-            tuple(sorted((selected_pce_factors or {}).items())),
-            _metadata_signature(st.session_state.get("tmc_batch_file_metadata_table") or []),
-            batch_export_mode,
+        batch_signature = _batch_analysis_signature(
+            uploads_signature=_batch_upload_signature(batch_uploads),
+            preset_signature=batch_preset_signature,
+            pce_factors=selected_pce_factors,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
         )
         batch_stale = _mark_batch_stale_if_inputs_changed(batch_signature)
         batch_analysis = st.session_state.get("tmc_batch_analysis_result")
         batch_result = st.session_state.get("tmc_batch_export_result")
+        batch_export_signature = _batch_export_signature(
+            metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+            shared_setup=setup,
+            export_mode=batch_export_mode,
+            confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+        )
+        batch_export_stale = _mark_batch_export_stale_if_inputs_changed(batch_export_signature)
 
-        with setup_tab:
-            st.header("ตั้งค่างาน Batch")
-            with st.container(border=True):
-                _render_section_header(
-                    "ขอบเขต Batch",
-                    "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์",
-                )
-                setup_cols = st.columns(3)
-                setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
-                setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
-                setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
-                direction_cols = st.columns(4)
-                direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
-                direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
-                direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
-                direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
-                road_cols = st.columns(4)
-                road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
-                road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
-                road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
-                road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
-                selected_pce_factors = _render_pce_factor_editor()
+        if active_tab == "ตั้งค่า":
+            _render_section_header("ตั้งค่า Batch", "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+            if batch_stale:
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
 
-            with st.container(border=True):
-                _render_section_header("ไฟล์ใน Batch", "แก้เฉพาะวันที่สำรวจ ชื่อไฟล์ส่งออก และหมายเหตุรายไฟล์")
-                if not batch_metadata_rows:
-                    _render_empty_state("ยังไม่มีไฟล์ Batch", "อัปโหลดไฟล์ TMC Excel หลายไฟล์ใน sidebar")
-                else:
-                    st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
-                    metadata_version = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0)
-                    edited_metadata = st.data_editor(
-                        pd.DataFrame(batch_metadata_rows),
-                        key=f"tmc_batch_file_metadata_editor_{metadata_version}",
-                        hide_index=True,
-                        width="stretch",
-                        disabled=["file_name"],
-                        column_config={
-                            "file_name": st.column_config.TextColumn("file_name"),
-                            "survey_date_text": st.column_config.TextColumn("survey_date_text"),
-                            "output_stem": st.column_config.TextColumn("output_stem"),
-                            "notes": st.column_config.TextColumn("notes"),
-                        },
+            batch_left, batch_right = st.columns([1.1, 1])
+            with batch_left:
+                with st.container(border=True):
+                    _render_section_header("ขอบเขต Batch", "ค่ากลางที่จะใช้ร่วมกันทุกไฟล์")
+                    _render_readiness_checklist(
+                        [
+                            ("ใช้ Mapping Preset เดียวกันทุกไฟล์", mapping_ready, "เปิดไฟล์ Preset ใน sidebar"),
+                            ("ใช้ค่า PCE ชุดเดียวกัน", pce_ready, ""),
+                            ("ตรวจ Peak แยกแต่ละไฟล์", bool(batch_analysis), "อยู่ในแท็บตรวจ Peak"),
+                            ("ไม่รวม raw Excel ใน ZIP", True, "แพ็กเกจส่งออกมีเฉพาะรายงานและไฟล์ประกอบ"),
+                        ]
                     )
-                    cleaned_metadata = []
-                    for row in edited_metadata.to_dict("records"):
-                        cleaned_metadata.append(
-                            {
-                                "file_name": Path(str(row.get("file_name", ""))).name,
-                                "survey_date_text": str(row.get("survey_date_text", "") or ""),
-                                "output_stem": safe_output_stem(str(row.get("output_stem", "") or row.get("file_name", ""))),
-                                "notes": str(row.get("notes", "") or ""),
-                            }
+                    setup_cols = st.columns(3)
+                    setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
+                    setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
+                    setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+                    direction_cols = st.columns(4)
+                    direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
+                    direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
+                    direction_cols[2].text_input("ป้ายปลายทางด้านตะวันออก", key="east_label_input")
+                    direction_cols[3].text_input("ป้ายปลายทางด้านตะวันตก", key="west_label_input")
+                    road_cols = st.columns(4)
+                    road_cols[0].text_input("ชื่อถนนด้านเหนือ", key="north_road_input")
+                    road_cols[1].text_input("ชื่อถนนด้านใต้", key="south_road_input")
+                    road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
+                    road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
+
+                with st.container(border=True):
+                    _render_section_header("ค่า PCE ร่วม", "ค่า PCE ชุดนี้จะใช้กับทุกไฟล์ใน Batch")
+                    selected_pce_factors = _render_pce_factor_editor()
+                    has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+                    _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
+                    if has_overrides:
+                        st.caption(override_text)
+
+            with batch_right:
+                with st.container(border=True):
+                    _render_section_header("ไฟล์ที่อัปโหลด", "ตรวจจำนวนไฟล์และชื่อไฟล์ก่อนวิเคราะห์ Batch")
+                    if not batch_metadata_rows:
+                        _render_action_hint("อัปโหลดไฟล์ TMC Excel หลายไฟล์ในแถบด้านซ้าย")
+                    else:
+                        _render_metric_strip(
+                            [
+                                ("จำนวนไฟล์", f"{len(batch_metadata_rows):,}", "ไฟล์", "พร้อมตั้งค่ารายไฟล์"),
+                            ],
+                            columns=1,
                         )
-                    if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
-                        st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
-                        _mark_batch_stale_now()
+                        st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
 
-        with mapping_tab:
-            st.header("กำหนดทิศทาง Batch")
-            with st.container(border=True):
-                _render_section_header("Mapping Preset", "Mapping Preset เดียวจะถูกใช้กับทุกไฟล์ที่อัปโหลด")
-                if loaded_batch_preset:
-                    st.success(f"โหลด Mapping Preset แล้ว: {batch_preset_name}")
-                    preset_rows = pd.DataFrame(loaded_batch_preset.get("mapping_rows") or loaded_batch_preset.get("rows") or [])
-                    if not preset_rows.empty:
-                        st.dataframe(_ordered_mapping_frame(preset_rows), width="stretch")
-                else:
-                    _render_empty_state("ยังไม่มี Mapping Preset", "เปิด Mapping Preset ใน sidebar เพื่อใช้กับทุกไฟล์")
+                with st.container(border=True):
+                    _render_section_header("ข้อมูลรายไฟล์", "survey_date_text และ output_stem จะใช้ในรายงานและ ZIP")
+                    if not batch_metadata_rows:
+                        _render_empty_state("ยังไม่มีข้อมูลรายไฟล์", "อัปโหลดไฟล์ Batch เพื่อสร้างตารางตั้งค่า")
+                    else:
+                        metadata_version = int(st.session_state.get("tmc_batch_file_metadata_editor_version", 0) or 0)
+                        edited_metadata = st.data_editor(
+                            pd.DataFrame(batch_metadata_rows),
+                            key=f"tmc_batch_file_metadata_editor_{metadata_version}",
+                            hide_index=True,
+                            width="stretch",
+                            disabled=["file_name"],
+                            column_config={
+                                "file_name": st.column_config.TextColumn("ชื่อไฟล์ต้นทาง"),
+                                "survey_date_text": st.column_config.TextColumn("วันที่สำรวจ"),
+                                "output_stem": st.column_config.TextColumn("ชื่อไฟล์ส่งออก"),
+                                "notes": st.column_config.TextColumn("หมายเหตุ"),
+                            },
+                        )
+                        cleaned_metadata = []
+                        for row in edited_metadata.to_dict("records"):
+                            cleaned_metadata.append(
+                                {
+                                    "file_name": Path(str(row.get("file_name", ""))).name,
+                                    "survey_date_text": str(row.get("survey_date_text", "") or ""),
+                                    "output_stem": safe_output_stem(str(row.get("output_stem", "") or row.get("file_name", ""))),
+                                    "notes": str(row.get("notes", "") or ""),
+                                }
+                            )
+                        if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
+                            st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
+                            _sync_batch_analysis_metadata_from_state()
+                            _mark_batch_export_stale_now()
 
-            with st.container(border=True):
-                _render_section_header("Sheet matching status", "ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
+        if active_tab == "กำหนดทิศทาง":
+            _render_section_header(
+                "กำหนดทิศทาง Batch",
+                "ใช้ Mapping Preset เดียวกันสำหรับไฟล์สำรวจหลายวันของจุดเดียวกัน",
+            )
+            preset_rows = _mapping_preset_rows_frame(loaded_batch_preset)
+            preset_code_column = "output_movement_code" if "output_movement_code" in preset_rows else "movement_code"
+            preset_included = 0
+            preset_duplicate_count = 0
+            if not preset_rows.empty:
+                preset_include = preset_rows["include_in_report"].fillna(True).astype(bool) if "include_in_report" in preset_rows else pd.Series(True, index=preset_rows.index)
+                preset_codes = preset_rows[preset_code_column].fillna("").astype(str).str.strip() if preset_code_column in preset_rows else pd.Series("", index=preset_rows.index)
+                preset_included = int((preset_include & (preset_codes != "")).sum())
+                preset_duplicate_count = int((preset_codes[preset_include & (preset_codes != "")].value_counts() > 1).sum())
+
+            _render_metric_strip(
+                [
+                    ("Mapping Preset", "พร้อมใช้งาน" if loaded_batch_preset else "ยังไม่พร้อม", "", batch_preset_name if loaded_batch_preset else "เปิดไฟล์ Preset ที่ sidebar", "พร้อมใช้งาน" if loaded_batch_preset else "ต้องตรวจสอบ"),
+                    ("แถว Mapping", len(preset_rows), "แถว", "shared preset", "พร้อม" if loaded_batch_preset else "ต้องตรวจสอบ"),
+                    ("Movement ที่ใช้", preset_included, "แถว", "include_in_report", "พร้อม" if preset_included else "ต้องตรวจสอบ"),
+                    ("รวมหลาย source", preset_duplicate_count, "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if preset_duplicate_count else "พร้อม"),
+                ],
+                columns=4,
+            )
+
+            if not batch_uploads:
+                _render_action_hint("อัปโหลดไฟล์ TMC หลายไฟล์ที่แถบด้านซ้ายก่อนตรวจ Mapping")
+            if not loaded_batch_preset:
+                _render_action_hint("เปิด Mapping Preset เพื่อใช้กับไฟล์ Batch")
+
+            _render_section_header("ความพร้อม Batch", "ตรวจรายการจำเป็นก่อนวิเคราะห์ในแท็บ ตรวจ Peak")
+            _render_readiness_checklist(
+                [
+                    ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
+                    ("Mapping Preset พร้อมใช้งาน", mapping_ready, batch_preset_name if mapping_ready else "ยังไม่เปิด Preset"),
+                    ("ค่า PCE พร้อมใช้งาน", pce_ready, "พร้อมใช้งาน" if pce_ready else "ตรวจค่า PCE ในแท็บตั้งค่า"),
+                    ("Metadata รายไฟล์พร้อมใช้งาน", bool(batch_metadata_rows), f"{len(batch_metadata_rows):,} แถว" if batch_metadata_rows else "ตั้งค่ารายไฟล์ในแท็บตั้งค่า"),
+                ]
+            )
+            if mapping_ready:
+                _render_action_hint("เมื่อ Mapping พร้อมใช้งานแล้ว ไปที่แท็บ ตรวจ Peak เพื่อวิเคราะห์ Batch")
+
+            with st.expander("สถานะ Sheet matching รายไฟล์", expanded=False):
+                _render_action_hint("ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
                 if not batch_uploads or not loaded_batch_preset:
                     _render_empty_state("ยังตรวจ Sheet matching ไม่ได้", "อัปโหลดไฟล์ Batch และเปิด Mapping Preset ก่อน")
                 else:
@@ -2185,31 +4060,67 @@ def _run_streamlit_app() -> None:
                         try:
                             detected = detect_raw_direction_sheet_names(BytesIO(file.getvalue()))
                             apply_result = apply_mapping_preset_to_detected_sheets(loaded_batch_preset, detected)
+                            missing_sheets = ", ".join(apply_result.missing_detected_sheets)
+                            extra_sheets = ", ".join(apply_result.extra_preset_sheets)
                             status_rows.append(
                                 {
                                     "file_name": Path(file.name).name,
-                                    "matched sheets": apply_result.matched_sheet_count,
-                                    "missing detected sheets": apply_result.missing_detected_sheet_count,
-                                    "preset rows not found": apply_result.extra_preset_row_count,
-                                    "status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
+                                    "detected_sheets": len(detected),
+                                    "matched_sheets": apply_result.matched_sheet_count,
+                                    "missing_detected_sheets": apply_result.missing_detected_sheet_count,
+                                    "preset_rows_not_found": apply_result.extra_preset_row_count,
+                                    "mapping_status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
+                                    "notes": missing_sheets or extra_sheets or "",
                                 }
                             )
                         except Exception as exc:
-                            status_rows.append({"file_name": Path(file.name).name, "matched sheets": 0, "missing detected sheets": 0, "preset rows not found": 0, "status": str(exc)})
-                    st.dataframe(pd.DataFrame(status_rows), width="stretch")
+                            status_rows.append(
+                                {
+                                    "file_name": Path(file.name).name,
+                                    "detected_sheets": 0,
+                                    "matched_sheets": 0,
+                                    "missing_detected_sheets": 0,
+                                    "preset_rows_not_found": 0,
+                                    "mapping_status": "อ่านไฟล์ไม่สำเร็จ",
+                                    "notes": str(exc),
+                                }
+                            )
+                    st.dataframe(pd.DataFrame(status_rows), width="stretch", hide_index=True)
 
-        with dashboard_tab:
-            st.header("ตรวจ Peak Batch")
+            if loaded_batch_preset and not preset_rows.empty:
+                with st.expander("ตัวอย่าง Mapping Preset", expanded=False):
+                    preview_columns = [
+                        column
+                        for column in [
+                            "raw_sheet",
+                            "raw_direction",
+                            "source_stream",
+                            "raw_movement_label",
+                            "output_movement_code",
+                            "include_in_report",
+                            "include_in_peak",
+                            "aggregation_method",
+                        ]
+                        if column in preset_rows.columns
+                    ]
+                    st.dataframe(preset_rows[preview_columns].head(50) if preview_columns else preset_rows.head(50), width="stretch", hide_index=True)
+
+        if active_tab == "ตรวจ Peak":
+            _render_section_header("ตรวจ Peak รายไฟล์", "ตรวจกราฟและยืนยัน AM/PM Peak แยกตามไฟล์ ก่อนสร้าง Batch ZIP")
             if batch_stale:
-                st.warning(BATCH_STALE_MESSAGE_TH)
-            _render_readiness_checklist(
-                [
-                    ("uploaded workbooks", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
-                    ("Mapping Preset ready", mapping_ready, "พร้อมใช้" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
-                    ("PCE factors ready", pce_ready, "พร้อมใช้" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
-                ]
-            )
-            analyze_batch = st.button("Analyze Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
+            if not batch_ready:
+                _render_readiness_checklist(
+                    [
+                        ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
+                        ("Mapping Preset", mapping_ready, "พร้อมใช้งาน" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
+                        ("ค่า PCE", pce_ready, "พร้อมใช้งาน" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
+                    ]
+                )
+                _render_action_hint("เตรียมไฟล์ Mapping Preset และค่า PCE ให้พร้อมก่อนวิเคราะห์ Batch")
+            elif not batch_analysis or batch_stale:
+                _render_action_hint("วิเคราะห์ Batch เพื่อสร้างรายการตรวจ Peak รายไฟล์")
+            analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
             if analyze_batch:
                 items = _batch_items_from_uploads(batch_uploads)
                 with st.spinner("กำลังวิเคราะห์ Batch..."):
@@ -2226,13 +4137,15 @@ def _run_streamlit_app() -> None:
                 st.session_state["tmc_batch_preset_name"] = batch_preset_name
                 st.session_state["tmc_batch_input_signature"] = st.session_state.get("tmc_batch_current_input_signature")
                 st.session_state["tmc_batch_stale"] = False
+                st.session_state["tmc_batch_export_stale"] = False
                 st.session_state.pop("tmc_batch_export_result", None)
                 st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
                 st.session_state["tmc_batch_confirmed_peaks"] = {
                     item.folder_name: {"AM": item.confirmed_AM_peak, "PM": item.confirmed_PM_peak}
                     for item in batch_analysis.successful_items
                 }
-                st.success("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
+                set_active_tab("ตรวจ Peak")
+                _flash_and_rerun("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
 
             if batch_analysis:
                 batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
@@ -2241,9 +4154,21 @@ def _run_streamlit_app() -> None:
                     stored = batch_confirmed_peaks.get(item.folder_name, {})
                     item.confirmed_AM_peak = stored.get("AM", item.confirmed_AM_peak)
                     item.confirmed_PM_peak = stored.get("PM", item.confirmed_PM_peak)
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
-
                 successful_items = batch_analysis.successful_items
+                confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
+                successful_count = len(successful_items)
+                status_items = [
+                    ("ไฟล์ทั้งหมด", f"{len(batch_analysis.items):,}", "ไฟล์", ""),
+                    ("กำหนด Peak", f"{confirmed_count:,}/{successful_count:,}", "ไฟล์", "ไฟล์ที่วิเคราะห์สำเร็จ"),
+                    ("ไฟล์ไม่สำเร็จ", f"{sum(1 for item in batch_analysis.items if item.status == 'failed'):,}", "ไฟล์", "ไม่ต้องกำหนด Peak"),
+                ]
+                _render_metric_strip(status_items, columns=3)
+                if successful_count and confirmed_count == successful_count:
+                    _render_alert("กำหนด Peak ครบแล้ว พร้อมส่งออก Batch", "success")
+                elif successful_count:
+                    _render_alert("ยังมีไฟล์ที่ต้องกำหนด Peak", "warning")
+                st.dataframe(_batch_peak_review_display_frame(batch_analysis), width="stretch", hide_index=True)
+
                 if successful_items:
                     review_labels = {f"{item.file_name} ({item.survey_date_text or 'no date'})": item.folder_name for item in successful_items}
                     selected_folder = st.session_state.get("tmc_batch_selected_review_file") or successful_items[0].folder_name
@@ -2261,26 +4186,33 @@ def _run_streamlit_app() -> None:
                     preview = batch_selected_file_preview(selected_item)
                     with st.container(border=True):
                         _render_section_header("ไฟล์ที่เลือก", f"{preview['file_name']} · {preview['output_stem']}")
-                        preview_cols = st.columns(4)
-                        preview_cols[0].metric("วันที่สำรวจ", preview["survey_date_text"] or "-")
-                        preview_cols[1].metric("สถานะ", preview["status"] or "-")
-                        preview_cols[2].metric("จำนวนรถรวม", f"{float(preview['total_vehicles']):,.0f}")
-                        preview_cols[3].metric("PCU รวม", f"{float(preview['total_PCU']):,.0f}")
-                        qc_preview_cols = st.columns(3)
-                        qc_preview_cols[0].metric("QC error", f"{int(preview['QC_errors']):,}")
-                        qc_preview_cols[1].metric("QC warning", f"{int(preview['QC_warnings']):,}")
-                        qc_preview_cols[2].metric("QC info", f"{int(preview['QC_info']):,}")
-                        peak_preview_cols = st.columns(4)
-                        peak_preview_cols[0].metric("AM แนะนำ", preview["suggested_AM_peak"] or "-")
-                        peak_preview_cols[1].metric("PM แนะนำ", preview["suggested_PM_peak"] or "-")
-                        peak_preview_cols[2].metric("AM ยืนยัน", preview["confirmed_AM_peak"] or "-")
-                        peak_preview_cols[3].metric("PM ยืนยัน", preview["confirmed_PM_peak"] or "-")
-                    _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
+                        _render_metric_strip(
+                            [
+                                ("วันที่สำรวจ", preview["survey_date_text"] or "-", "", ""),
+                                ("สถานะ", preview["status"] or "-", "", "", preview["status"] or "pending"),
+                                ("จำนวนรถรวม", format_count(preview["total_vehicles"]), "คัน", ""),
+                                ("PCU รวม", format_pcu(preview["total_PCU"]), "PCU", ""),
+                            ],
+                            columns=4,
+                        )
+                        _render_metric_strip(
+                            [
+                                ("QC error", format_count(preview["QC_errors"]), "", ""),
+                                ("QC warning", format_count(preview["QC_warnings"]), "", ""),
+                                ("QC info", format_count(preview["QC_info"]), "", ""),
+                            ],
+                            columns=3,
+                        )
+                    _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนกำหนดช่วง Peak")
+                    _render_hourly_pcu_line_chart(
+                        selected_item.hourly_movement_pcu,
+                        preview["confirmed_AM_peak"] or preview["suggested_AM_peak"] or "",
+                        preview["confirmed_PM_peak"] or preview["suggested_PM_peak"] or "",
+                    )
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
-                    peak_cols = st.columns(4)
-                    peak_cols[0].metric("Suggested AM", selected_item.suggested_AM_peak or "-")
-                    peak_cols[1].metric("Suggested PM", selected_item.suggested_PM_peak or "-")
+                    _render_section_header("กำหนด Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่กำหนดในหน้านี้สำหรับรายงานของไฟล์นี้")
+                    peak_cols = st.columns(2)
                     if option_labels:
                         stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
                         am_default = stored.get("AM") or selected_item.confirmed_AM_peak
@@ -2289,58 +4221,88 @@ def _run_streamlit_app() -> None:
                             if value and value not in option_labels:
                                 option_labels.insert(0, value)
                         option_labels = list(dict.fromkeys(option_labels))
-                        selected_am = peak_cols[2].selectbox(
-                            "Confirmed AM",
-                            options=option_labels,
-                            index=option_labels.index(am_default) if am_default in option_labels else 0,
-                            key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
-                        )
-                        selected_pm = peak_cols[3].selectbox(
-                            "Confirmed PM",
-                            options=option_labels,
-                            index=option_labels.index(pm_default) if pm_default in option_labels else 0,
-                            key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
-                        )
+                        with peak_cols[0]:
+                            _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_AM_peak"] or "", "", "auto_suggested")
+                            selected_am = st.selectbox(
+                                "ช่วงที่กำหนด AM",
+                                options=option_labels,
+                                index=option_labels.index(am_default) if am_default in option_labels else 0,
+                                key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            _render_status_chip("กำหนดแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
+                        with peak_cols[1]:
+                            _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_PM_peak"] or "", "", "auto_suggested")
+                            selected_pm = st.selectbox(
+                                "ช่วงที่กำหนด PM",
+                                options=option_labels,
+                                index=option_labels.index(pm_default) if pm_default in option_labels else 0,
+                                key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
+                            )
+                            _render_status_chip("กำหนดแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
+                            _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                         if stored.get("AM") != selected_am or stored.get("PM") != selected_pm:
-                            st.session_state.pop("tmc_batch_export_result", None)
+                            _mark_batch_export_stale_now()
                         batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
                         selected_item.confirmed_AM_peak = selected_am
                         selected_item.confirmed_PM_peak = selected_pm
+                    else:
+                        _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak ของไฟล์นี้", "warning")
                 if batch_analysis.has_failures:
-                    st.warning("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องยืนยัน Peak")
+                    _render_alert("บางไฟล์วิเคราะห์ไม่สำเร็จ ไฟล์เหล่านี้ยังแสดงในตารางและไม่ต้องกำหนด Peak", "warning")
             else:
-                _render_empty_state("ยังไม่มีผลวิเคราะห์ Batch", "กด Analyze Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
+                _render_empty_state("กรุณาวิเคราะห์ Batch ก่อนตรวจสอบ Peak", "กด วิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
-        with export_tab:
-            st.header("ส่งออก Batch")
+        if active_tab == "ส่งออก":
+            _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
+            batch_export_options = _batch_export_mode_options(excel_com_status)
+            previous_batch_export_mode = st.session_state.get("tmc_batch_export_mode", batch_export_mode)
+            selected_batch_export_mode = st.radio(
+                "โหมดส่งออก Batch",
+                options=batch_export_options,
+                index=batch_export_options.index(_coerce_export_mode(previous_batch_export_mode, batch_export_options, BATCH_SAFE_PNG_EXPORT_LABEL)),
+                key="tmc_batch_export_mode_control",
+                horizontal=True,
+                help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",
+            )
+            if apply_batch_export_mode_change(selected_batch_export_mode, previous_batch_export_mode):
+                st.rerun()
+            batch_export_mode = selected_batch_export_mode
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             no_successful_files = not batch_analysis or not batch_analysis.successful_items
             peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
-            st.info(f"Batch export mode: {batch_export_mode}")
-            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                st.warning("Excel Template Mode เหมาะสำหรับรายงานฉบับจริง แต่อาจใช้เวลานานกว่าเมื่อประมวลผลหลายไฟล์")
-                if len(batch_uploads or []) > 10:
-                    st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
-            else:
-                st.info("Safe PNG Export Mode เป็นโหมดสำรอง / โหมดตรวจงานที่เร็วกว่า โดยใช้กราฟ PNG แบบคงที่")
+            output_stems_valid = all(str(row.get("output_stem", "")).strip() for row in st.session_state.get("tmc_batch_file_metadata_table") or [])
+            export_mode_ready = bool(
+                batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
+                or excel_com_status.available
+                or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+            )
             if batch_stale:
-                st.warning(BATCH_STALE_MESSAGE_TH)
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
+            elif batch_export_stale:
+                _render_alert("ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่", "warning")
             block_reason = batch_zip_generation_block_reason(
                 has_successful_files=not no_successful_files,
                 peaks_ready=peaks_ready,
                 batch_stale=batch_stale,
             )
-            generate_disabled = bool(block_reason)
+            generate_disabled = bool(block_reason) or not output_stems_valid or not export_mode_ready
+            if not output_stems_valid and not block_reason:
+                block_reason = "ตรวจสอบ output_stem ในแท็บตั้งค่า Batch ก่อนสร้าง ZIP"
+            if not export_mode_ready and not block_reason:
+                block_reason = "โหมดส่งออกยังไม่พร้อม"
+            _render_action_hint(block_reason or "พร้อมสร้าง Batch ZIP")
             generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
             if generate_batch and batch_analysis:
+                set_active_tab("ส่งออก")
                 block_reason = batch_zip_generation_block_reason(
                     has_successful_files=bool(batch_analysis.successful_items),
                     peaks_ready=reviewed_peak_values_complete(batch_analysis),
                     batch_stale=bool(st.session_state.get("tmc_batch_stale")),
                 )
                 if block_reason:
-                    st.warning(block_reason)
+                    _render_alert(block_reason, "warning")
                     st.stop()
                 with st.spinner("กำลังสร้าง Batch ZIP..."):
                     batch_result = generate_batch_zip_from_reviewed_peaks(
@@ -2350,68 +4312,176 @@ def _run_streamlit_app() -> None:
                         peak_mode=peak_mode,
                         peak_windows=peak_windows,
                         export_mode=batch_export_mode,
-                        use_template_report_layout=True,
-                        use_excel_com_native_charts=bool(excel_com_status.available and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)),
-                    )
+                        use_template_report_layout=_use_template_layout_for_export(batch_export_mode),
+                        use_excel_com_native_charts=_use_excel_native_charts_for_export(batch_export_mode, excel_com_status),
+                )
                 st.session_state["tmc_batch_export_result"] = batch_result
-                st.success("สร้าง Batch ZIP เสร็จแล้ว")
+                st.session_state["tmc_batch_export_stale"] = False
+                st.session_state["tmc_batch_export_signature"] = _batch_export_signature(
+                    metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                    shared_setup=setup,
+                    export_mode=batch_export_mode,
+                    confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                )
+                set_active_tab("ส่งออก")
+                _flash_and_rerun("สร้าง Batch ZIP เสร็จแล้ว")
+
+            batch_export_left, batch_export_right = st.columns([0.95, 1.05])
+            with batch_export_left:
+                with st.container(border=True):
+                    _render_section_header("โหมดส่งออก", "สถานะโหมดที่เลือกสำหรับ Batch")
+                    _render_status_chip(batch_export_mode, "success" if export_mode_ready else "warning")
+                    if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+                        _render_alert(
+                            "Excel Template Mode: เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน",
+                            "info",
+                        )
+                    else:
+                        _render_alert(
+                            "Safe PNG Export Mode: โหมดสำรอง เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้",
+                            "info",
+                        )
+                    if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) and len(batch_uploads or []) > 10:
+                        _render_alert("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น", "warning")
+
+            with batch_export_right:
+                with st.container(border=True):
+                    _render_section_header("ความพร้อม Batch", "ตรวจเงื่อนไขก่อนสร้าง Batch ZIP")
+                    _render_readiness_checklist(
+                        [
+                            ("อัปโหลดไฟล์แล้ว", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
+                            ("Mapping Preset พร้อม", mapping_ready, "ใช้ Preset เดียวกันทุกไฟล์"),
+                            ("Batch Analysis วิเคราะห์แล้ว", bool(batch_analysis and not batch_stale), ""),
+                            ("กำหนด Peak ของไฟล์ที่สำเร็จแล้ว", peaks_ready, ""),
+                            ("output_stem ใช้งานได้", output_stems_valid, "ใช้เป็นชื่อโฟลเดอร์และชื่อรายงาน"),
+                            ("โหมดส่งออกพร้อม", export_mode_ready, ""),
+                        ]
+                    )
+            with st.expander("ตัวอย่างไฟล์ใน Batch ZIP", expanded=False):
+                st.code(
+                    "\n".join(
+                        [
+                            "batch_summary.xlsx",
+                            "<output_stem>/report.xlsx",
+                            "<output_stem>/export_summary.txt",
+                            "<output_stem>/session.tmcproj.json",
+                            "<output_stem>/mapping.json",
+                            "<output_stem>/charts/",
+                        ]
+                    ),
+                    language="text",
+                )
+                st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
             if batch_result:
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
-                with st.expander("ZIP contents preview", expanded=True):
+                _render_section_header("สถานะส่งออกรายไฟล์", "ผลการสร้างรายงานใน Batch ล่าสุด")
+                status_display = _batch_status_display_frame(batch_analysis, batch_result)
+                status_columns = [
+                    column
+                    for column in ["ชื่อไฟล์", "ชื่อส่งออก", "สถานะส่งออก", "โหมดส่งออกที่ใช้", "หมายเหตุ"]
+                    if column in status_display.columns
+                ]
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch", hide_index=True)
+                with st.expander("ตัวอย่างไฟล์ใน Batch ZIP ล่าสุด", expanded=False):
                     st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
                     st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
                 st.download_button(
-                    "Download Batch ZIP",
+                    "ดาวน์โหลด Batch ZIP",
                     data=download_buffer(batch_result.package_bytes),
                     file_name=batch_package_filename(st.session_state.get("tmc_batch_preset_name") or batch_preset_name or "tmc_batch"),
                     mime=BATCH_PACKAGE_MIME,
                     key="download_batch_zip",
                 )
             elif not batch_analysis:
-                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และยืนยัน Peak ก่อนสร้าง ZIP")
+                _render_empty_state("ยังส่งออก Batch ไม่ได้", "วิเคราะห์ Batch และกำหนด Peak ก่อนสร้าง ZIP")
             elif not peaks_ready:
-                st.warning(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False))
+                _render_alert(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False), "warning")
 
-        with qa_tab:
-            st.header("ตรวจสอบข้อมูล Batch")
+        if active_tab == "ตรวจสอบข้อมูล":
+            _render_section_header(
+                "ตรวจสอบข้อมูล Batch",
+                "ตรวจสอบสถานะรายไฟล์, QC รวม, และรายละเอียด Batch_QC ก่อนนำผลไปใช้ต่อ",
+            )
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             status_frame = _batch_status_frame(batch_analysis, batch_result)
-            if status_frame.empty:
-                _render_empty_state("ยังไม่มีข้อมูล Batch", "วิเคราะห์ Batch ก่อนตรวจสอบสถานะข้อมูล")
+            if batch_analysis and batch_stale:
+                _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
+            elif batch_analysis and batch_export_stale:
+                _render_alert("ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่", "warning")
+
+            if not batch_analysis:
+                _render_empty_state("กรุณาวิเคราะห์ Batch ก่อนตรวจสอบผลรวม", "ผลรวมรายไฟล์และ Batch_QC จะแสดงหลังการวิเคราะห์ Batch")
             else:
                 counts = _batch_summary_counts(status_frame)
-                summary_cols = st.columns(6)
-                summary_cols[0].metric("ไฟล์ทั้งหมด", f"{counts['total_files']:,}")
-                summary_cols[1].metric("สำเร็จ", f"{counts['successful_files']:,}")
-                summary_cols[2].metric("ล้มเหลว", f"{counts['failed_files']:,}")
-                summary_cols[3].metric("QC error", f"{counts['QC_errors']:,}")
-                summary_cols[4].metric("QC warning", f"{counts['QC_warnings']:,}")
-                summary_cols[5].metric("QC info", f"{counts['QC_info']:,}")
-                st.dataframe(_batch_status_display_frame(batch_analysis, batch_result), width="stretch")
+                _render_metric_strip(
+                    [
+                        ("ไฟล์ทั้งหมด", f"{counts['total_files']:,}", "ไฟล์", ""),
+                        ("สำเร็จ", f"{counts['successful_files']:,}", "ไฟล์", "", "success" if counts["successful_files"] else "รอตรวจ"),
+                        ("ล้มเหลว", f"{counts['failed_files']:,}", "ไฟล์", "", "failed" if counts["failed_files"] else "พร้อม"),
+                        ("QC ผิดพลาด", f"{counts['QC_errors']:,}", "รายการ", "", "error" if counts["QC_errors"] else "พร้อม"),
+                        ("QC เตือน", f"{counts['QC_warnings']:,}", "รายการ", "", "warning" if counts["QC_warnings"] else "พร้อม"),
+                        ("QC ข้อมูล", f"{counts['QC_info']:,}", "รายการ", "", "info" if counts["QC_info"] else "พร้อม"),
+                    ],
+                    columns=6,
+                )
+
+                _render_section_header("สถานะรายไฟล์", "ตารางตรวจสอบผลวิเคราะห์และความพร้อมส่งออกของแต่ละไฟล์")
+                status_display = _batch_status_display_frame(batch_analysis, batch_result)
+                status_columns = _existing_columns(
+                    status_display,
+                    [
+                        "ชื่อไฟล์",
+                        "วันที่สำรวจ",
+                        "ชื่อส่งออก",
+                        "สถานะ",
+                        "AM กำหนดแล้ว",
+                        "PM กำหนดแล้ว",
+                        "PCU รวม",
+                        "QC ผิดพลาด",
+                        "QC เตือน",
+                        "QC ข้อมูล",
+                        "สถานะส่งออก",
+                        "หมายเหตุ",
+                    ],
+                )
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch", hide_index=True)
+
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
-                    st.warning("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ")
-                    st.dataframe(failed[["file_name", "notes"]], width="stretch")
+                    _render_alert("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ ไฟล์เหล่านี้ไม่ต้องกำหนด Peak", "warning")
+                    failed_columns = _existing_columns(failed, ["file_name", "output_stem", "status", "notes"])
+                    failed_display = failed[failed_columns] if failed_columns else failed
+                    if "status" in failed_display.columns:
+                        failed_display = failed_display.copy()
+                        failed_display["status"] = failed_display["status"].map(_display_status_label)
+                    st.dataframe(failed_display, width="stretch", hide_index=True)
+
                 batch_qc = _batch_qc_rows_for_ui(batch_analysis, batch_result)
                 if not batch_qc.empty:
-                    st.markdown("#### Batch_QC preview")
-                    compact_columns = [
-                        "file_name",
-                        "output_stem",
-                        "severity",
-                        "category",
-                        "check",
-                        "message",
-                    ]
-                    st.dataframe(batch_qc[compact_columns].head(25), width="stretch")
+                    _render_section_header("Batch_QC", "ตัวอย่างรายการ QC รวมสำหรับตรวจสอบก่อนใช้ผลต่อ")
+                    batch_qc_display = _batch_qc_preview_display_frame(batch_qc)
+                    st.dataframe(batch_qc_display.head(25), width="stretch", hide_index=True)
                     with st.expander("Batch_QC รายละเอียดทั้งหมด", expanded=False):
-                        st.dataframe(batch_qc, width="stretch")
+                        st.dataframe(_qc_display_frame(batch_qc, thai_labels=True), width="stretch", hide_index=True)
                 else:
-                    st.caption("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ")
-                with st.expander("Batch QC summary by file", expanded=True):
-                    st.dataframe(status_frame[["file_name", "QC errors", "QC warnings", "QC info"]], width="stretch")
-                with st.expander("Batch diagnostic details", expanded=False):
+                    _render_alert("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ", "success")
+
+                if batch_result:
+                    _render_section_header("ร่องรอย Batch ZIP", "ตรวจสอบองค์ประกอบหลักของแพ็กเกจส่งออกล่าสุด")
+                    _render_readiness_checklist(
+                        [
+                            ("สร้าง batch_summary.xlsx แล้ว", True, ""),
+                            ("มี Sheet Batch_Summary", True, ""),
+                            ("มี Sheet Batch_QC", True, ""),
+                            ("ไม่รวม raw input Excel", True, ""),
+                        ]
+                    )
+
+                with st.expander("สรุป QC รายไฟล์", expanded=False):
+                    qc_summary_columns = _existing_columns(status_frame, ["file_name", "QC errors", "QC warnings", "QC info"])
+                    qc_summary = status_frame[qc_summary_columns] if qc_summary_columns else status_frame
+                    st.dataframe(_format_display_columns(qc_summary), width="stretch", hide_index=True)
+                with st.expander("รายละเอียดวิเคราะห์ Batch", expanded=False):
                     if batch_analysis:
                         st.write(
                             [
@@ -2441,30 +4511,25 @@ def _run_streamlit_app() -> None:
     confirmed_pm_end = st.session_state.get("tmc_confirmed_pm_peak_end", "")
 
     if is_single_file_mode:
-        with dashboard_tab:
-            st.header("ตรวจสอบกราฟและช่วงเร่งด่วน")
+        if active_tab == "ตรวจ Peak":
+            _render_section_header("ตรวจ Peak", "ตรวจสอบรูปแบบปริมาณจราจรรายชั่วโมง และกำหนดช่วง AM/PM Peak สำหรับใช้ในรายงาน")
             if pce_results_stale:
-                st.warning("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจสอบกราฟหรือส่งออกรายงาน")
+                _render_alert("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจ Peak หรือส่งออกรายงาน", "warning")
             if result is None:
                 _render_empty_state(
-                    "ยังไม่มีผลประมวลผล",
-                    "ประมวลผลไฟล์ที่กำหนดทิศทางแล้ว เพื่อดูกราฟ PCU รายชั่วโมงและยืนยันช่วงเร่งด่วน",
+                    "กรุณาประมวลผลข้อมูลก่อนตรวจ Peak",
+                    "เมื่อประมวลผลแล้ว ระบบจะแสดงกราฟ PCU รายชั่วโมงและตัวเลือกยืนยัน AM/PM Peak",
                 )
             else:
-                st.markdown("#### สรุปผลการประมวลผล")
-                metric_cols = st.columns(4)
-                metric_cols[0].metric("จำนวนแถวข้อมูลที่ปรับรูปแบบแล้ว", f"{len(result.normalized):,}")
-                metric_cols[1].metric("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0")
-                metric_cols[2].metric("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0")
-                metric_cols[3].metric("ประเด็นตรวจสอบข้อมูล", f"{len(result.qc):,}")
-
-                _render_qc_status(result.qc)
-
-                st.markdown("#### ปริมาณจราจรรวมรายชั่วโมง")
-                _render_hourly_pcu_line_chart(hourly_movement)
-    
                 am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
                 pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
+                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็นค่าหลัก")
+                _render_hourly_pcu_line_chart(
+                    hourly_movement,
+                    f"{am_start}-{am_end}" if am_start and am_end else "",
+                    f"{pm_start}-{pm_end}" if pm_start and pm_end else "",
+                )
+
                 interval_options = _hourly_interval_options(hourly_movement, result.peaks)
                 if interval_options:
                     option_labels = [label for label, _, _ in interval_options]
@@ -2473,97 +4538,131 @@ def _run_streamlit_app() -> None:
                     loaded_confirmed_peaks = st.session_state.get("tmc_loaded_confirmed_peaks") or {}
                     loaded_am_label = f"{loaded_confirmed_peaks.get('am_peak_start', '')}-{loaded_confirmed_peaks.get('am_peak_end', '')}".strip("-")
                     loaded_pm_label = f"{loaded_confirmed_peaks.get('pm_peak_start', '')}-{loaded_confirmed_peaks.get('pm_peak_end', '')}".strip("-")
-                    if loaded_am_label in option_labels and "am_peak_period_select" not in st.session_state:
-                        st.session_state["am_peak_period_select"] = loaded_am_label
+                    if loaded_am_label in option_labels and not st.session_state.get("am_peak_period_select"):
                         am_default = loaded_am_label
-                    if loaded_pm_label in option_labels and "pm_peak_period_select" not in st.session_state:
-                        st.session_state["pm_peak_period_select"] = loaded_pm_label
+                    if loaded_pm_label in option_labels and not st.session_state.get("pm_peak_period_select"):
                         pm_default = loaded_pm_label
                     am_index = option_labels.index(am_default) if am_default in option_labels else 0
                     pm_index = option_labels.index(pm_default) if pm_default in option_labels else min(1, len(option_labels) - 1)
 
                     _render_section_header(
-                        "ยืนยันช่วงเร่งด่วน",
-                        "เปรียบเทียบค่าที่ระบบแนะนำกับช่วงเวลาที่ต้องการใช้ในรายงาน",
+                        "กำหนดช่วง Peak",
+                        "ระบบตรวจจับอัตโนมัติเป็นค่าแนะนำ ผู้ตรวจกำหนดช่วงที่จะใช้ในรายงาน",
                     )
                     confirm_cols = st.columns(2)
-                    am_peak_label = confirm_cols[0].selectbox("เลือกช่วงเร่งด่วนเช้า", option_labels, index=am_index, key="am_peak_period_select")
-                    pm_peak_label = confirm_cols[1].selectbox("เลือกช่วงเร่งด่วนเย็น", option_labels, index=pm_index, key="pm_peak_period_select")
+                    with confirm_cols[0]:
+                        _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
+                        am_peak_label = st.selectbox("ช่วงที่กำหนด AM", option_labels, index=am_index, key="am_peak_period_select")
+                    with confirm_cols[1]:
+                        _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
+                        pm_peak_label = st.selectbox("ช่วงที่กำหนด PM", option_labels, index=pm_index, key="pm_peak_period_select")
                     confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
                     confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
                     st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
                     st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
                     st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
-                    st.caption("รายงาน Excel จะใช้ช่วงเร่งด่วนที่ยืนยันในหน้านี้")
+                    confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
+                    confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
+                    _render_metric_strip(
+                        [
+                            ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
+                            ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
+                            ("AM PCU", _interval_total_pcu(hourly_movement, confirmed_am_label) or am_pcu or "-", "PCU", "Peak PCU"),
+                            ("PM PCU", _interval_total_pcu(hourly_movement, confirmed_pm_label) or pm_pcu or "-", "PCU", "Peak PCU"),
+                        ],
+                        columns=4,
+                    )
+                    _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                     if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
-                        st.success("ยืนยันช่วงเร่งด่วนแล้ว — พร้อมส่งออก")
-
-                    peak_cols = st.columns(4)
-                    with peak_cols[0]:
-                        _render_peak_card("ช่วงเร่งด่วนเช้า (แนะนำ)", f"{am_start}-{am_end}" if am_start and am_end else "", am_pcu, "auto_suggested")
-                    with peak_cols[1]:
-                        _render_peak_card("ช่วงเร่งด่วนเย็น (แนะนำ)", f"{pm_start}-{pm_end}" if pm_start and pm_end else "", pm_pcu, "auto_suggested")
-                    with peak_cols[2]:
-                        confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
-                        _render_peak_card("ช่วงเร่งด่วนเช้า (ยืนยัน)", confirmed_am_label, _interval_total_pcu(hourly_movement, confirmed_am_label), "user_confirmed")
-                    with peak_cols[3]:
-                        confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
-                        _render_peak_card("ช่วงเร่งด่วนเย็น (ยืนยัน)", confirmed_pm_label, _interval_total_pcu(hourly_movement, confirmed_pm_label), "user_confirmed")
+                        _render_alert("กำหนดช่วง Peak แล้ว พร้อมส่งออก", "success")
+                    else:
+                        _render_alert("กรุณากำหนด AM Peak และ PM Peak ก่อนส่งออก", "warning")
                 else:
-                    st.warning("ไม่มีช่วงเวลารายชั่วโมงสำหรับยืนยัน Peak")
+                    _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak", "warning")
+
+                _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
+                _render_metric_strip(
+                    [
+                        ("จำนวนแถว", format_count(len(result.normalized)), "แถว", "normalized"),
+                        ("จำนวนรถรวม", format_count(result.normalized["count"].sum()) if not result.normalized.empty else "0", "คัน", ""),
+                        ("PCU รวม", format_pcu(result.normalized["pcu"].sum()) if not result.normalized.empty else "0", "PCU", ""),
+                        ("QC", format_count(len(result.qc)), "", "ประเด็น"),
+                    ],
+                    columns=4,
+                )
+                _render_qc_status(result.qc)
 
                 with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
-                    st.dataframe(hourly_movement, width="stretch")
+                    st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
     
     if is_single_file_mode:
-        with export_tab:
-            st.header("ส่งออกไฟล์")
-            st.markdown("#### โหมดส่งออกรายงาน")
-            if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
-                st.caption("รักษากราฟ Native Chart สูตร และรูปแบบเทมเพลต Excel เมื่อ Excel COM พร้อมใช้งาน")
-            else:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
-                st.caption("ใช้กราฟ PNG แบบคงที่ เหมาะเมื่อ Excel COM ใช้งานไม่ได้")
-
-            st.markdown("#### Excel Engine")
-            if excel_com_status.available:
-                version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
-                st.success(f"Excel COM พร้อมใช้งาน — {version_text}")
-            else:
-                st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}")
-            st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
-            with st.expander("รายละเอียด Excel COM", expanded=False):
-                _render_excel_com_status(excel_com_status)
-
-            _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบก่อนสร้างรายงาน Excel")
-            if result is not None:
-                _render_qc_status(result.qc)
-            confirmed_ready = all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end])
-            _render_readiness_checklist(
-                [
-                    ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
-                    ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
-                    ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
-                    ("ยืนยันช่วงเร่งด่วนแล้ว", confirmed_ready, ""),
-                    (
-                        "Excel COM พร้อมใช้งาน",
-                        bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-                        "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
-                    ),
-                ]
+        if active_tab == "ส่งออก":
+            export_peak_state = _single_effective_peak_state(result if result is not None and not pce_results_stale else None)
+            effective_peaks = dict(export_peak_state.get("values") or {})
+            confirmed_ready = bool(export_peak_state.get("ready"))
+            _render_section_header("ส่งออกรายงาน", "สร้างรายงาน Excel และชุดไฟล์ประกอบสำหรับตรวจสอบย้อนหลัง")
+            single_export_options = _single_export_mode_options(excel_com_status)
+            previous_export_mode = st.session_state.get("report_export_mode", export_mode)
+            selected_export_mode = st.radio(
+                "โหมดส่งออกรายงาน",
+                options=single_export_options,
+                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, SAFE_PNG_EXPORT_MODE)),
+                key="report_export_mode_control",
+                horizontal=True,
+                help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",
             )
-
-            use_template_report_layout = st.checkbox(
-                "ใช้รูปแบบรายงานจาก Excel Template หากพร้อมใช้งาน",
-                key="use_template_report_layout_checkbox",
-            )
-            st.markdown("#### ดาวน์โหลดไฟล์")
+            if apply_single_export_mode_change(selected_export_mode, previous_export_mode):
+                st.rerun()
+            export_mode = selected_export_mode
+            use_template_report_layout = _use_template_layout_for_export(export_mode)
+            use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
             if pce_results_stale:
-                st.warning("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่")
+                _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
+            _render_action_hint("สร้างรายงานหลังจากประมวลผลและมีช่วงเร่งด่วน AM/PM พร้อมใช้งานแล้ว")
             export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
+
+            export_status_col, readiness_col = st.columns([0.9, 1.1])
+            with export_status_col:
+                with st.container(border=True):
+                    _render_section_header("โหมดส่งออก", "เลือกวิธีสร้างรายงานจากหน้านี้")
+                    if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
+                        st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
+                        st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน")
+                    else:
+                        st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
+                        st.caption("โหมดสำรอง เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้")
+
+                    if excel_com_status.available:
+                        version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
+                        _render_alert(f"Excel COM พร้อมใช้งาน: {version_text}", "success")
+                    else:
+                        _render_alert(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}", "warning")
+                    st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
+                    with st.expander("รายละเอียด Excel COM", expanded=False):
+                        _render_excel_com_status(excel_com_status)
+
+            with readiness_col:
+                with st.container(border=True):
+                    _render_section_header("ความพร้อมก่อนส่งออก", "รายการตรวจสอบแบบย่อก่อนสร้างรายงาน")
+                    if result is not None:
+                        _render_qc_status(result.qc)
+                    _render_readiness_checklist(
+                        [
+                            ("โหลดไฟล์สำรวจแล้ว", uploaded_file is not None, ""),
+                            ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
+                            ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
+                            ("กำหนดช่วงเร่งด่วน AM/PM แล้ว", confirmed_ready, str(export_peak_state.get("summary_text") or "")),
+                            (
+                                "Excel COM พร้อมใช้งาน",
+                                bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
+                                "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+                            ),
+                        ]
+                    )
+
             if export_run:
+                set_active_tab("ส่งออก")
                 excel_com_requested = bool(use_excel_com_native_charts)
                 export_excel_com_status = probe_excel_com() if excel_com_requested else None
                 excel_com_enabled = bool(export_excel_com_status and export_excel_com_status.available)
@@ -2575,15 +4674,15 @@ def _run_streamlit_app() -> None:
     
                 confirmed_setup = {
                     **setup,
-                    "am_peak_start": confirmed_am_start,
-                    "am_peak_end": confirmed_am_end,
-                    "pm_peak_start": confirmed_pm_start,
-                    "pm_peak_end": confirmed_pm_end,
-                    "peak_selection_source": PEAK_SELECTION_USER_CONFIRMED,
+                    "am_peak_start": effective_peaks.get("am_peak_start", ""),
+                    "am_peak_end": effective_peaks.get("am_peak_end", ""),
+                    "pm_peak_start": effective_peaks.get("pm_peak_start", ""),
+                    "pm_peak_end": effective_peaks.get("pm_peak_end", ""),
+                    "peak_selection_source": str(export_peak_state.get("source") or PEAK_SELECTION_AUTO),
                 }
                 confirmed_periods = {
-                    "AM": (confirmed_am_start, confirmed_am_end),
-                    "PM": (confirmed_pm_start, confirmed_pm_end),
+                    "AM": (str(effective_peaks.get("am_peak_start", "")), str(effective_peaks.get("am_peak_end", ""))),
+                    "PM": (str(effective_peaks.get("pm_peak_start", "")), str(effective_peaks.get("pm_peak_end", ""))),
                 }
                 export_generated_at = generated_timestamp_text()
                 try:
@@ -2651,12 +4750,14 @@ def _run_streamlit_app() -> None:
                             "export_mode": export_mode,
                             "generated_at": export_generated_at,
                         }
-                        st.success("สร้างรายงาน Excel เสร็จแล้ว")
+                        set_active_tab("ส่งออก")
+                        _flash_and_rerun("สร้างรายงาน Excel เสร็จแล้ว")
                 except Exception as exc:  # pragma: no cover - UI guardrail
                     st.error(f"ส่งออกไฟล์ไม่สำเร็จ: {exc}")
     
             output = st.session_state.get("tmc_output")
             if output:
+                _render_section_header("ดาวน์โหลดและรายละเอียด", "ไฟล์ที่สร้างแล้วและชุดประกอบสำหรับตรวจสอบย้อนหลัง")
                 _render_download_button("ดาวน์โหลดรายงาน Excel", output["workbook_bytes"], output["workbook_filename"], EXCEL_MIME)
                 session_bytes = st.session_state.get("tmc_project_session_bytes")
                 session_filename = st.session_state.get("tmc_project_session_filename", "tmc_session.tmcproj.json")
@@ -2706,6 +4807,23 @@ def _run_streamlit_app() -> None:
                     chart_pngs=output.get("chart_pngs", {}),
                     diagram_png=output.get("diagram_png"),
                 )
+                with st.expander("ตัวอย่างไฟล์ใน Export Package ZIP", expanded=False):
+                    st.code(
+                        "\n".join(
+                            [
+                                output["workbook_filename"],
+                                "export_summary.txt",
+                                session_filename,
+                                "mapping_preset.mapping.json",
+                                "mapping.csv",
+                                "charts/hourly_pcu_chart.png",
+                                "charts/vehicle_composition_chart.png",
+                                "charts/tmc_movement_diagram.png",
+                            ]
+                        ),
+                        language="text",
+                    )
+                    st.caption("Export Package ZIP ไม่รวม raw input Excel")
                 _render_download_button(
                     "ดาวน์โหลด Export Package ZIP",
                     package_bytes,
@@ -2739,76 +4857,112 @@ def _run_streamlit_app() -> None:
             else:
                 _render_empty_state(
                     "ยังไม่มีไฟล์ส่งออก",
-                    "ยืนยันช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
+                    "กำหนดช่วงเร่งด่วน AM/PM แล้วสร้างรายงาน Excel เมื่อพร้อม",
                 )
 
     if is_single_file_mode:
-        with qa_tab:
-            st.header("ตรวจสอบข้อมูล / ขั้นสูง")
-            if uploaded_file is None:
+        if active_tab == "ตรวจสอบข้อมูล":
+            _render_section_header(
+                "ตรวจสอบข้อมูล",
+                "ตรวจสอบ QC, ข้อมูลที่ประมวลผลแล้ว และรายการ Audit ก่อนนำผลไปใช้ในรายงาน",
+            )
+            if result is None:
                 _render_empty_state(
-                    "ยังไม่มี Workbook สำหรับ QA",
-                    "อัปโหลด Workbook เพื่อดูรายละเอียดการอ่านไฟล์และตรวจสอบข้อมูล",
+                    "กรุณาประมวลผลข้อมูลก่อนตรวจสอบรายละเอียด",
+                    "QC, ตารางข้อมูล และรายการ Audit จะแสดงหลังมีผลประมวลผลแล้ว",
                 )
             else:
-                with st.expander("รายละเอียดการอ่านไฟล์", expanded=False):
-                    st.dataframe(preview_summary, width="stretch")
-                    for sheet_name, preview in previews.items():
-                        st.markdown(f"**{sheet_name}**")
-                        st.dataframe(preview, width="stretch")
-                with st.expander("รายละเอียด Parser", expanded=False):
-                    for sheet_name, parsed in parsed_details.items():
-                        debug = parsed.debug
-                        st.markdown(f"**{sheet_name}**")
+                qc_counts = _qc_severity_counts(result.qc)
+                total_qc = sum(qc_counts.values())
+                _render_metric_strip(
+                    [
+                        ("QC ผิดพลาด", f"{qc_counts['error']:,}", "รายการ", "", "error" if qc_counts["error"] else "พร้อม"),
+                        ("QC เตือน", f"{qc_counts['warning']:,}", "รายการ", "", "warning" if qc_counts["warning"] else "พร้อม"),
+                        ("QC ข้อมูล", f"{qc_counts['info']:,}", "รายการ", "", "info" if qc_counts["info"] else "พร้อม"),
+                        ("QC รวม", f"{total_qc:,}", "รายการ", "", "พร้อม" if not total_qc else "ต้องตรวจ"),
+                    ],
+                    columns=4,
+                )
+                if qc_counts["error"]:
+                    _render_alert("พบ QC error กรุณาตรวจรายละเอียดก่อนส่งออก", "error")
+                elif qc_counts["warning"]:
+                    _render_alert("พบ QC warning ยังส่งออกได้ แต่ควรตรวจหมายเหตุก่อน", "warning")
+                elif qc_counts["info"]:
+                    _render_alert("มีหมายเหตุ QC info สำหรับตรวจสอบ", "info")
+                else:
+                    _render_alert("ไม่พบประเด็น QC", "success")
+
+                _render_section_header("รายละเอียด QC", "รายการตรวจสอบที่ใช้ประกอบการพิจารณาก่อนส่งออกรายงาน")
+                qc_display = _qc_display_frame(result.qc, thai_labels=True)
+                if qc_display.empty:
+                    _render_alert("ไม่พบรายการ QC ที่ต้องตรวจสอบ", "success")
+                elif len(qc_display) > 25:
+                    st.dataframe(qc_display.head(25), width="stretch", hide_index=True)
+                    with st.expander("รายการ QC ทั้งหมด", expanded=False):
+                        st.dataframe(qc_display, width="stretch", hide_index=True)
+                else:
+                    st.dataframe(qc_display, width="stretch", hide_index=True)
+
+                with st.expander("Normalized Data", expanded=False):
+                    st.dataframe(_format_display_columns(result.normalized.head(1000)), width="stretch", hide_index=True)
+                with st.expander("Hourly Movement PCU", expanded=False):
+                    if not hourly_movement.empty:
+                        st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
+                    if not result.hourly.empty:
+                        st.caption("Hourly raw summary")
+                        st.dataframe(_format_display_columns(result.hourly), width="stretch", hide_index=True)
+                with st.expander("Peak / PHF Data", expanded=False):
+                    peak_display = _format_display_columns(result.peaks)
+                    if "peak_start" in peak_display.columns:
+                        peak_display["peak_start"] = peak_display["peak_start"].map(lambda value: str(value)[:5] if str(value) else "-")
+                    if "peak_end" in peak_display.columns:
+                        peak_display["peak_end"] = peak_display["peak_end"].map(lambda value: str(value)[:5] if str(value) else "-")
+                    st.dataframe(peak_display, width="stretch", hide_index=True)
+                with st.expander("Movement Aggregation Audit", expanded=False):
+                    st.caption("ตารางตรวจสอบ source movement, source stream และ output movement ที่ใช้รวมค่าในรายงาน")
+                    audit_frame = movement_aggregation_audit(result.normalized, mapping_df)
+                    st.dataframe(_format_display_columns(audit_frame), width="stretch", hide_index=True)
+                with st.expander("รายละเอียดการอ่านไฟล์และ Parser", expanded=False):
+                    if uploaded_file is not None:
+                        st.dataframe(preview_summary, width="stretch")
+                        for sheet_name, preview in previews.items():
+                            st.markdown(f"**{sheet_name}**")
+                            st.dataframe(preview, width="stretch")
+                        for sheet_name, parsed in parsed_details.items():
+                            debug = parsed.debug
+                            st.markdown(f"**Parser: {sheet_name}**")
+                            st.write(
+                                {
+                                    "detected_first_data_row": debug.first_data_row,
+                                    "detected_time_columns": {
+                                        "time_start_col": debug.time_start_col,
+                                        "time_end_col": debug.time_end_col,
+                                    },
+                                    "detected_vehicle_class_columns": debug.vehicle_class_columns,
+                                }
+                            )
+                            st.dataframe(parsed.data.head(10), width="stretch")
+                    else:
+                        _render_action_hint("ไม่มี Workbook ที่อัปโหลดในรอบการทำงานนี้")
+                with st.expander("Export Metadata / Template Diagnostics", expanded=False):
+                    output = st.session_state.get("tmc_output")
+                    if output:
                         st.write(
                             {
-                                "detected_first_data_row": debug.first_data_row,
-                                "detected_time_columns": {
-                                    "time_start_col": debug.time_start_col,
-                                    "time_end_col": debug.time_end_col,
-                                },
-                                "detected_vehicle_class_columns": debug.vehicle_class_columns,
+                                "workbook_filename": output.get("workbook_filename", ""),
+                                "export_mode": output.get("export_mode", ""),
+                                "generated_at": output.get("generated_at"),
+                                "template_version": TEMPLATE_VERSION,
+                                "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
+                                "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
                             }
                         )
-                        st.dataframe(parsed.data.head(10), width="stretch")
-
-            if result is not None:
-                st.markdown("#### QC summary")
-                qc_counts = _qc_severity_counts(result.qc)
-                qc_cols = st.columns(3)
-                qc_cols[0].metric("error", f"{qc_counts['error']:,}")
-                qc_cols[1].metric("warning", f"{qc_counts['warning']:,}")
-                qc_cols[2].metric("info", f"{qc_counts['info']:,}")
-                if qc_counts["error"]:
-                    st.error("QC errors found. Review details before export.")
-                elif qc_counts["warning"]:
-                    st.warning("QC warnings found. Export is still available, but review the notes first.")
-                elif qc_counts["info"]:
-                    st.info("QC info notes are available for review.")
-                else:
-                    st.success("No QC issues found.")
-                with st.expander("QC details", expanded=False):
-                    st.dataframe(result.qc, width="stretch")
-                with st.expander("Hourly summary", expanded=False):
-                    st.dataframe(result.hourly, width="stretch")
-                with st.expander("Peak PHF", expanded=False):
-                    st.dataframe(result.peaks, width="stretch")
-                with st.expander("ตัวอย่างข้อมูล Normalized", expanded=False):
-                    st.dataframe(result.normalized.head(1000), width="stretch")
-                with st.expander("Movement Aggregation Audit", expanded=False):
-                    st.caption("แสดง source stream ที่ถูกรวมเป็น movement_code สำหรับรายงาน")
-                    st.dataframe(movement_aggregation_audit(result.normalized, mapping_df), width="stretch")
-            else:
-                _render_empty_state(
-                    "ยังไม่มีผล QA จากการประมวลผล",
-                    "ประมวลผลข้อมูลเพื่อดู QC, Normalized rows และรายละเอียดการรวม movement",
-                )
-
-            with st.expander("รายละเอียดเทมเพลต", expanded=False):
-                _render_template_audit_notes()
-            with st.expander("รายละเอียด Excel COM", expanded=False):
-                _render_excel_com_status(excel_com_status)
+                    else:
+                        _render_action_hint("ยังไม่มี metadata การส่งออกในรอบนี้")
+                    _render_template_audit_notes()
+                    _render_excel_com_status(excel_com_status)
     
     
-_run_streamlit_app()
-st.stop()
+if __name__ == "__main__":
+    _run_streamlit_app()
+    st.stop()

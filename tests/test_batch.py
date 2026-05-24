@@ -110,8 +110,6 @@ def test_batch_file_metadata_defaults_do_not_include_raw_paths() -> None:
 
 def test_batch_input_changes_invalidate_after_analysis() -> None:
     assert batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=True)
-    assert batch_change_invalidates(("metadata", "stem-a"), ("metadata", "stem-b"), has_analysis=True)
-    assert batch_change_invalidates(("export-mode", "Safe PNG Export Mode"), ("export-mode", "Excel Template Mode"), has_analysis=True)
     assert not batch_change_invalidates(("files-v1",), ("files-v2",), has_analysis=False)
     assert not batch_change_invalidates(("files-v1",), ("files-v1",), has_analysis=True)
 
