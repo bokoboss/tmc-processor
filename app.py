@@ -282,6 +282,8 @@ def _inject_global_css() -> None:
             --tmc-surface: #FFFEFA;
             --tmc-surface-muted: #F1EFE8;
             --tmc-surface-raised: #FFFFFF;
+            --tmc-sidebar: #EEEAE0;
+            --tmc-sidebar-panel: #F8F6F1;
 
             --tmc-text: #151713;
             --tmc-text-muted: #5F625B;
@@ -326,9 +328,9 @@ def _inject_global_css() -> None:
             --tmc-space-6: 1.5rem;
 
             --tmc-radius-sm: 6px;
-            --tmc-radius-md: 10px;
-            --tmc-radius-lg: 10px;
-            --tmc-radius-xl: 14px;
+            --tmc-radius-md: 8px;
+            --tmc-radius-lg: 8px;
+            --tmc-radius-xl: 10px;
             --tmc-shadow-subtle: 0 1px 2px rgba(21, 23, 19, 0.04);
             --tmc-shadow-soft: 0 8px 24px rgba(21, 23, 19, 0.06);
         }
@@ -341,16 +343,20 @@ def _inject_global_css() -> None:
             font-family: var(--tmc-font-ui);
         }
         .block-container {
-            max-width: 1320px;
-            padding-top: var(--tmc-space-6);
+            max-width: 1240px;
+            padding-top: 1.15rem;
             padding-bottom: 2.5rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
         }
         .tmc-header {
-            padding: var(--tmc-space-1) 0 var(--tmc-space-5) 0;
+            padding: var(--tmc-space-1) 0 var(--tmc-space-3) 0;
+            border-bottom: 1px solid var(--tmc-divider);
+            margin-bottom: var(--tmc-space-3);
         }
         .tmc-title {
             color: var(--tmc-text);
-            font-size: var(--tmc-font-xl);
+            font-size: 2rem;
             font-family: var(--tmc-font-ui);
             font-weight: 650;
             letter-spacing: 0;
@@ -360,8 +366,54 @@ def _inject_global_css() -> None:
         .tmc-subtitle {
             color: var(--tmc-text-muted);
             font-size: var(--tmc-font-md);
-            margin-top: var(--tmc-space-2);
+            margin-top: 0.35rem;
             line-height: 1.5;
+            max-width: 760px;
+        }
+        .tmc-topbar {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 0;
+            background: var(--tmc-surface);
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            margin: 0 0 var(--tmc-space-3) 0;
+            overflow: hidden;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-topbar-item {
+            min-width: 0;
+            padding: 0.62rem 0.78rem;
+            border-right: 1px solid var(--tmc-divider);
+        }
+        .tmc-topbar-item:last-child {
+            border-right: 0;
+        }
+        .tmc-topbar-label {
+            color: var(--tmc-text-soft);
+            font-size: 0.68rem;
+            font-weight: 700;
+            line-height: 1.2;
+            text-transform: uppercase;
+        }
+        .tmc-topbar-value {
+            color: var(--tmc-text);
+            font-size: var(--tmc-font-sm);
+            font-weight: 650;
+            line-height: 1.28;
+            margin-top: 0.18rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tmc-topbar-note {
+            color: var(--tmc-text-soft);
+            font-size: 0.7rem;
+            line-height: 1.25;
+            margin-top: 0.08rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
         .tmc-workflow {
             color: var(--tmc-text-soft);
@@ -372,8 +424,8 @@ def _inject_global_css() -> None:
             background: var(--tmc-surface);
             border: 1px solid var(--tmc-border);
             border-radius: var(--tmc-radius-lg);
-            padding: var(--tmc-space-3) var(--tmc-space-4);
-            margin: 0 0 var(--tmc-space-4) 0;
+            padding: 0.72rem var(--tmc-space-4) 0.78rem;
+            margin: 0 0 var(--tmc-space-3) 0;
             box-shadow: var(--tmc-shadow-subtle);
         }
         .tmc-workflow-shell-head {
@@ -388,10 +440,12 @@ def _inject_global_css() -> None:
             font-size: var(--tmc-font-sm);
             font-weight: 650;
             line-height: 1.25;
+            text-transform: none;
         }
         .tmc-workflow-next {
-            color: var(--tmc-text-muted);
+            color: var(--tmc-bronze);
             font-size: var(--tmc-font-xs);
+            font-weight: 650;
             line-height: 1.35;
             text-align: right;
         }
@@ -443,7 +497,7 @@ def _inject_global_css() -> None:
             border: 1px solid var(--tmc-border);
             border-radius: var(--tmc-radius-lg);
             padding: var(--tmc-space-4);
-            margin: var(--tmc-space-3) 0 var(--tmc-space-4) 0;
+            margin: var(--tmc-space-2) 0 var(--tmc-space-4) 0;
             box-shadow: var(--tmc-shadow-subtle);
         }
         .tmc-panel-title {
@@ -567,12 +621,12 @@ def _inject_global_css() -> None:
             grid-template-columns: repeat(6, minmax(0, 1fr));
             gap: 0;
             align-items: start;
-            margin: var(--tmc-space-2) 0;
+            margin: 0.45rem 0 0.35rem;
         }
         .tmc-workflow-step {
             position: relative;
             display: grid;
-            grid-template-columns: 1.15rem minmax(0, 1fr);
+            grid-template-columns: 1.25rem minmax(0, 1fr);
             column-gap: 0.42rem;
             padding: 0.08rem var(--tmc-space-2) 0.12rem 0;
             min-width: 0;
@@ -580,8 +634,8 @@ def _inject_global_css() -> None:
         .tmc-workflow-step::before {
             content: "";
             position: absolute;
-            top: 0.57rem;
-            left: 1.15rem;
+            top: 0.62rem;
+            left: 1.24rem;
             right: 0.25rem;
             border-top: 1px solid var(--tmc-border);
             z-index: 0;
@@ -592,8 +646,8 @@ def _inject_global_css() -> None:
         .tmc-workflow-dot {
             position: relative;
             z-index: 1;
-            width: 1.05rem;
-            height: 1.05rem;
+            width: 1.16rem;
+            height: 1.16rem;
             border-radius: 999px;
             border: 1px solid var(--tmc-border);
             background: var(--tmc-surface);
@@ -601,13 +655,13 @@ def _inject_global_css() -> None:
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 0.66rem;
+            font-size: 0.65rem;
             font-weight: 700;
             line-height: 1;
         }
         .tmc-workflow-step-label {
             color: var(--tmc-text-muted);
-            font-size: var(--tmc-font-xs);
+            font-size: 0.76rem;
             font-weight: 650;
             line-height: 1.25;
             overflow: hidden;
@@ -616,17 +670,17 @@ def _inject_global_css() -> None:
         }
         .tmc-workflow-step-state {
             color: var(--tmc-text-soft);
-            font-size: 0.68rem;
+            font-size: 0.67rem;
             line-height: 1.25;
             margin-top: 0.1rem;
         }
         .tmc-workflow-completed .tmc-workflow-dot {
-            color: var(--tmc-success);
-            background: var(--tmc-success-soft);
-            border-color: #cfe3d4;
+            color: #ffffff;
+            background: var(--tmc-success);
+            border-color: var(--tmc-success);
         }
         .tmc-workflow-completed::before {
-            border-top-color: #cfe3d4;
+            border-top-color: #aacdb5;
         }
         .tmc-workflow-active .tmc-workflow-dot {
             color: var(--tmc-surface);
@@ -637,9 +691,9 @@ def _inject_global_css() -> None:
             color: var(--tmc-primary);
         }
         .tmc-workflow-warning .tmc-workflow-dot {
-            color: var(--tmc-warning);
-            background: var(--tmc-warning-soft);
-            border-color: var(--tmc-bronze-soft);
+            color: #ffffff;
+            background: var(--tmc-bronze);
+            border-color: var(--tmc-bronze);
         }
         .tmc-workflow-warning .tmc-workflow-step-label {
             color: var(--tmc-warning);
@@ -648,7 +702,9 @@ def _inject_global_css() -> None:
             display: flex;
             flex-wrap: wrap;
             gap: 0.35rem;
-            margin-top: var(--tmc-space-2);
+            margin-top: 0.45rem;
+            padding-top: 0.48rem;
+            border-top: 1px solid var(--tmc-divider);
         }
         .tmc-workflow-summary .tmc-chip {
             font-weight: 600;
@@ -679,7 +735,7 @@ def _inject_global_css() -> None:
             display: flex;
             gap: var(--tmc-space-3);
             align-items: flex-start;
-            margin: var(--tmc-space-1) 0 var(--tmc-space-4) 0;
+            margin: 0 0 var(--tmc-space-3) 0;
         }
         .tmc-section-accent {
             width: 3px;
@@ -690,7 +746,7 @@ def _inject_global_css() -> None:
         }
         .tmc-section-title {
             color: var(--tmc-text);
-            font-size: var(--tmc-font-lg);
+            font-size: 1.05rem;
             font-weight: 650;
             line-height: 1.25;
             margin: 0;
@@ -783,17 +839,67 @@ def _inject_global_css() -> None:
             box-shadow: var(--tmc-shadow-subtle);
         }
         section[data-testid="stSidebar"] {
-            background: var(--tmc-surface-muted);
+            background: var(--tmc-sidebar);
             border-right: 1px solid var(--tmc-border);
         }
         section[data-testid="stSidebar"] > div {
-            padding-top: var(--tmc-space-5);
+            padding-top: var(--tmc-space-4);
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        .tmc-sidebar-brand {
+            border: 1px solid var(--tmc-border);
+            border-radius: var(--tmc-radius-lg);
+            background: var(--tmc-sidebar-panel);
+            padding: 0.85rem 0.9rem;
+            margin: 0 0 var(--tmc-space-4) 0;
+            box-shadow: var(--tmc-shadow-subtle);
+        }
+        .tmc-sidebar-mark {
+            color: var(--tmc-primary);
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+        .tmc-sidebar-title {
+            color: var(--tmc-text);
+            font-size: 1.05rem;
+            font-weight: 720;
+            line-height: 1.2;
+            margin-top: 0.28rem;
+        }
+        .tmc-sidebar-subtitle {
+            color: var(--tmc-text-muted);
+            font-size: 0.76rem;
+            line-height: 1.35;
+            margin-top: 0.22rem;
+        }
+        .tmc-sidebar-section {
+            color: var(--tmc-primary);
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1.25;
+            text-transform: uppercase;
+            border-top: 1px solid var(--tmc-divider);
+            padding-top: 0.78rem;
+            margin: 0.35rem 0 0.2rem 0;
+        }
+        .tmc-sidebar-section:first-child {
+            border-top: 0;
+            padding-top: 0;
         }
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3 {
             color: var(--tmc-primary);
             font-weight: 650;
             letter-spacing: 0;
+        }
+        section[data-testid="stSidebar"] h2 {
+            font-size: 1rem;
+        }
+        section[data-testid="stSidebar"] h3 {
+            font-size: 0.88rem;
         }
         section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
             color: var(--tmc-text-muted);
@@ -811,6 +917,7 @@ def _inject_global_css() -> None:
             gap: var(--tmc-space-2);
             border-bottom: 1px solid var(--tmc-border);
             background: transparent;
+            margin-top: 0.15rem;
         }
         div[data-testid="stTabs"] [data-baseweb="tab"] {
             color: var(--tmc-text-muted);
@@ -1017,11 +1124,25 @@ def _inject_global_css() -> None:
         div[data-testid="stDataEditor"] {
             border-radius: var(--tmc-radius-lg);
             overflow: hidden;
+            border: 1px solid var(--tmc-border-soft);
         }
         code, pre {
             font-family: var(--tmc-font-mono);
         }
         @media (max-width: 900px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            .tmc-topbar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .tmc-topbar-item {
+                border-bottom: 1px solid var(--tmc-divider);
+            }
+            .tmc-topbar-item:nth-child(2n) {
+                border-right: 0;
+            }
             .tmc-status-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
@@ -1039,6 +1160,12 @@ def _inject_global_css() -> None:
             }
         }
         @media (max-width: 640px) {
+            .tmc-topbar {
+                grid-template-columns: 1fr;
+            }
+            .tmc-topbar-item {
+                border-right: 0;
+            }
             .tmc-status-grid {
                 grid-template-columns: 1fr;
             }
@@ -1249,6 +1376,86 @@ def _render_version_stamp() -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def _render_sidebar_brand() -> None:
+    st.markdown(
+        '<div class="tmc-sidebar-brand">'
+        '<div class="tmc-sidebar-mark">TMC Processor</div>'
+        '<div class="tmc-sidebar-title">Engineering Workstation</div>'
+        '<div class="tmc-sidebar-subtitle">Turning Movement Count processing and report control</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sidebar_section(label: str) -> None:
+    st.markdown(f'<div class="tmc-sidebar-section">{escape(label)}</div>', unsafe_allow_html=True)
+
+
+def _render_app_header() -> None:
+    st.markdown(
+        """
+        <div class="tmc-header">
+            <h1 class="tmc-title">TMC Processor</h1>
+            <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _topbar_item(label: str, value: str, note: str = "") -> str:
+    note_html = f'<div class="tmc-topbar-note">{escape(note)}</div>' if note else ""
+    return (
+        '<div class="tmc-topbar-item">'
+        f'<div class="tmc-topbar-label">{escape(label)}</div>'
+        f'<div class="tmc-topbar-value">{escape(value)}</div>'
+        f"{note_html}"
+        "</div>"
+    )
+
+
+def _render_top_status_bar(
+    *,
+    is_single_file_mode: bool,
+    uploaded_name: str | None,
+    uploaded_count: int,
+    batch_mapping_ready: bool,
+    export_mode: str | None,
+    excel_com_status: ExcelComStatus,
+) -> None:
+    mode_value = "Single file" if is_single_file_mode else "Batch"
+    if is_single_file_mode:
+        source_value = uploaded_name or "No source file"
+        source_note = "Ready for mapping" if uploaded_name else "Upload from sidebar"
+        mapping_rows = len(st.session_state.get("mapping_table") or [])
+        mapping_value = f"{mapping_rows:,} rows" if mapping_rows else "Not ready"
+        mapping_note = "Mapping table loaded" if mapping_rows else "Awaiting sheet mapping"
+    else:
+        source_value = f"{uploaded_count:,} files" if uploaded_count else "No batch files"
+        source_note = "Batch upload loaded" if uploaded_count else "Upload from sidebar"
+        mapping_value = "Preset loaded" if batch_mapping_ready else "Preset required"
+        mapping_note = "Shared across batch" if batch_mapping_ready else "Open Mapping Preset"
+
+    excel_value = "Excel COM ready" if getattr(excel_com_status, "available", False) else "PNG fallback"
+    excel_note = (
+        f"Excel {excel_com_status.version}"
+        if getattr(excel_com_status, "available", False) and getattr(excel_com_status, "version", "")
+        else (str(getattr(excel_com_status, "reason", "")) or "COM unavailable")
+    )
+    export_note = export_mode or "Export mode pending"
+
+    html = (
+        '<div class="tmc-topbar">'
+        + _topbar_item("Mode", mode_value, export_note)
+        + _topbar_item("Source", source_value, source_note)
+        + _topbar_item("Mapping", mapping_value, mapping_note)
+        + _topbar_item("Engine", excel_value, excel_note)
+        + _topbar_item("Version", f"App v{APP_VERSION}", f"Template {TEMPLATE_VERSION}")
+        + "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _workflow_step_statuses(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> list[str]:
@@ -2250,7 +2457,8 @@ def _run_streamlit_app() -> None:
     batch_preset_upload = None
 
     with st.sidebar:
-        st.header("โหมดการทำงาน")
+        _render_sidebar_brand()
+        _render_sidebar_section("Work mode")
         work_mode = st.radio(
             "เลือกโหมดการทำงาน",
             options=work_mode_options,
@@ -2258,8 +2466,7 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
-        st.divider()
-        st.subheader("ข้อมูลนำเข้า")
+        _render_sidebar_section("Input")
         if is_single_file_mode:
             st.caption("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
             uploaded_file = st.file_uploader(
@@ -2340,13 +2547,13 @@ def _run_streamlit_app() -> None:
 
     with st.sidebar:
         if is_single_file_mode:
+            _render_sidebar_section("Project session")
             _render_project_session_section(
                 uploaded_file.name if uploaded_file is not None else None,
                 len(file_bytes) if uploaded_file is not None else None,
                 compact=True,
             )
-            st.divider()
-            st.subheader("โหมดส่งออกไฟล์เดี่ยว")
+            _render_sidebar_section("Export")
             if excel_com_status.available:
                 export_mode_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
                 if st.session_state.get("report_export_mode_radio") not in export_mode_options:
@@ -2366,11 +2573,10 @@ def _run_streamlit_app() -> None:
                 if use_excel_com_native_charts
                 else "โหมดสำรองใช้กราฟ PNG แบบคงที่"
             )
-            st.divider()
         else:
             export_mode = st.session_state.get("report_export_mode_radio", SAFE_PNG_EXPORT_MODE)
             use_excel_com_native_charts = bool(excel_com_status.available and export_mode == EXCEL_TEMPLATE_EXPORT_MODE)
-            st.subheader("โหมดส่งออก Batch")
+            _render_sidebar_section("Export")
             batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
             if st.session_state.get("tmc_batch_export_mode") not in batch_export_options:
                 st.session_state["tmc_batch_export_mode"] = BATCH_SAFE_PNG_EXPORT_LABEL
@@ -2390,8 +2596,7 @@ def _run_streamlit_app() -> None:
                     st.warning("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น")
             else:
                 st.caption("Safe PNG Export Mode เป็นโหมดสำรองสำหรับตรวจงานเร็วขึ้น โดยใช้กราฟ PNG แบบคงที่")
-        st.divider()
-        st.subheader("Excel Engine")
+        _render_sidebar_section("Engine status")
         previous_excel_com_available = bool(excel_com_status.available)
         if st.button("ทดสอบ Excel COM", key="test_excel_com"):
             excel_com_status = _probe_excel_com_for_ui(force=True)
@@ -2427,15 +2632,7 @@ def _run_streamlit_app() -> None:
         except (MappingPresetError, ValueError) as exc:
             st.sidebar.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
 
-    st.markdown(
-        """
-        <div class="tmc-header">
-            <h1 class="tmc-title">TMC Processor</h1>
-            <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    _render_app_header()
     shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
     shell_batch_signature = (
         _batch_upload_signature(batch_uploads),
@@ -2443,6 +2640,14 @@ def _run_streamlit_app() -> None:
         tuple(sorted((_current_pce_factors_from_state() or {}).items())),
         _metadata_signature(st.session_state.get("tmc_batch_file_metadata_table") or []),
         shell_batch_export_mode,
+    )
+    _render_top_status_bar(
+        is_single_file_mode=is_single_file_mode,
+        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+        uploaded_count=len(batch_uploads or []),
+        batch_mapping_ready=loaded_batch_preset is not None,
+        export_mode=export_mode,
+        excel_com_status=excel_com_status,
     )
     _render_workflow_shell(
         is_single_file_mode=is_single_file_mode,
