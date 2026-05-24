@@ -20,6 +20,12 @@ CHART_FILENAMES = {
     "hourly_pcu": "hourly_pcu_chart.png",
     "vehicle_composition": "vehicle_composition_chart.png",
 }
+CHART_PRIMARY_COLOR = "#0E4A2A"
+CHART_PM_COLOR = "#B57A22"
+CHART_PRIMARY_SOFT = "#E8EFE7"
+CHART_PM_SOFT = "#F2E5D1"
+CHART_GRID_COLOR = "#E6E1D8"
+CHART_TEXT_COLOR = "#151713"
 
 
 def _configure_fonts() -> None:
@@ -62,6 +68,18 @@ def _chart_title(base_title: str, setup: Mapping[str, Any] | None = None) -> str
     return f"{base_title}\n{context}" if context else base_title
 
 
+def _setup_peak_label(setup: Mapping[str, Any] | None, period: str) -> str:
+    setup = setup or {}
+    prefix = period.casefold()
+    start = str(setup.get(f"{prefix}_peak_start", "") or "").replace(".", ":")[:5]
+    end = str(setup.get(f"{prefix}_peak_end", "") or "").replace(".", ":")[:5]
+    return f"{start}-{end}" if start and end else ""
+
+
+def _normalize_time_label(value: object) -> str:
+    return str(value or "").strip().replace(".", ":").replace("–", "-")
+
+
 def hourly_pcu_chart_png(
     hourly_movement_pcu: pd.DataFrame,
     output_path: str | Path | None = None,
@@ -85,14 +103,28 @@ def hourly_pcu_chart_png(
     y_values = _coerce_number(chart_data["Total"])
 
     fig, ax = plt.subplots(figsize=(10, 5.2))
-    ax.plot(x_labels, y_values, color="#0E4A2A", linewidth=2.4, marker="o", markersize=4.8)
-    ax.fill_between(range(len(x_labels)), y_values.to_numpy(), color="#E8EFE7", alpha=0.7)
-    ax.set_title("ปริมาณจราจรรายชั่วโมง (PCU)", fontsize=16, fontweight="bold", pad=14)
+    normalized_labels = [_normalize_time_label(label) for label in x_labels]
+    for peak_label, color, fill, caption in (
+        (_setup_peak_label(setup, "am"), CHART_PRIMARY_COLOR, CHART_PRIMARY_SOFT, "AM Peak"),
+        (_setup_peak_label(setup, "pm"), CHART_PM_COLOR, CHART_PM_SOFT, "PM Peak"),
+    ):
+        normalized_peak = _normalize_time_label(peak_label)
+        if normalized_peak and normalized_peak in normalized_labels:
+            index = normalized_labels.index(normalized_peak)
+            ax.axvspan(index - 0.35, index + 0.35, color=fill, alpha=0.72, linewidth=0)
+            ax.axvline(index, color=color, linewidth=1.4, alpha=0.72)
+            if len(y_values):
+                ax.annotate(caption, (index, max(float(y_values.max()), 1)), textcoords="offset points", xytext=(0, 8), ha="center", fontsize=9, color=color)
+    ax.plot(x_labels, y_values, color=CHART_PRIMARY_COLOR, linewidth=2.4, marker="o", markersize=4.8, label="PCU รวม")
+    ax.fill_between(range(len(x_labels)), y_values.to_numpy(), color=CHART_PRIMARY_SOFT, alpha=0.52)
+    ax.set_title("ปริมาณจราจรรายชั่วโมง (PCU)", fontsize=16, fontweight="bold", pad=14, color=CHART_TEXT_COLOR)
     ax.set_xlabel("เวลา", fontsize=12)
-    ax.set_ylabel("ปริมาณจราจร (PCU/ชั่วโมง)", fontsize=12)
-    ax.grid(axis="y", color="#E6E1D8", linewidth=0.8)
+    ax.set_ylabel("ปริมาณจราจร (PCU/ชม.)", fontsize=12)
+    ax.grid(axis="y", color=CHART_GRID_COLOR, linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_color(CHART_GRID_COLOR)
     ax.tick_params(axis="x", rotation=35)
+    ax.tick_params(axis="both", colors=CHART_TEXT_COLOR)
     ax.set_ylim(bottom=0)
     ax.set_title(_chart_title(ax.get_title(), setup), fontsize=16, fontweight="bold", pad=14)
 
@@ -138,13 +170,15 @@ def vehicle_composition_chart_png(
 
     height = max(4.8, 0.38 * len(chart_data) + 1.8)
     fig, ax = plt.subplots(figsize=(10, height))
-    colors = ["#B57A22" if index % 2 else "#0E4A2A" for index in range(len(chart_data))]
+    colors = [CHART_PM_COLOR if index % 2 else CHART_PRIMARY_COLOR for index in range(len(chart_data))]
     bars = ax.barh(chart_data[label_column].astype(str), chart_data[percent_column], color=colors, alpha=0.88)
-    ax.set_title("สัดส่วนประเภทยานพาหนะ", fontsize=16, fontweight="bold", pad=14)
+    ax.set_title("สัดส่วนประเภทยานพาหนะ", fontsize=16, fontweight="bold", pad=14, color=CHART_TEXT_COLOR)
     ax.set_xlabel("สัดส่วน (%)", fontsize=12)
     ax.set_ylabel("ประเภทยานพาหนะ", fontsize=12)
-    ax.grid(axis="x", color="#E6E1D8", linewidth=0.8)
+    ax.grid(axis="x", color=CHART_GRID_COLOR, linewidth=0.8)
     ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_color(CHART_GRID_COLOR)
+    ax.tick_params(axis="both", colors=CHART_TEXT_COLOR)
     ax.set_xlim(left=0)
     ax.set_title(_chart_title(ax.get_title(), setup), fontsize=16, fontweight="bold", pad=14)
     ax.xaxis.set_major_formatter(lambda value, _position: f"{value * 100:.0f}%")

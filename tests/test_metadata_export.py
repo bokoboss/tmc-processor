@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import time
 from io import BytesIO
+import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -214,3 +215,9 @@ def test_batch_report_workbook_uses_per_file_date_and_shared_setup_metadata() ->
     assert setup_rows["north_label"] == "ปลายทางเหนือทดสอบ"
     assert "output_stem: metadata-batch" in summary_text
     assert "survey_date_text: วันสำรวจรายไฟล์ทดสอบ" in summary_text
+
+
+def test_altair_dependency_is_declared() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "altair>=5" in pyproject["project"]["dependencies"]

@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import warnings
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -123,6 +124,11 @@ BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอ
 WORKFLOW_TAB_LABELS = ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
 DEFAULT_WORKFLOW_TAB = "ตั้งค่า"
 
+CHART_PRIMARY_COLOR = "#0E4A2A"
+CHART_PM_COLOR = "#B57A22"
+CHART_GRID_COLOR = "#E6E1D8"
+CHART_TEXT_COLOR = "#151713"
+
 
 def _default_text_from_filename(filename: str | None) -> str:
     if not filename:
@@ -137,6 +143,54 @@ def _time_from_text(value: str) -> time:
 
 def _time_text(value: time) -> str:
     return value.strftime("%H:%M")
+
+
+def _coerce_display_number(value: object) -> float | None:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return float(numeric) if pd.notna(numeric) else None
+
+
+def format_count(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:,.0f}"
+
+
+def format_pcu(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:,.0f}" if abs(numeric - round(numeric)) < 0.005 else f"{numeric:,.1f}"
+
+
+def format_percent(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    percent = numeric * 100 if abs(numeric) <= 1 else numeric
+    return f"{percent:,.1f}%"
+
+
+def format_phf(value: object) -> str:
+    numeric = _coerce_display_number(value)
+    if numeric is None:
+        return "-"
+    return f"{numeric:.2f}"
+
+
+def format_time_range(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    parts = hourly_interval_label_parts(text)
+    if parts is None:
+        return text.replace(".", ":")
+    return f"{parts[0]}–{parts[1]}"
+
+
+def format_vehicle_unit(value: object, unit: str = "คัน") -> str:
+    return f"{format_count(value)} {unit}"
 
 
 def _setup_from_inputs(
@@ -214,7 +268,7 @@ def _peak_period_text(peaks: pd.DataFrame, period: str) -> tuple[str, str, str]:
     start_text = start.strftime("%H:%M") if isinstance(start, time) else str(start)[:5]
     end_text = end.strftime("%H:%M") if isinstance(end, time) else str(end)[:5]
     pcu = pd.to_numeric(pd.Series([row.get("hourly_pcu")]), errors="coerce").fillna(0).iloc[0]
-    return start_text, end_text, f"{pcu:,.0f}"
+    return start_text, end_text, format_pcu(pcu)
 
 
 def _hourly_interval_options(hourly_movement: pd.DataFrame, peaks: pd.DataFrame) -> list[tuple[str, str, str]]:
@@ -2317,21 +2371,75 @@ def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
     if matched.empty:
         return ""
     value = pd.to_numeric(matched.iloc[0].get("Total"), errors="coerce")
-    return f"{value:,.0f}" if pd.notna(value) else ""
+    return format_pcu(value) if pd.notna(value) else ""
 
 
-def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame) -> None:
+def _render_hourly_pcu_line_chart(hourly_movement: pd.DataFrame, am_peak_label: str = "", pm_peak_label: str = "") -> None:
     chart_frame = hourly_interval_rows(hourly_movement)
     if chart_frame.empty:
         _render_empty_state("No hourly PCU data", "Analyze the workbook before reviewing the hourly PCU chart.")
         return
     time_column = chart_frame.columns[0]
     if "Total" in chart_frame.columns:
-        st.line_chart(chart_frame.set_index(time_column)[["Total"]], width="stretch", color="#0E4A2A")
+        total = chart_frame[["Total"]].copy()
     else:
         value_columns = [column for column in chart_frame.columns if column != time_column]
-        fallback = chart_frame.set_index(time_column)[value_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1)
-        st.line_chart(fallback.rename("Total"), width="stretch", color="#0E4A2A")
+        total = pd.DataFrame({"Total": chart_frame[value_columns].apply(pd.to_numeric, errors="coerce").sum(axis=1) if value_columns else 0})
+    display = pd.DataFrame(
+        {
+            "เวลา": chart_frame[time_column].astype(str).map(format_time_range),
+            "PCU": pd.to_numeric(total["Total"], errors="coerce").fillna(0),
+        }
+    )
+    time_order = display["เวลา"].tolist()
+    base = alt.Chart(display).encode(
+        x=alt.X("เวลา:N", axis=alt.Axis(title="เวลา", labelAngle=-35), sort=time_order),
+        tooltip=[
+            alt.Tooltip("เวลา:N", title="ช่วงเวลา"),
+            alt.Tooltip("PCU:Q", title="PCU/ชม.", format=",.0f"),
+        ],
+    )
+    area = base.mark_area(color=CHART_PRIMARY_COLOR, opacity=0.11).encode(y=alt.Y("PCU:Q"))
+    line = base.mark_line(color=CHART_PRIMARY_COLOR, strokeWidth=2.6).encode(
+        y=alt.Y(
+            "PCU:Q",
+            axis=alt.Axis(title="PCU/ชม.", grid=True, gridColor=CHART_GRID_COLOR),
+            scale=alt.Scale(zero=True),
+        )
+    )
+    points = base.mark_point(color=CHART_PRIMARY_COLOR, filled=True, size=48).encode(y=alt.Y("PCU:Q"))
+    layers = [area, line, points]
+    highlights = []
+    for label, period, color in (
+        ("AM Peak", am_peak_label, CHART_PRIMARY_COLOR),
+        ("PM Peak", pm_peak_label, CHART_PM_COLOR),
+    ):
+        formatted = format_time_range(period)
+        matched = display[display["เวลา"].eq(formatted)]
+        if not matched.empty:
+            row = matched.iloc[0]
+            highlights.append({"PCU": float(row["PCU"]), "ช่วง": label, "เวลา": formatted, "color": color})
+    if highlights:
+        highlight_frame = pd.DataFrame(highlights)
+        highlight_base = alt.Chart(highlight_frame).encode(
+            x=alt.X("เวลา:N", sort=time_order),
+            y=alt.Y("PCU:Q"),
+            color=alt.Color("color:N", scale=None, legend=None),
+            tooltip=[
+                alt.Tooltip("ช่วง:N", title="Peak"),
+                alt.Tooltip("เวลา:N", title="ช่วงเวลา"),
+                alt.Tooltip("PCU:Q", title="PCU/ชม.", format=",.0f"),
+            ],
+        )
+        layers.append(highlight_base.mark_rule(strokeWidth=1.8, opacity=0.55))
+        layers.append(highlight_base.mark_point(filled=True, size=110, stroke="white", strokeWidth=1.2))
+    chart = (
+        alt.layer(*layers)
+        .properties(height=320)
+        .configure_view(stroke=None)
+        .configure_axis(labelColor=CHART_TEXT_COLOR, titleColor=CHART_TEXT_COLOR, domainColor=CHART_GRID_COLOR, tickColor=CHART_GRID_COLOR)
+    )
+    st.altair_chart(chart, width="stretch")
 
 
 def _batch_upload_signature(files: list[object] | tuple[object, ...] | None) -> tuple[tuple[str, int, str], ...]:
@@ -2598,6 +2706,11 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
 
 def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
     display = _batch_status_frame(batch_analysis, batch_result)
+    if not display.empty:
+        for column in ("status", "mapping_status", "export_status"):
+            if column in display.columns:
+                display[column] = display[column].map(_display_status_label)
+        display = _format_display_columns(display)
     return display.rename(
         columns={
             "file_name": "ชื่อไฟล์",
@@ -2637,13 +2750,116 @@ def _batch_peak_review_display_frame(batch_analysis) -> pd.DataFrame:
         "QC info",
         "notes",
     ]
-    return display[[column for column in columns if column in display.columns]]
+    display = display[[column for column in columns if column in display.columns]]
+    if "status" in display.columns:
+        display["status"] = display["status"].map(_display_status_label)
+    display = _format_display_columns(display)
+    return display.rename(
+        columns={
+            "file_name": "ชื่อไฟล์",
+            "survey_date_text": "วันที่สำรวจ",
+            "status": "สถานะ",
+            "AM suggested": "AM แนะนำ",
+            "PM suggested": "PM แนะนำ",
+            "AM confirmed": "AM กำหนดแล้ว",
+            "PM confirmed": "PM กำหนดแล้ว",
+            "QC errors": "QC ผิดพลาด",
+            "QC warnings": "QC เตือน",
+            "QC info": "QC ข้อมูล",
+            "notes": "หมายเหตุ",
+        }
+    )
 
 
 def _batch_qc_rows_for_ui(batch_analysis, batch_result=None) -> pd.DataFrame:
     if batch_result:
         return batch_qc_frame(batch_result.qc_rows)
     return batch_qc_frame(batch_analysis_qc_rows(batch_analysis))
+
+
+def _display_status_label(value: object) -> str:
+    text = str(value or "").strip()
+    labels = {
+        "success": "สำเร็จ",
+        "failed": "ไม่สำเร็จ",
+        "error": "ผิดพลาด",
+        "warning": "เตือน",
+        "info": "ข้อมูล",
+        "ready": "พร้อม",
+        "pending": "รอตรวจสอบ",
+        "complete": "เสร็จสิ้น",
+    }
+    return labels.get(text.casefold(), text)
+
+
+def _format_display_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    display = pd.DataFrame(frame).copy()
+    if display.empty:
+        return display
+    count_terms = ("จำนวน", "count", "vehicles", "คัน", "errors", "warnings", "info", "rows")
+    pcu_terms = ("pcu", "PCU")
+    percent_terms = ("percent", "share", "สัดส่วน", "%")
+    for column in display.columns:
+        column_text = str(column)
+        lowered = column_text.casefold()
+        if any(term.casefold() in lowered for term in pcu_terms):
+            display[column] = display[column].map(format_pcu)
+        elif "phf" in lowered:
+            display[column] = display[column].map(format_phf)
+        elif any(term.casefold() in lowered for term in percent_terms):
+            display[column] = display[column].map(format_percent)
+        elif any(term.casefold() in lowered for term in count_terms):
+            display[column] = display[column].map(format_count)
+    return display
+
+
+def _qc_display_frame(qc: pd.DataFrame | None, *, thai_labels: bool = True) -> pd.DataFrame:
+    display = pd.DataFrame(qc).copy() if qc is not None else pd.DataFrame()
+    if display.empty:
+        return display
+    preferred = _existing_columns(
+        display,
+        [
+            "file_name",
+            "output_stem",
+            "severity",
+            "category",
+            "check",
+            "message",
+            "detail",
+            "affected_field",
+            "movement_code",
+            "raw_sheet",
+        ],
+    )
+    display = display[preferred] if preferred else display
+    if "severity" in display.columns:
+        display["severity"] = display["severity"].map(_display_status_label)
+    if not thai_labels:
+        return display
+    return display.rename(
+        columns={
+            "file_name": "ชื่อไฟล์",
+            "output_stem": "ชื่อส่งออก",
+            "severity": "ระดับ",
+            "category": "หมวด",
+            "check": "รายการตรวจ",
+            "message": "ข้อความ",
+            "detail": "รายละเอียด",
+            "affected_field": "ฟิลด์",
+            "movement_code": "Movement",
+            "raw_sheet": "Sheet ต้นทาง",
+        }
+    )
+
+
+def _batch_qc_preview_display_frame(batch_qc: pd.DataFrame) -> pd.DataFrame:
+    display = _qc_display_frame(batch_qc, thai_labels=True)
+    columns = _existing_columns(
+        display,
+        ["ชื่อไฟล์", "ชื่อส่งออก", "ระดับ", "หมวด", "รายการตรวจ", "ข้อความ", "รายละเอียด", "Movement", "Sheet ต้นทาง"],
+    )
+    return display[columns] if columns else display
 
 
 def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
@@ -3799,21 +4015,25 @@ def _run_streamlit_app() -> None:
                             [
                                 ("วันที่สำรวจ", preview["survey_date_text"] or "-", "", ""),
                                 ("สถานะ", preview["status"] or "-", "", "", preview["status"] or "pending"),
-                                ("จำนวนรถรวม", f"{float(preview['total_vehicles']):,.0f}", "คัน", ""),
-                                ("PCU รวม", f"{float(preview['total_PCU']):,.0f}", "PCU", ""),
+                                ("จำนวนรถรวม", format_count(preview["total_vehicles"]), "คัน", ""),
+                                ("PCU รวม", format_pcu(preview["total_PCU"]), "PCU", ""),
                             ],
                             columns=4,
                         )
                         _render_metric_strip(
                             [
-                                ("QC error", f"{int(preview['QC_errors']):,}", "", ""),
-                                ("QC warning", f"{int(preview['QC_warnings']):,}", "", ""),
-                                ("QC info", f"{int(preview['QC_info']):,}", "", ""),
+                                ("QC error", format_count(preview["QC_errors"]), "", ""),
+                                ("QC warning", format_count(preview["QC_warnings"]), "", ""),
+                                ("QC info", format_count(preview["QC_info"]), "", ""),
                             ],
                             columns=3,
                         )
                     _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนกำหนดช่วง Peak")
-                    _render_hourly_pcu_line_chart(selected_item.hourly_movement_pcu)
+                    _render_hourly_pcu_line_chart(
+                        selected_item.hourly_movement_pcu,
+                        preview["confirmed_AM_peak"] or preview["suggested_AM_peak"] or "",
+                        preview["confirmed_PM_peak"] or preview["suggested_PM_peak"] or "",
+                    )
                     option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
                     option_labels = [value for value in option_labels if value]
                     _render_section_header("กำหนด Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่กำหนดในหน้านี้สำหรับรายงานของไฟล์นี้")
@@ -3985,7 +4205,7 @@ def _run_streamlit_app() -> None:
                     for column in ["ชื่อไฟล์", "ชื่อส่งออก", "สถานะส่งออก", "โหมดส่งออกที่ใช้", "หมายเหตุ"]
                     if column in status_display.columns
                 ]
-                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch")
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch", hide_index=True)
                 with st.expander("ตัวอย่างไฟล์ใน Batch ZIP ล่าสุด", expanded=False):
                     st.code("\n".join(batch_zip_contents_preview(batch_result.summary_rows)), language="text")
                     st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
@@ -4049,34 +4269,25 @@ def _run_streamlit_app() -> None:
                         "หมายเหตุ",
                     ],
                 )
-                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch")
+                st.dataframe(status_display[status_columns] if status_columns else status_display, width="stretch", hide_index=True)
 
                 failed = status_frame[status_frame["status"].astype(str) == "failed"]
                 if not failed.empty:
                     _render_alert("พบไฟล์ที่วิเคราะห์หรือส่งออกไม่สำเร็จ ไฟล์เหล่านี้ไม่ต้องกำหนด Peak", "warning")
                     failed_columns = _existing_columns(failed, ["file_name", "output_stem", "status", "notes"])
-                    st.dataframe(failed[failed_columns] if failed_columns else failed, width="stretch")
+                    failed_display = failed[failed_columns] if failed_columns else failed
+                    if "status" in failed_display.columns:
+                        failed_display = failed_display.copy()
+                        failed_display["status"] = failed_display["status"].map(_display_status_label)
+                    st.dataframe(failed_display, width="stretch", hide_index=True)
 
                 batch_qc = _batch_qc_rows_for_ui(batch_analysis, batch_result)
                 if not batch_qc.empty:
                     _render_section_header("Batch_QC", "ตัวอย่างรายการ QC รวมสำหรับตรวจสอบก่อนใช้ผลต่อ")
-                    compact_columns = _existing_columns(
-                        batch_qc,
-                        [
-                            "file_name",
-                            "output_stem",
-                            "severity",
-                            "category",
-                            "check",
-                            "message",
-                            "detail",
-                            "movement_code",
-                            "raw_sheet",
-                        ],
-                    )
-                    st.dataframe(batch_qc[compact_columns].head(25) if compact_columns else batch_qc.head(25), width="stretch")
+                    batch_qc_display = _batch_qc_preview_display_frame(batch_qc)
+                    st.dataframe(batch_qc_display.head(25), width="stretch", hide_index=True)
                     with st.expander("Batch_QC รายละเอียดทั้งหมด", expanded=False):
-                        st.dataframe(batch_qc, width="stretch")
+                        st.dataframe(_qc_display_frame(batch_qc, thai_labels=True), width="stretch", hide_index=True)
                 else:
                     _render_alert("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ", "success")
 
@@ -4093,7 +4304,8 @@ def _run_streamlit_app() -> None:
 
                 with st.expander("สรุป QC รายไฟล์", expanded=False):
                     qc_summary_columns = _existing_columns(status_frame, ["file_name", "QC errors", "QC warnings", "QC info"])
-                    st.dataframe(status_frame[qc_summary_columns] if qc_summary_columns else status_frame, width="stretch")
+                    qc_summary = status_frame[qc_summary_columns] if qc_summary_columns else status_frame
+                    st.dataframe(_format_display_columns(qc_summary), width="stretch", hide_index=True)
                 with st.expander("รายละเอียดวิเคราะห์ Batch", expanded=False):
                     if batch_analysis:
                         st.write(
@@ -4134,11 +4346,15 @@ def _run_streamlit_app() -> None:
                     "เมื่อประมวลผลแล้ว ระบบจะแสดงกราฟ PCU รายชั่วโมงและตัวเลือกยืนยัน AM/PM Peak",
                 )
             else:
-                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็นค่าหลัก")
-                _render_hourly_pcu_line_chart(hourly_movement)
-
                 am_start, am_end, am_pcu = _peak_period_text(result.peaks, "AM")
                 pm_start, pm_end, pm_pcu = _peak_period_text(result.peaks, "PM")
+                _render_section_header("กราฟ PCU รายชั่วโมง", "ตรวจแนวโน้มปริมาณรวมก่อนเลือกช่วง Peak ที่ใช้เป็นค่าหลัก")
+                _render_hourly_pcu_line_chart(
+                    hourly_movement,
+                    f"{am_start}-{am_end}" if am_start and am_end else "",
+                    f"{pm_start}-{pm_end}" if pm_start and pm_end else "",
+                )
+
                 interval_options = _hourly_interval_options(hourly_movement, result.peaks)
                 if interval_options:
                     option_labels = [label for label, _, _ in interval_options]
@@ -4193,17 +4409,17 @@ def _run_streamlit_app() -> None:
                 _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
                 _render_metric_strip(
                     [
-                        ("จำนวนแถว", f"{len(result.normalized):,}", "แถว", "normalized"),
-                        ("จำนวนรถรวม", f"{result.normalized['count'].sum():,.0f}" if not result.normalized.empty else "0", "คัน", ""),
-                        ("PCU รวม", f"{result.normalized['pcu'].sum():,.0f}" if not result.normalized.empty else "0", "PCU", ""),
-                        ("QC", f"{len(result.qc):,}", "", "ประเด็น"),
+                        ("จำนวนแถว", format_count(len(result.normalized)), "แถว", "normalized"),
+                        ("จำนวนรถรวม", format_count(result.normalized["count"].sum()) if not result.normalized.empty else "0", "คัน", ""),
+                        ("PCU รวม", format_pcu(result.normalized["pcu"].sum()) if not result.normalized.empty else "0", "PCU", ""),
+                        ("QC", format_count(len(result.qc)), "", "ประเด็น"),
                     ],
                     columns=4,
                 )
                 _render_qc_status(result.qc)
 
                 with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
-                    st.dataframe(hourly_movement, width="stretch")
+                    st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
     
     if is_single_file_mode:
         if active_tab == "ส่งออก":
@@ -4502,43 +4718,35 @@ def _run_streamlit_app() -> None:
                     _render_alert("ไม่พบประเด็น QC", "success")
 
                 _render_section_header("รายละเอียด QC", "รายการตรวจสอบที่ใช้ประกอบการพิจารณาก่อนส่งออกรายงาน")
-                qc_columns = _existing_columns(
-                    result.qc,
-                    [
-                        "severity",
-                        "category",
-                        "check",
-                        "message",
-                        "detail",
-                        "affected_field",
-                        "movement_code",
-                        "raw_sheet",
-                    ],
-                )
-                qc_display = result.qc[qc_columns] if qc_columns else result.qc
+                qc_display = _qc_display_frame(result.qc, thai_labels=True)
                 if qc_display.empty:
                     _render_alert("ไม่พบรายการ QC ที่ต้องตรวจสอบ", "success")
                 elif len(qc_display) > 25:
-                    st.dataframe(qc_display.head(25), width="stretch")
+                    st.dataframe(qc_display.head(25), width="stretch", hide_index=True)
                     with st.expander("รายการ QC ทั้งหมด", expanded=False):
-                        st.dataframe(qc_display, width="stretch")
+                        st.dataframe(qc_display, width="stretch", hide_index=True)
                 else:
-                    st.dataframe(qc_display, width="stretch")
+                    st.dataframe(qc_display, width="stretch", hide_index=True)
 
                 with st.expander("Normalized Data", expanded=False):
-                    st.dataframe(result.normalized.head(1000), width="stretch")
+                    st.dataframe(_format_display_columns(result.normalized.head(1000)), width="stretch", hide_index=True)
                 with st.expander("Hourly Movement PCU", expanded=False):
                     if not hourly_movement.empty:
-                        st.dataframe(hourly_movement, width="stretch")
+                        st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
                     if not result.hourly.empty:
                         st.caption("Hourly raw summary")
-                        st.dataframe(result.hourly, width="stretch")
+                        st.dataframe(_format_display_columns(result.hourly), width="stretch", hide_index=True)
                 with st.expander("Peak / PHF Data", expanded=False):
-                    st.dataframe(result.peaks, width="stretch")
+                    peak_display = _format_display_columns(result.peaks)
+                    if "peak_start" in peak_display.columns:
+                        peak_display["peak_start"] = peak_display["peak_start"].map(lambda value: str(value)[:5] if str(value) else "-")
+                    if "peak_end" in peak_display.columns:
+                        peak_display["peak_end"] = peak_display["peak_end"].map(lambda value: str(value)[:5] if str(value) else "-")
+                    st.dataframe(peak_display, width="stretch", hide_index=True)
                 with st.expander("Movement Aggregation Audit", expanded=False):
                     st.caption("ตารางตรวจสอบ source movement, source stream และ output movement ที่ใช้รวมค่าในรายงาน")
                     audit_frame = movement_aggregation_audit(result.normalized, mapping_df)
-                    st.dataframe(audit_frame, width="stretch")
+                    st.dataframe(_format_display_columns(audit_frame), width="stretch", hide_index=True)
                 with st.expander("รายละเอียดการอ่านไฟล์และ Parser", expanded=False):
                     if uploaded_file is not None:
                         st.dataframe(preview_summary, width="stretch")
