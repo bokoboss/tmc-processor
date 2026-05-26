@@ -184,6 +184,14 @@ Recommended: Option C, with Option B-style schema loading underneath. Keep v1 co
 - Create v2 template workbook/map files.
 - Verify template formulas, diagram cells, chart ranges, and generated exports.
 
+Phase C status note:
+
+- Created `samples/demo/DEMO_TMC1_FourLeg_approach_v2.mapping.json` as a loader-compatible Mapping Preset draft with `movement_code_scheme = "approach_movement"` and `template_version = "four_leg_approach_movement_v2"`.
+- Created `samples/demo/DEMO_TMC1_FourLeg_approach_v2_mapping.xlsx` with a compatible `Mapping` sheet plus separate `Metadata` and `Movement_Code_Reference` sheets for v2-only metadata.
+- Created `templates/four_leg_tmc_report_template_approach_v2_map.json` as a draft map using the v2 order `NL`, `NT`, `NR`, `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, `WU`.
+- Deferred `templates/four_leg_tmc_report_template_approach_v2.xlsx`. `openpyxl` reports incomplete DrawingML support for the existing Excel-authored workbook, so saving a migrated copy could lose shapes/drawings. The v2 workbook should be finalized manually in Excel after the map/schema are stabilized.
+- Remaining blockers before app integration: scheme-aware mapping validation, v2 preset/session schema loading without legacy `from_leg`/`to_leg` inference, v2 summary/template selection, export/report generation wiring, and visual verification of the v2 diagram layout.
+
 ### Phase D: mapping editor and preset schema
 
 - Add scheme-aware mapping editor columns.
