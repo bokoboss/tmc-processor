@@ -60,7 +60,6 @@
       "D30:E30",
       "D31:E31",
       "D32:E32",
-      "N32:O32",
       "W23:Y23",
       "Z23:AB23",
       "AC23:AE23",
@@ -69,8 +68,6 @@
       "Z24:AB24",
       "AC24:AE24",
       "AF24:AH24",
-      "G12:H12",
-      "Q17:R17",
       "C6:D6",
       "K6:M6",
       "C8:H8",
@@ -188,145 +185,145 @@
     "diagram_movements": {
       "NL": {
         "approach": "north",
-        "header_cell": "J13",
-        "total_12_hour_cell": "J14",
-        "pm_peak_hour_cell": "J15",
-        "am_peak_hour_cell": "J16",
+        "header_cell": "J30",
+        "total_12_hour_cell": "J29",
+        "pm_peak_hour_cell": "J28",
+        "am_peak_hour_cell": "J27",
         "approach_direction": "N",
         "movement_type": "L"
       },
       "NT": {
         "approach": "north",
-        "header_cell": "K13",
-        "total_12_hour_cell": "K14",
-        "pm_peak_hour_cell": "K15",
-        "am_peak_hour_cell": "K16",
+        "header_cell": "K30",
+        "total_12_hour_cell": "K29",
+        "pm_peak_hour_cell": "K28",
+        "am_peak_hour_cell": "K27",
         "approach_direction": "N",
         "movement_type": "T"
       },
       "NR": {
         "approach": "north",
-        "header_cell": "L13",
-        "total_12_hour_cell": "L14",
-        "pm_peak_hour_cell": "L15",
-        "am_peak_hour_cell": "L16",
+        "header_cell": "L30",
+        "total_12_hour_cell": "L29",
+        "pm_peak_hour_cell": "L28",
+        "am_peak_hour_cell": "L27",
         "approach_direction": "N",
         "movement_type": "R"
       },
       "NU": {
         "approach": "north",
-        "header_cell": "M13",
-        "total_12_hour_cell": "M14",
-        "pm_peak_hour_cell": "M15",
-        "am_peak_hour_cell": "M16",
+        "header_cell": "M30",
+        "total_12_hour_cell": "M29",
+        "pm_peak_hour_cell": "M28",
+        "am_peak_hour_cell": "M27",
         "approach_direction": "N",
         "movement_type": "U"
       },
       "SL": {
         "approach": "south",
-        "header_cell": "J30",
-        "total_12_hour_cell": "J29",
-        "pm_peak_hour_cell": "J28",
-        "am_peak_hour_cell": "J27",
+        "header_cell": "M13",
+        "total_12_hour_cell": "M14",
+        "pm_peak_hour_cell": "M15",
+        "am_peak_hour_cell": "M16",
         "approach_direction": "S",
         "movement_type": "L"
       },
       "ST": {
         "approach": "south",
-        "header_cell": "K30",
-        "total_12_hour_cell": "K29",
-        "pm_peak_hour_cell": "K28",
-        "am_peak_hour_cell": "K27",
+        "header_cell": "L13",
+        "total_12_hour_cell": "L14",
+        "pm_peak_hour_cell": "L15",
+        "am_peak_hour_cell": "L16",
         "approach_direction": "S",
         "movement_type": "T"
       },
       "SR": {
         "approach": "south",
-        "header_cell": "L30",
-        "total_12_hour_cell": "L29",
-        "pm_peak_hour_cell": "L28",
-        "am_peak_hour_cell": "L27",
+        "header_cell": "K13",
+        "total_12_hour_cell": "K14",
+        "pm_peak_hour_cell": "K15",
+        "am_peak_hour_cell": "K16",
         "approach_direction": "S",
         "movement_type": "R"
       },
       "SU": {
         "approach": "south",
-        "header_cell": "M30",
-        "total_12_hour_cell": "M29",
-        "pm_peak_hour_cell": "M28",
-        "am_peak_hour_cell": "M27",
+        "header_cell": "J13",
+        "total_12_hour_cell": "J14",
+        "pm_peak_hour_cell": "J15",
+        "am_peak_hour_cell": "J16",
         "approach_direction": "S",
         "movement_type": "U"
       },
       "EL": {
         "approach": "east",
-        "header_cell": "R21",
-        "total_12_hour_cell": "Q21",
-        "pm_peak_hour_cell": "P21",
-        "am_peak_hour_cell": "O21",
+        "header_cell": "D19",
+        "total_12_hour_cell": "E19",
+        "pm_peak_hour_cell": "F19",
+        "am_peak_hour_cell": "G19",
         "approach_direction": "E",
         "movement_type": "L"
       },
       "ET": {
         "approach": "east",
-        "header_cell": "R22",
-        "total_12_hour_cell": "Q22",
-        "pm_peak_hour_cell": "P22",
-        "am_peak_hour_cell": "O22",
+        "header_cell": "D20",
+        "total_12_hour_cell": "E20",
+        "pm_peak_hour_cell": "F20",
+        "am_peak_hour_cell": "G20",
         "approach_direction": "E",
         "movement_type": "T"
       },
       "ER": {
         "approach": "east",
-        "header_cell": "R23",
-        "total_12_hour_cell": "Q23",
-        "pm_peak_hour_cell": "P23",
-        "am_peak_hour_cell": "O23",
+        "header_cell": "D21",
+        "total_12_hour_cell": "E21",
+        "pm_peak_hour_cell": "F21",
+        "am_peak_hour_cell": "G21",
         "approach_direction": "E",
         "movement_type": "R"
       },
       "EU": {
         "approach": "east",
-        "header_cell": "R24",
-        "total_12_hour_cell": "Q24",
-        "pm_peak_hour_cell": "P24",
-        "am_peak_hour_cell": "O24",
+        "header_cell": "D22",
+        "total_12_hour_cell": "E22",
+        "pm_peak_hour_cell": "F22",
+        "am_peak_hour_cell": "G22",
         "approach_direction": "E",
         "movement_type": "U"
       },
       "WL": {
         "approach": "west",
-        "header_cell": "D19",
-        "total_12_hour_cell": "E19",
-        "pm_peak_hour_cell": "F19",
-        "am_peak_hour_cell": "G19",
+        "header_cell": "R24",
+        "total_12_hour_cell": "Q24",
+        "pm_peak_hour_cell": "P24",
+        "am_peak_hour_cell": "O24",
         "approach_direction": "W",
         "movement_type": "L"
       },
       "WT": {
         "approach": "west",
-        "header_cell": "D20",
-        "total_12_hour_cell": "E20",
-        "pm_peak_hour_cell": "F20",
-        "am_peak_hour_cell": "G20",
+        "header_cell": "R23",
+        "total_12_hour_cell": "Q23",
+        "pm_peak_hour_cell": "P23",
+        "am_peak_hour_cell": "O23",
         "approach_direction": "W",
         "movement_type": "T"
       },
       "WR": {
         "approach": "west",
-        "header_cell": "D21",
-        "total_12_hour_cell": "E21",
-        "pm_peak_hour_cell": "F21",
-        "am_peak_hour_cell": "G21",
+        "header_cell": "R22",
+        "total_12_hour_cell": "Q22",
+        "pm_peak_hour_cell": "P22",
+        "am_peak_hour_cell": "O22",
         "approach_direction": "W",
         "movement_type": "R"
       },
       "WU": {
         "approach": "west",
-        "header_cell": "D22",
-        "total_12_hour_cell": "E22",
-        "pm_peak_hour_cell": "F22",
-        "am_peak_hour_cell": "G22",
+        "header_cell": "R21",
+        "total_12_hour_cell": "Q21",
+        "pm_peak_hour_cell": "P21",
+        "am_peak_hour_cell": "O21",
         "approach_direction": "W",
         "movement_type": "U"
       }
@@ -340,28 +337,28 @@
           "NU"
         ],
         "header_cells": {
-          "NL": "J13",
-          "NT": "K13",
-          "NR": "L13",
-          "NU": "M13"
+          "NL": "J30",
+          "NT": "K30",
+          "NR": "L30",
+          "NU": "M30"
         },
         "total_12_hour_cells": {
-          "NL": "J14",
-          "NT": "K14",
-          "NR": "L14",
-          "NU": "M14"
+          "NL": "J29",
+          "NT": "K29",
+          "NR": "L29",
+          "NU": "M29"
         },
         "pm_peak_hour_cells": {
-          "NL": "J15",
-          "NT": "K15",
-          "NR": "L15",
-          "NU": "M15"
+          "NL": "J28",
+          "NT": "K28",
+          "NR": "L28",
+          "NU": "M28"
         },
         "am_peak_hour_cells": {
-          "NL": "J16",
-          "NT": "K16",
-          "NR": "L16",
-          "NU": "M16"
+          "NL": "J27",
+          "NT": "K27",
+          "NR": "L27",
+          "NU": "M27"
         }
       },
       "south": {
@@ -372,28 +369,28 @@
           "SU"
         ],
         "header_cells": {
-          "SL": "J30",
-          "ST": "K30",
-          "SR": "L30",
-          "SU": "M30"
+          "SL": "M13",
+          "ST": "L13",
+          "SR": "K13",
+          "SU": "J13"
         },
         "total_12_hour_cells": {
-          "SL": "J29",
-          "ST": "K29",
-          "SR": "L29",
-          "SU": "M29"
+          "SL": "M14",
+          "ST": "L14",
+          "SR": "K14",
+          "SU": "J14"
         },
         "pm_peak_hour_cells": {
-          "SL": "J28",
-          "ST": "K28",
-          "SR": "L28",
-          "SU": "M28"
+          "SL": "M15",
+          "ST": "L15",
+          "SR": "K15",
+          "SU": "J15"
         },
         "am_peak_hour_cells": {
-          "SL": "J27",
-          "ST": "K27",
-          "SR": "L27",
-          "SU": "M27"
+          "SL": "M16",
+          "ST": "L16",
+          "SR": "K16",
+          "SU": "J16"
         }
       },
       "east": {
@@ -404,28 +401,28 @@
           "EU"
         ],
         "header_cells": {
-          "EL": "R21",
-          "ET": "R22",
-          "ER": "R23",
-          "EU": "R24"
+          "EL": "D19",
+          "ET": "D20",
+          "ER": "D21",
+          "EU": "D22"
         },
         "total_12_hour_cells": {
-          "EL": "Q21",
-          "ET": "Q22",
-          "ER": "Q23",
-          "EU": "Q24"
+          "EL": "E19",
+          "ET": "E20",
+          "ER": "E21",
+          "EU": "E22"
         },
         "pm_peak_hour_cells": {
-          "EL": "P21",
-          "ET": "P22",
-          "ER": "P23",
-          "EU": "P24"
+          "EL": "F19",
+          "ET": "F20",
+          "ER": "F21",
+          "EU": "F22"
         },
         "am_peak_hour_cells": {
-          "EL": "O21",
-          "ET": "O22",
-          "ER": "O23",
-          "EU": "O24"
+          "EL": "G19",
+          "ET": "G20",
+          "ER": "G21",
+          "EU": "G22"
         }
       },
       "west": {
@@ -436,28 +433,28 @@
           "WU"
         ],
         "header_cells": {
-          "WL": "D19",
-          "WT": "D20",
-          "WR": "D21",
-          "WU": "D22"
+          "WL": "R24",
+          "WT": "R23",
+          "WR": "R22",
+          "WU": "R21"
         },
         "total_12_hour_cells": {
-          "WL": "E19",
-          "WT": "E20",
-          "WR": "E21",
-          "WU": "E22"
+          "WL": "Q24",
+          "WT": "Q23",
+          "WR": "Q22",
+          "WU": "Q21"
         },
         "pm_peak_hour_cells": {
-          "WL": "F19",
-          "WT": "F20",
-          "WR": "F21",
-          "WU": "F22"
+          "WL": "P24",
+          "WT": "P23",
+          "WR": "P22",
+          "WU": "P21"
         },
         "am_peak_hour_cells": {
-          "WL": "G19",
-          "WT": "G20",
-          "WR": "G21",
-          "WU": "G22"
+          "WL": "O24",
+          "WT": "O23",
+          "WR": "O22",
+          "WU": "O21"
         }
       }
     },
