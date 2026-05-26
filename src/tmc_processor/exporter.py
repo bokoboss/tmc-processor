@@ -96,6 +96,11 @@ V2_TEMPLATE_EXPORT_LIMITATION_NOTES = (
     "because Excel-authored drawings, shapes, arrows, and charts may be dropped or damaged on save. Native Excel COM "
     "template export, UI Excel Template Mode, and batch export remain blocked."
 )
+V2_TEMPLATE_COM_EXPORT_NOTES = (
+    "Excel Template Mode for approach_movement v2 is native Excel COM-only. "
+    "The export writes mapped data into a temporary copy of the manually authored template, lets Excel recalculate, "
+    "and preserves Excel-authored charts, drawings, shapes, lines, arrows, formulas, and page layout."
+)
 
 
 def _export_metadata_frame(
@@ -154,6 +159,7 @@ def _v2_export_metadata_frame(
     template_version: str = V2_GENERATED_EXPORT_TEMPLATE,
     export_template: str = V2_GENERATED_EXPORT_TEMPLATE,
     excel_template_mode_supported: bool = False,
+    native_template_export_supported: bool = False,
     limitation_notes: str = V2_EXPORT_LIMITATION_NOTES,
 ) -> pd.DataFrame:
     metadata = _export_metadata_frame(
@@ -169,7 +175,7 @@ def _v2_export_metadata_frame(
             ("export_template", export_template),
             ("export_mode_used", export_mode or V2_GENERATED_EXPORT_MODE),
             ("excel_template_mode_supported", excel_template_mode_supported),
-            ("native_template_export_supported", False),
+            ("native_template_export_supported", native_template_export_supported),
             ("diagram_export_supported", "table_based"),
             ("diagram_export_artifact", V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
             ("diagram_png_package_path", "diagram/movement_diagram.png"),
@@ -1210,10 +1216,14 @@ def _export_workbook_with_excel_com(
     hourly_movement: pd.DataFrame,
     template_path: str | None,
     template_map_path: str | None,
+    *,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+    diagram_movement_codes: tuple[str, ...] = MOVEMENT_CODES,
+    diagram_data_sheet_name: str = DIAGRAM_DATA_SHEET_NAME,
 ) -> bytes:
     from .excel_com_export import export_with_excel_com
 
-    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V1)
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(movement_code_scheme)
     resources = load_report_template_resources(
         template_path or default_template_path,
         template_map_path or default_template_map_path,
@@ -1224,6 +1234,8 @@ def _export_workbook_with_excel_com(
         "hourly_movement_pcu": hourly_movement,
         "hourly_vehicle_class": sheets["Hourly_Vehicle_Class"],
         "vehicle_composition_report": sheets["Vehicle_Composition_Report"],
+        "diagram_movement_codes": diagram_movement_codes,
+        "diagram_data_sheet_name": diagram_data_sheet_name,
     }
     with TemporaryDirectory() as temporary_directory:
         output_path = Path(temporary_directory) / "tmc_report_excel_com.xlsx"
@@ -1314,6 +1326,9 @@ def _v2_template_export_sheets(
     export_mode: str | None = None,
     source_file_name: str | None = None,
     generated_at: datetime | str | None = None,
+    excel_template_mode_supported: bool = False,
+    native_template_export_supported: bool = False,
+    limitation_notes: str = V2_TEMPLATE_EXPORT_LIMITATION_NOTES,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     mapping_frame = clean_mapping(mapping) if mapping is not None else pd.DataFrame()
     normalized = _v2_normalized_frame(getattr(result, "normalized"))
@@ -1332,8 +1347,9 @@ def _v2_template_export_sheets(
             generated_at=generated_at,
             template_version=V2_TEMPLATE_EXPORT_TEMPLATE,
             export_template=V2_TEMPLATE_EXPORT_TEMPLATE,
-            excel_template_mode_supported=False,
-            limitation_notes=V2_TEMPLATE_EXPORT_LIMITATION_NOTES,
+            excel_template_mode_supported=excel_template_mode_supported,
+            native_template_export_supported=native_template_export_supported,
+            limitation_notes=limitation_notes,
         ),
         "Setup": _setup_frame(setup),
         "PCE_Factors": pce_factor_traceability_frame(getattr(result, "pce_factors", None)),
@@ -1361,6 +1377,66 @@ def _insert_v2_movement_diagram_data_sheet(workbook, movement_diagram: pd.DataFr
         V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME,
         movement_diagram,
         create_excel_tables=create_excel_tables,
+    )
+
+
+def export_v2_template_workbook_com(
+    result: Any,
+    setup: dict[str, Any] | None = None,
+    mapping: pd.DataFrame | None = None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    template_path: str | None = None,
+    template_map_path: str | None = None,
+) -> bytes:
+    """Export a v2 visual template workbook through native Excel COM only."""
+
+    if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
+        raise ValueError("export_v2_template_workbook_com requires an approach_movement v2 dry-run result.")
+
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V2)
+    resolved_template_path = Path(template_path) if template_path else default_template_path
+    resolved_template_map_path = Path(template_map_path) if template_map_path else default_template_map_path
+    if resolved_template_path.name == DEFAULT_TEMPLATE_PATH.name or resolved_template_map_path.name == DEFAULT_TEMPLATE_MAP_PATH.name:
+        raise ValueError("approach_movement v2 COM template export must not use v1 template files.")
+
+    setup = setup_with_metadata({**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2})
+    sheets, hourly_movement, _vehicle_composition_for_report, peaks = _v2_template_export_sheets(
+        result,
+        setup,
+        mapping,
+        export_mode=export_mode or V2_TEMPLATE_EXPORT_MODE,
+        source_file_name=source_file_name,
+        generated_at=generated_at,
+        excel_template_mode_supported=True,
+        native_template_export_supported=True,
+        limitation_notes=V2_TEMPLATE_COM_EXPORT_NOTES,
+    )
+    movement_diagram = build_v2_movement_diagram_data(
+        movement_summary=sheets["Movement_Summary"],
+        hourly_movement_pcu=hourly_movement,
+        peaks=peaks,
+    )
+    sheets[V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME] = movement_diagram
+
+    resources = load_report_template_resources(resolved_template_path, resolved_template_map_path)
+    if resources.mapping.get("movement_code_scheme") != MOVEMENT_SCHEME_V2:
+        raise ValueError("approach_movement v2 COM template export requires a v2 template map.")
+    if resources.mapping.get("template_version") != V2_TEMPLATE_EXPORT_TEMPLATE:
+        raise ValueError("approach_movement v2 COM template export requires the validated v2 template map.")
+    if list(resources.mapping.get("movement_code_order") or []) != list(APPROACH_MOVEMENT_CODES):
+        raise ValueError("approach_movement v2 COM template export requires the canonical v2 movement order.")
+
+    return _export_workbook_with_excel_com(
+        setup=setup,
+        sheets=sheets,
+        hourly_movement=hourly_movement,
+        template_path=str(resources.template_path),
+        template_map_path=str(resources.map_path),
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+        diagram_movement_codes=APPROACH_MOVEMENT_CODES,
     )
 
 

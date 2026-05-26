@@ -202,4 +202,31 @@ The v2 workbook has now been manually finalized in Excel and validated against t
 
 Phase I2C keeps the Excel-authored workbook as the v2 visual template source, but the current openpyxl helper is limited to structural/internal validation. It writes only to an output copy in memory and preserves template formula ownership where the map declares `preserve_template`, but it is not native-template-preserving: openpyxl can drop or damage Excel-authored drawings, charts, shapes, lines, and arrows when saving.
 
-User-facing v2 Excel Template Mode must therefore require a native Excel/COM preservation path. Until that path is implemented, the Streamlit UI blocks v2 Excel Template Mode with a clear message and directs users to Safe PNG Export Mode. Safe PNG/generated workbook export remains the supported fallback for v2.
+User-facing v2 Excel Template Mode must therefore require a native Excel/COM preservation path. Before Phase I3, the Streamlit UI blocked v2 Excel Template Mode with a clear message and directed users to Safe PNG Export Mode. Safe PNG/generated workbook export remains the supported fallback for v2 when COM is unavailable.
+
+## Phase I3 Native Excel COM Export
+
+Phase I3 enables v2 Excel Template Mode only through Microsoft Excel COM/native automation on Windows. The export API is `export_v2_template_workbook_com()`.
+
+Behavior:
+
+- Uses only `templates/four_leg_tmc_report_template_approach_v2.xlsx` and `templates/four_leg_tmc_report_template_approach_v2_map.json`.
+- Copies the source workbook to a temporary file before opening it in Excel.
+- Writes mapped metadata, road/destination labels, caption text, hourly v2 movement values, vehicle-class data, support sheets, and `Movement_Diagram_Data`.
+- Preserves Excel-authored charts, drawings, lines, arrows, formulas, styles, and page layout by letting Excel save the temporary workbook copy.
+- Recalculates before save using the same COM calculation pattern as the v1 native path.
+- Returns workbook bytes from the saved temporary output.
+- Never rewrites the source v2 template workbook.
+
+If Excel COM is unavailable, v2 Excel Template Mode remains blocked with the Thai UI message and does not silently fall back to openpyxl template save or generated chart workbook. Safe PNG Export Mode is still available and continues to use the generated v2 workbook/package path.
+
+The openpyxl helper `export_v2_template_workbook()` remains limited to structural/internal validation. It is not visual Template Mode because saving the template through openpyxl may drop or damage Excel-authored charts, drawings, shapes, lines, and arrows.
+
+Formula and chart notes:
+
+- `Summary!W9:AL9` must remain `NL, NT, NR, NU, SL, ST, SR, SU, EL, ET, ER, EU, WL, WT, WR, WU`.
+- Existing template formulas own the visual summary calculations where the map declares `preserve_template`.
+- CI tests do not require Excel COM and should test workbook cells/formulas and resource selection rather than native chart cache pixels.
+- Final visual confirmation of native chart/drawing preservation requires a local Windows Excel smoke test.
+
+Remaining blocker: v2 batch support is still disabled.

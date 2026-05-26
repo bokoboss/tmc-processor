@@ -104,7 +104,7 @@ from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRM
 from tmc_processor.pipeline import process_tmc, process_tmc_dry_run_v2
 from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
-from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook
+from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook_com
 from tmc_processor.session import (
     PROJECT_SESSION_MIME,
     ProjectSessionError,
@@ -674,8 +674,12 @@ def _v2_movement_code_reference_frame() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _v2_native_template_block_reason(export_mode: str | None, use_template_report_layout: bool) -> str:
-    if export_mode == EXCEL_TEMPLATE_EXPORT_MODE or use_template_report_layout:
+def _v2_native_template_block_reason(
+    export_mode: str | None,
+    use_template_report_layout: bool,
+    use_excel_com_native_charts: bool,
+) -> str:
+    if (export_mode == EXCEL_TEMPLATE_EXPORT_MODE or use_template_report_layout) and not use_excel_com_native_charts:
         return V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
     return ""
 
@@ -692,18 +696,17 @@ def _export_single_file_for_ui(
     generated_at: str,
 ) -> bytes:
     if _is_v2_result(result):
-        block_reason = _v2_native_template_block_reason(export_mode, use_template_report_layout)
+        block_reason = _v2_native_template_block_reason(export_mode, use_template_report_layout, use_excel_com_native_charts)
         if block_reason:
             raise ValueError(block_reason)
         if use_template_report_layout:
-            return export_v2_template_workbook(
+            return export_v2_template_workbook_com(
                 result,
                 setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
                 mapping=mapping,
                 export_mode=export_mode,
                 source_file_name=source_file_name,
                 generated_at=generated_at,
-                use_excel_com_native_charts=False,
             )
         return export_v2_generated_workbook(
             result,
@@ -4810,8 +4813,6 @@ def _run_streamlit_app() -> None:
             use_template_report_layout = _use_template_layout_for_export(export_mode)
             use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
             is_v2_single_result = _is_v2_result(result)
-            if is_v2_single_result:
-                use_excel_com_native_charts = False
             if pce_results_stale:
                 _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
             _render_action_hint("สร้างรายงานหลังจากประมวลผลและมีช่วงเร่งด่วน AM/PM พร้อมใช้งานแล้ว")
@@ -4824,7 +4825,11 @@ def _run_streamlit_app() -> None:
                     if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
                         st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
                         if is_v2_single_result:
-                            st.caption(V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE)
+                            st.caption(
+                                "Excel Template Mode สำหรับ approach_movement ใช้ Excel COM เพื่อรักษากราฟและ diagram จาก template"
+                                if use_excel_com_native_charts
+                                else V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
+                            )
                         else:
                             st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน")
                     else:
@@ -4853,8 +4858,10 @@ def _run_streamlit_app() -> None:
                             ("กำหนดช่วงเร่งด่วน AM/PM แล้ว", confirmed_ready, str(export_peak_state.get("summary_text") or "")),
                             (
                                 "Excel COM พร้อมใช้งาน",
-                                False if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE else (bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True),
-                                V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE else ("จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง"),
+                                bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
+                                V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
+                                if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE and not excel_com_status.available
+                                else ("จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง"),
                             ),
                         ]
                     )
@@ -4902,7 +4909,7 @@ def _run_streamlit_app() -> None:
                             setup=confirmed_setup,
                             export_mode=export_mode,
                             use_template_report_layout=use_template_report_layout,
-                            use_excel_com_native_charts=False,
+                            use_excel_com_native_charts=excel_com_enabled,
                             source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
                             generated_at=export_generated_at,
                         )

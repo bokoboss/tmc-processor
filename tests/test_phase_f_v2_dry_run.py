@@ -12,7 +12,7 @@ import pytest
 import tmc_processor.exporter as exporter_module
 from tmc_processor.diagram import build_v2_movement_diagram_data, render_v2_movement_diagram_png
 from tmc_processor.export_package import create_v2_generated_export_package_zip
-from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook, export_workbook
+from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook, export_v2_template_workbook_com, export_workbook
 from tmc_processor.importer import load_detected_sheets
 from tmc_processor.mapping import apply_saved_mapping_to_sheets, read_mapping_excel_with_metadata, validate_mapping_scheme
 from tmc_processor.mapping_preset import apply_mapping_preset_to_detected_sheets, load_mapping_preset
@@ -439,6 +439,55 @@ def test_v2_template_export_uses_v2_template_map_only() -> None:
     args, _ = loader.call_args
     assert Path(args[0]).name == V2_TEMPLATE_WORKBOOK.name
     assert Path(args[1]).name == V2_TEMPLATE_MAP.name
+
+
+def test_v2_com_template_export_selects_v2_resources_and_does_not_touch_source() -> None:
+    result = _dry_run_with_preset()
+    before = V2_TEMPLATE_WORKBOOK.stat().st_mtime_ns
+    calls: list[dict[str, object]] = []
+
+    def fake_com_export(**kwargs: object) -> bytes:
+        calls.append(kwargs)
+        return b"PK-v2-com"
+
+    with patch("tmc_processor.exporter._export_workbook_with_excel_com", side_effect=fake_com_export):
+        workbook_bytes = export_v2_template_workbook_com(
+            result,
+            setup=_custom_setup(),
+            mapping=_v2_preset_mapping(_raw_sheets()),
+            generated_at="2026-05-26T08:00:00Z",
+        )
+
+    after = V2_TEMPLATE_WORKBOOK.stat().st_mtime_ns
+    assert workbook_bytes == b"PK-v2-com"
+    assert before == after
+    assert len(calls) == 1
+    call = calls[0]
+    assert Path(str(call["template_path"])).name == V2_TEMPLATE_WORKBOOK.name
+    assert Path(str(call["template_map_path"])).name == V2_TEMPLATE_MAP.name
+    assert call["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert call["diagram_movement_codes"] == APPROACH_MOVEMENT_CODES
+    assert "Movement_Diagram_Data" in call["sheets"]
+
+
+def test_v2_com_template_export_never_selects_v1_template_files() -> None:
+    result = _dry_run_with_preset()
+
+    with pytest.raises(ValueError, match="must not use v1 template files"):
+        export_v2_template_workbook_com(
+            result,
+            setup=_setup(),
+            mapping=_v2_preset_mapping(_raw_sheets()),
+            template_path=str(ROOT / "templates" / "four_leg_tmc_report_template.xlsx"),
+        )
+
+    with pytest.raises(ValueError, match="must not use v1 template files"):
+        export_v2_template_workbook_com(
+            result,
+            setup=_setup(),
+            mapping=_v2_preset_mapping(_raw_sheets()),
+            template_map_path=str(ROOT / "templates" / "four_leg_tmc_report_template_map.json"),
+        )
 
 
 def test_v2_openpyxl_template_helper_is_limited_non_visual_export() -> None:

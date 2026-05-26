@@ -502,6 +502,8 @@ def _movement_formula_targets(template_map: dict[str, Any]):
 
 
 def _write_movement_formulas(worksheet, template_map: dict[str, Any], guard: _FormulaWriteGuard | None = None) -> None:
+    if template_map.get("movement_diagram_cells", {}).get("formula_write_mode") == "preserve_template":
+        return
     for movement_code, cell_ref, value_key in _movement_formula_targets(template_map):
         _set_cell(
             worksheet,
@@ -643,13 +645,19 @@ def _column_name(number: int) -> str:
     return name
 
 
-def _write_diagram_data_sheet(workbook, hourly_movement: pd.DataFrame) -> None:
-    worksheet = _replace_sheet(workbook, "Diagram_Data")
+def _write_diagram_data_sheet(
+    workbook,
+    hourly_movement: pd.DataFrame,
+    *,
+    sheet_name: str = "Diagram_Data",
+    movement_codes: tuple[str, ...] = MOVEMENT_CODES,
+) -> None:
+    worksheet = _replace_sheet(workbook, sheet_name)
     headers = ("movement_code", "total_pcu", "pm_peak_pcu", "am_peak_pcu")
     worksheet.Range("A1:D1").Value = (headers,)
     hourly_rows = max(len(hourly_movement) + 1, 2)
     hourly_columns = max(len(hourly_movement.columns), 2)
-    for row_index, movement_code in enumerate(MOVEMENT_CODES, start=2):
+    for row_index, movement_code in enumerate(movement_codes, start=2):
         worksheet.Cells(row_index, 1).Value = movement_code
         worksheet.Cells(row_index, 2).Formula = _diagram_data_formula("total", f"$A{row_index}", hourly_rows, hourly_columns)
         worksheet.Cells(row_index, 3).Formula = _diagram_data_formula("pm", f"$A{row_index}", hourly_rows, hourly_columns)
@@ -661,7 +669,14 @@ def _write_support_sheets(workbook, report_data: dict[str, Any]) -> None:
     sheets = report_data.get("sheets", {})
     for sheet_name, dataframe in sheets.items():
         _write_dataframe_sheet(workbook, sheet_name, dataframe)
-    _write_diagram_data_sheet(workbook, report_data.get("hourly_movement_pcu", pd.DataFrame()))
+    diagram_data_sheet_name = str(report_data.get("diagram_data_sheet_name") or "Diagram_Data")
+    movement_codes = tuple(report_data.get("diagram_movement_codes") or MOVEMENT_CODES)
+    _write_diagram_data_sheet(
+        workbook,
+        report_data.get("hourly_movement_pcu", pd.DataFrame()),
+        sheet_name=diagram_data_sheet_name,
+        movement_codes=movement_codes,
+    )
 
 
 def _write_native_chart_sources(worksheet, template_map: dict[str, Any], chart_source_data: dict[str, Any], guard: _FormulaWriteGuard | None = None) -> None:

@@ -372,6 +372,24 @@ Remaining blockers before full UI/batch parity:
 - Verify native Excel chart/drawing behavior manually before any v2 COM/native path is considered.
 - Keep validating that `N`, `S`, `E`, and `W` mean travel direction, not source leg.
 
+### Phase I3: v2 native Excel COM Template Mode
+
+Implemented a native Excel COM-only v2 Template Mode path through `export_v2_template_workbook_com()`. This path is intentionally separate from the openpyxl structural helper. It selects only:
+
+- Workbook: `templates/four_leg_tmc_report_template_approach_v2.xlsx`
+- Map: `templates/four_leg_tmc_report_template_approach_v2_map.json`
+
+The COM path copies the manually authored v2 workbook to a temporary output file, opens that copy in Microsoft Excel, writes mapped metadata, labels, hourly movement values, support sheets, and `Movement_Diagram_Data`, triggers Excel recalculation, saves the copy, and returns the saved workbook bytes. The source v2 template workbook is not rewritten.
+
+UI routing for v2 is now COM-or-block:
+
+- v2 Excel Template Mode uses native Excel COM when COM is available.
+- If COM is unavailable, the UI keeps the clear Thai blocking message and does not fall back to openpyxl template save.
+- v2 Safe PNG Export Mode continues to use the generated workbook/package path.
+- The openpyxl v2 template helper remains an internal structural validation helper, not visual Template Mode.
+
+Known limitation: automated tests verify cells, metadata, movement headers, template/map selection, and support-sheet data without requiring Excel COM in CI. Native chart cache refresh and visual preservation of chart/drawing objects require a local Windows Excel smoke inspection. v2 batch support remains blocked.
+
 ### Phase J: limited Streamlit UI enablement
 
 Implemented limited UI enablement for `approach_movement` v2 in the single-file workflow only.

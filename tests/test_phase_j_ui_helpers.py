@@ -108,9 +108,9 @@ def test_v2_ui_export_helper_blocks_excel_template_mode_without_openpyxl_templat
     result, mapping = _v2_result()
 
     def fail_if_called(*args: object, **kwargs: object) -> bytes:
-        raise AssertionError("v2 UI Excel Template Mode must not call the openpyxl template helper")
+        raise AssertionError("v2 UI Excel Template Mode must not call COM export when COM is unavailable")
 
-    monkeypatch.setattr(app, "export_v2_template_workbook", fail_if_called)
+    monkeypatch.setattr(app, "export_v2_template_workbook_com", fail_if_called)
 
     with pytest.raises(ValueError, match="Excel Template Mode สำหรับ approach_movement ต้องใช้ Excel COM"):
         app._export_single_file_for_ui(
@@ -125,20 +125,30 @@ def test_v2_ui_export_helper_blocks_excel_template_mode_without_openpyxl_templat
         )
 
 
-def test_v2_excel_com_native_mode_remains_blocked() -> None:
+def test_v2_excel_com_native_mode_uses_com_template_export(monkeypatch: pytest.MonkeyPatch) -> None:
     result, mapping = _v2_result()
+    calls: list[dict[str, object]] = []
 
-    with pytest.raises(ValueError, match="Excel Template Mode สำหรับ approach_movement ต้องใช้ Excel COM"):
-        app._export_single_file_for_ui(
-            result=result,
-            mapping=mapping,
-            setup=_setup(MOVEMENT_SCHEME_V2),
-            export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
-            use_template_report_layout=True,
-            use_excel_com_native_charts=True,
-            source_file_name=RAW_WORKBOOK.name,
-            generated_at="2026-05-26 12:00:00",
-        )
+    def fake_com_export(*args: object, **kwargs: object) -> bytes:
+        calls.append({"args": args, "kwargs": kwargs})
+        return b"PK-v2-com"
+
+    monkeypatch.setattr(app, "export_v2_template_workbook_com", fake_com_export)
+
+    workbook_bytes = app._export_single_file_for_ui(
+        result=result,
+        mapping=mapping,
+        setup=_setup(MOVEMENT_SCHEME_V2),
+        export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
+        use_template_report_layout=True,
+        use_excel_com_native_charts=True,
+        source_file_name=RAW_WORKBOOK.name,
+        generated_at="2026-05-26 12:00:00",
+    )
+
+    assert workbook_bytes == b"PK-v2-com"
+    assert len(calls) == 1
+    assert calls[0]["kwargs"]["setup"]["movement_code_scheme"] == MOVEMENT_SCHEME_V2
 
 
 def test_v2_batch_analysis_remains_blocked() -> None:
