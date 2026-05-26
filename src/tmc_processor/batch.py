@@ -16,10 +16,11 @@ from .charts import report_chart_pngs
 from .diagram import DiagramConfig, generate_four_leg_tmc_diagram
 from .export_package import build_export_summary_text
 from .importer import load_detected_sheets
-from .mapping import clean_mapping
+from .mapping import clean_mapping, mapping_processing_block_reason
 from .mapping_preset import (
     apply_mapping_preset_to_detected_sheets,
     build_mapping_preset,
+    detect_mapping_preset_scheme,
     serialize_mapping_preset,
 )
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, setup_with_metadata
@@ -265,10 +266,20 @@ def batch_inputs_ready(
     uploaded_workbook_count: int,
     mapping_available: bool,
     pce_factors_ready: bool = True,
+    movement_code_scheme: str = "from_to",
 ) -> bool:
     """Return whether Basic Batch v1 has the required inputs to start."""
 
-    return uploaded_workbook_count > 0 and mapping_available and pce_factors_ready
+    return (
+        uploaded_workbook_count > 0
+        and mapping_available
+        and pce_factors_ready
+        and not mapping_processing_block_reason(movement_code_scheme)
+    )
+
+
+def batch_processing_block_reason(movement_code_scheme: str = "from_to") -> str:
+    return mapping_processing_block_reason(movement_code_scheme)
 
 
 def batch_change_invalidates(previous: object, current: object, has_analysis: bool) -> bool:
@@ -807,6 +818,8 @@ def analyze_batch_files(
 
     generated_at = generated_at or generated_timestamp_text()
     setup = dict(setup or {})
+    movement_code_scheme = detect_mapping_preset_scheme(mapping_preset) if mapping_preset else "from_to"
+    setup["movement_code_scheme"] = movement_code_scheme
     source_mapping = clean_mapping(mapping if mapping is not None else pd.DataFrame())
     if source_mapping.empty and mapping_preset:
         source_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, []).mapping

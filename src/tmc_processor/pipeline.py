@@ -8,7 +8,8 @@ from typing import Any
 import pandas as pd
 
 from .exporter import export_workbook
-from .mapping import validate_mapping_for_processing
+from .mapping import mapping_processing_block_reason, validate_mapping_for_processing
+from .movement_scheme import MOVEMENT_SCHEME_V1
 from .metadata import setup_with_metadata
 from .normalizer import normalize
 from .pcu import get_default_pce_factors, validate_pce_factors
@@ -53,6 +54,10 @@ def process_tmc(
     generated_at: str | None = None,
 ) -> ProcessingResult:
     detected_sheets = detected_sheets or list(raw_sheets)
+    movement_code_scheme = str(setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1)
+    block_reason = mapping_processing_block_reason(movement_code_scheme)
+    if block_reason:
+        raise ValueError(block_reason)
     mapping_issues = validate_mapping_for_processing(detected_sheets, mapping)
     if not mapping_issues.empty:
         issue_text = "; ".join(

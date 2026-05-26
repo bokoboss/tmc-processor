@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import BytesIO
 from typing import BinaryIO
 
@@ -16,6 +17,20 @@ from .constants import (
     TURN_TYPE_OPTIONS,
 )
 from .importer import extract_raw_direction
+from .movement_scheme import (
+    MOVEMENT_SCHEME_V1,
+    MOVEMENT_SCHEME_V2,
+    is_approach_movement_code,
+    normalize_movement_code_scheme,
+    parse_approach_movement_code,
+)
+
+
+APPROACH_MOVEMENT_PROCESSING_BLOCK_REASON = (
+    "Mapping นี้ใช้ระบบรหัส approach_movement v2 ซึ่งยังไม่ได้เปิดใช้ใน pipeline หลัก "
+    "โปรดใช้ Mapping แบบ from_to สำหรับการประมวลผลในเวอร์ชันนี้"
+)
+OPTIONAL_MAPPING_METADATA_COLUMNS = ["approach_direction", "movement_type"]
 
 
 _SOURCE_STREAM_DEFAULT = "mainline"
@@ -50,6 +65,17 @@ _FACILITY_TYPE_ALIASES = {
     "uturn": "other",
     "other": "other",
 }
+
+
+@dataclass(frozen=True)
+class MappingExcelLoadResult:
+    mapping: pd.DataFrame
+    metadata: dict[str, str]
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def movement_code_scheme(self) -> str:
+        return self.metadata.get("movement_code_scheme", MOVEMENT_SCHEME_V1)
 
 
 def _choice_key(value: object) -> str:
@@ -188,6 +214,11 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
                 cleaned[column] = _FACILITY_TYPE_DEFAULT
             else:
                 cleaned[column] = ""
+    optional_values = {
+        column: cleaned[column].fillna("").astype(str).tolist()
+        for column in OPTIONAL_MAPPING_METADATA_COLUMNS
+        if column in cleaned.columns
+    }
     cleaned = cleaned[MAPPING_COLUMNS]
     cleaned["include_in_peak"] = _bool_series(cleaned["include_in_peak"], default=True)
     cleaned["include_in_report"] = _bool_series(cleaned["include_in_report"], default=True)
@@ -212,6 +243,8 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
             _AGGREGATION_METHOD_DEFAULT,
         )
     )
+    for column, values in optional_values.items():
+        cleaned[column] = values
     return cleaned
 
 
@@ -223,7 +256,7 @@ def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataF
     current = default_mapping_for_sheets(raw_sheets)
     extra_columns = [
         column
-        for column in ("note", "remark")
+        for column in (*OPTIONAL_MAPPING_METADATA_COLUMNS, "note", "remark")
         if column in saved_mapping.columns and "raw_sheet" in saved_mapping.columns
     ]
     saved_extras = saved_mapping.copy() if extra_columns else pd.DataFrame()
@@ -254,16 +287,79 @@ def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataF
     return pd.DataFrame(rows, columns=columns)
 
 
-def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
+def _read_mapping_excel_metadata(workbook: pd.ExcelFile) -> dict[str, str]:
+    if "Metadata" not in workbook.sheet_names:
+        return {"movement_code_scheme": MOVEMENT_SCHEME_V1}
+    raw = pd.read_excel(workbook, sheet_name="Metadata", header=None)
+    metadata: dict[str, str] = {}
+    if raw.shape[1] >= 2:
+        for _, row in raw.iloc[:, :2].iterrows():
+            key = str(row.iloc[0] or "").strip()
+            if key and key.casefold() not in {"field", "key"}:
+                value = "" if pd.isna(row.iloc[1]) else str(row.iloc[1]).strip()
+                metadata[key] = value
+    metadata["movement_code_scheme"] = normalize_movement_code_scheme(metadata.get("movement_code_scheme"))
+    return metadata
+
+
+def validate_mapping_scheme(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    if scheme == MOVEMENT_SCHEME_V1:
+        return []
+    cleaned = clean_mapping(mapping)
+    issues: list[str] = []
+    included = cleaned[cleaned["include_in_report"]] if "include_in_report" in cleaned else cleaned
+    for row_number, row in enumerate(included.to_dict("records"), start=1):
+        code = str(row.get("movement_code") or "").strip()
+        if not code:
+            continue
+        if not is_approach_movement_code(code):
+            issues.append(f"Row {row_number} has invalid approach_movement output_movement_code {code!r}.")
+            continue
+        parsed = parse_approach_movement_code(code)
+        approach_direction = str(row.get("approach_direction") or "").strip()
+        movement_type = str(row.get("movement_type") or "").strip()
+        if approach_direction and approach_direction != parsed.approach_direction:
+            issues.append(f"Row {row_number} approach_direction does not match {code}.")
+        if movement_type and movement_type != parsed.movement_type:
+            issues.append(f"Row {row_number} movement_type does not match {code}.")
+    return issues
+
+
+def mapping_processing_block_reason(movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> str:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    return APPROACH_MOVEMENT_PROCESSING_BLOCK_REASON if scheme == MOVEMENT_SCHEME_V2 else ""
+
+
+def mapping_is_process_compatible(movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> bool:
+    return not mapping_processing_block_reason(movement_code_scheme)
+
+
+def read_mapping_excel_with_metadata(excel_file: str | BinaryIO | BytesIO) -> MappingExcelLoadResult:
     workbook = pd.ExcelFile(excel_file)
     sheet_name = "Mapping" if "Mapping" in workbook.sheet_names else workbook.sheet_names[0]
-    return clean_mapping(pd.read_excel(workbook, sheet_name=sheet_name))
+    metadata = _read_mapping_excel_metadata(workbook)
+    mapping = clean_mapping(pd.read_excel(workbook, sheet_name=sheet_name))
+    issues = validate_mapping_scheme(mapping, metadata["movement_code_scheme"])
+    if issues:
+        raise ValueError("; ".join(issues))
+    return MappingExcelLoadResult(mapping=mapping, metadata=metadata)
+
+
+def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
+    return read_mapping_excel_with_metadata(excel_file).mapping
 
 
 def mapping_to_excel_bytes(mapping: pd.DataFrame) -> bytes:
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        clean_mapping(mapping).to_excel(writer, sheet_name="Mapping", index=False)
+        cleaned = clean_mapping(mapping)
+        cleaned.to_excel(writer, sheet_name="Mapping", index=False)
+        pd.DataFrame(
+            [
+                {"field": "movement_code_scheme", "value": MOVEMENT_SCHEME_V1},
+            ]
+        ).to_excel(writer, sheet_name="Metadata", index=False)
         worksheet = writer.sheets["Mapping"]
         worksheet.freeze_panes = "A2"
         for column_cells in worksheet.columns:

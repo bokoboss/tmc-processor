@@ -61,4 +61,9 @@ codes such as `NT`, `WT`, and `ET` from the standard v2 set `NL`, `NT`, `NR`,
 They are migration/demo artifacts and are not yet fully wired into the active
 app pipeline.
 
+In the current app version, v2 demo mapping files are intended for migration
+validation and preview only. They should not be used as active processing inputs;
+single-file processing and batch analysis intentionally require v1 `from_to`
+mapping files until v2 pipeline/report support is completed.
+
 All demo data in this folder is synthetic.

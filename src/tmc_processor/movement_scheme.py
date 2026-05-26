@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 MOVEMENT_SCHEME_V1 = "from_to"
 MOVEMENT_SCHEME_V2 = "approach_movement"
+MOVEMENT_SCHEMES = [MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2]
 
 APPROACH_DIRECTIONS = ["N", "S", "E", "W"]
 MOVEMENT_TYPES = ["L", "T", "R", "U"]
@@ -67,6 +68,16 @@ def is_approach_movement_code(code: object) -> bool:
     if not isinstance(code, str):
         return False
     return code.strip() in _APPROACH_MOVEMENT_CODE_SET
+
+
+def normalize_movement_code_scheme(value: object, *, default: str = MOVEMENT_SCHEME_V1) -> str:
+    """Return a validated movement-code scheme name."""
+
+    text = str(value or "").strip()
+    scheme = text or default
+    if scheme not in MOVEMENT_SCHEMES:
+        raise ValueError(f"Unsupported movement_code_scheme: {value!r}.")
+    return scheme
 
 
 def validate_approach_movement_code(code: object) -> str:

@@ -64,9 +64,12 @@ from tmc_processor.mapping import (
     default_mapping_for_sheets,
     mapping_to_excel_bytes,
     mapping_control_warnings,
+    mapping_is_process_compatible,
+    mapping_processing_block_reason,
     movement_aggregation_messages,
-    read_mapping_excel,
+    read_mapping_excel_with_metadata,
     selectbox_options_with_existing_values,
+    validate_mapping_scheme,
     validate_mapping_for_processing,
 )
 from tmc_processor.mapping_preset import (
@@ -74,6 +77,7 @@ from tmc_processor.mapping_preset import (
     MappingPresetError,
     apply_mapping_preset_to_detected_sheets,
     build_mapping_preset,
+    detect_mapping_preset_scheme,
     load_mapping_preset,
     safe_mapping_preset_filename,
     serialize_mapping_preset,
@@ -97,6 +101,7 @@ from tmc_processor.pcu import (
 )
 from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED
 from tmc_processor.pipeline import process_tmc
+from tmc_processor.movement_scheme import MOVEMENT_SCHEME_V1
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
 from tmc_processor.session import (
     PROJECT_SESSION_MIME,
@@ -2406,6 +2411,7 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
             "show_u_turn": bool(setup.get("show_u_turn", True)),
         },
         mapping=_current_mapping_for_session(),
+        movement_code_scheme=_current_mapping_scheme(),
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
         pce_factors=_current_pce_factors_from_state(),
         peak_settings=peak_settings,
@@ -3263,6 +3269,22 @@ def _mapping_preset_rows_frame(preset: dict[str, object] | None) -> pd.DataFrame
     return pd.DataFrame(preset.get("mapping_rows") or preset.get("rows") or [])
 
 
+def _current_mapping_scheme() -> str:
+    return str(st.session_state.get("tmc_mapping_code_scheme") or MOVEMENT_SCHEME_V1)
+
+
+def _set_current_mapping_scheme(scheme: str) -> None:
+    st.session_state["tmc_mapping_code_scheme"] = str(scheme or MOVEMENT_SCHEME_V1)
+
+
+def _render_mapping_scheme_status(scheme: str) -> None:
+    if mapping_is_process_compatible(scheme):
+        _render_alert(f"movement_code_scheme: {scheme} / compatible", "success")
+    else:
+        _render_alert(f"movement_code_scheme: {scheme} / loaded and valid, not process-compatible yet", "warning")
+        _render_alert(mapping_processing_block_reason(scheme), "warning")
+
+
 def _thai_mapping_control_warning(message: str) -> str:
     if message.startswith("Unknown ") and " value(s) " in message:
         return f"พบค่าใน Mapping ที่อยู่นอกตัวเลือก ระบบโหลดแบบปลอดภัยแล้ว ({message})"
@@ -3372,6 +3394,7 @@ def _run_streamlit_app() -> None:
         st.session_state.pop("tmc_pce_results_stale", None)
         if not st.session_state.get("tmc_mapping_table_from_session"):
             st.session_state.pop("mapping_table", None)
+            _set_current_mapping_scheme(MOVEMENT_SCHEME_V1)
         for key in list(st.session_state.keys()):
             if str(key).startswith("mapping_editor_"):
                 st.session_state.pop(key, None)
@@ -3382,6 +3405,7 @@ def _run_streamlit_app() -> None:
     _hydrate_setup_widgets_from_state()
 
     st.session_state.setdefault("mapping_editor_version", 0)
+    st.session_state.setdefault("tmc_mapping_code_scheme", MOVEMENT_SCHEME_V1)
     st.session_state.setdefault("tmc_batch_file_metadata_table", [])
     st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
     st.session_state.setdefault("tmc_batch_analysis_result", None)
@@ -3439,12 +3463,14 @@ def _run_streamlit_app() -> None:
     loaded_batch_preset = None
     batch_preset_name = ""
     batch_preset_signature = None
+    batch_mapping_scheme = MOVEMENT_SCHEME_V1
     if not is_single_file_mode and batch_preset_upload is not None:
         try:
             batch_preset_bytes = batch_preset_upload.getvalue()
             batch_preset_signature = (batch_preset_upload.name, hashlib.sha256(batch_preset_bytes).hexdigest())
             loaded = load_mapping_preset(batch_preset_bytes)
             loaded_batch_preset = loaded.preset
+            batch_mapping_scheme = detect_mapping_preset_scheme(loaded)
             batch_preset_name = str(loaded.preset.get("preset_name") or batch_preset_upload.name)
             for warning_message in loaded.warnings:
                 st.sidebar.warning(warning_message)
@@ -3619,6 +3645,7 @@ def _run_streamlit_app() -> None:
         selected_pce_factors = _current_pce_factors_from_state()
 
     setup = build_setup_for_processing(uploaded_file.name if uploaded_file is not None else "")
+    setup["movement_code_scheme"] = _current_mapping_scheme()
     project_name = str(setup.get("project_name", "") or "")
     tmc_id = str(setup.get("tmc_id", "") or "")
     tmc_title = str(setup.get("tmc_title", "") or "")
@@ -3665,12 +3692,14 @@ def _run_streamlit_app() -> None:
                 default_mapping = default_mapping_for_sheets(detected_sheet_names)
                 if st.session_state.get("mapping_table") is not None:
                     default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
+                mapping_scheme = _current_mapping_scheme()
                 preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
                 preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
                 preset_bytes = serialize_mapping_preset(
                     build_mapping_preset(
                         preset_source,
                         preset_name=str(preset_name_seed or "TMC Mapping Preset"),
+                        movement_code_scheme=mapping_scheme,
                     )
                 )
                 st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
@@ -3713,10 +3742,9 @@ def _run_streamlit_app() -> None:
                         mapping_upload_bytes = mapping_upload.getvalue()
                         mapping_upload_identity = (mapping_upload.name, hashlib.sha256(mapping_upload_bytes).hexdigest())
                         if st.session_state.get("tmc_mapping_upload_identity") != mapping_upload_identity:
-                            default_mapping = apply_saved_mapping_to_sheets(
-                                detected_sheet_names,
-                                read_mapping_excel(BytesIO(mapping_upload_bytes)),
-                            )
+                            loaded_excel = read_mapping_excel_with_metadata(BytesIO(mapping_upload_bytes))
+                            default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, loaded_excel.mapping)
+                            _set_current_mapping_scheme(loaded_excel.movement_code_scheme)
                             st.session_state["mapping_table"] = default_mapping.to_dict("records")
                             st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
                             st.session_state["tmc_mapping_table_from_session"] = False
@@ -3736,6 +3764,7 @@ def _run_streamlit_app() -> None:
                             loaded_preset = load_mapping_preset(preset_upload_bytes)
                             apply_result = apply_mapping_preset_to_detected_sheets(loaded_preset, detected_sheet_names)
                             default_mapping = apply_result.mapping
+                            _set_current_mapping_scheme(detect_mapping_preset_scheme(loaded_preset))
                             st.session_state["mapping_table"] = default_mapping.to_dict("records")
                             st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
                             st.session_state["tmc_mapping_table_from_session"] = False
@@ -3744,6 +3773,7 @@ def _run_streamlit_app() -> None:
                                 "matched": apply_result.matched_sheet_count,
                                 "missing": apply_result.missing_detected_sheet_count,
                                 "extra": apply_result.extra_preset_row_count,
+                                "scheme": detect_mapping_preset_scheme(loaded_preset),
                             }
                             st.session_state["tmc_mapping_preset_warnings"] = list(loaded_preset.warnings)
                     except (MappingPresetError, ValueError) as exc:
@@ -3760,8 +3790,18 @@ def _run_streamlit_app() -> None:
                 for warning_message in st.session_state.get("tmc_mapping_preset_warnings", []):
                     _render_alert(warning_message, "warning")
 
-                mapping_issues = validate_mapping_for_processing(detected_sheet_names, default_mapping)
+                mapping_scheme = _current_mapping_scheme()
+                scheme_validation_issues = validate_mapping_scheme(default_mapping, mapping_scheme)
+                process_block_reason = mapping_processing_block_reason(mapping_scheme)
+                mapping_issues = (
+                    pd.DataFrame(columns=["raw_sheet", "field", "message"])
+                    if process_block_reason
+                    else validate_mapping_for_processing(detected_sheet_names, default_mapping)
+                )
                 mapping_counts = _mapping_workspace_counts(default_mapping, detected_sheet_names)
+                _render_mapping_scheme_status(mapping_scheme)
+                for issue in scheme_validation_issues:
+                    _render_alert(issue, "warning")
                 _render_metric_strip(
                     [
                         ("ไฟล์สำรวจ", "โหลดแล้ว", "", uploaded_file.name, "พร้อม"),
@@ -3776,9 +3816,11 @@ def _run_streamlit_app() -> None:
 
                 action_col, readiness_col = st.columns([0.82, 1.18])
                 with action_col:
-                    run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=not mapping_issues.empty, key="process_tmc_mapping_top")
+                    run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=bool(process_block_reason) or not mapping_issues.empty or bool(scheme_validation_issues), key="process_tmc_mapping_top")
                 with readiness_col:
-                    if mapping_issues.empty:
+                    if process_block_reason:
+                        _render_alert(process_block_reason, "warning")
+                    elif mapping_issues.empty and not scheme_validation_issues:
                         _render_alert("การกำหนดทิศทางพร้อมสำหรับประมวลผล", "success")
                     else:
                         _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
@@ -3852,8 +3894,17 @@ def _run_streamlit_app() -> None:
                         for aggregation_message in movement_aggregation_messages(mapping):
                             st.caption(_thai_aggregation_message(aggregation_message))
     
-                mapping_issues = validate_mapping_for_processing(detected_sheet_names, mapping)
-                if mapping_issues.empty:
+                mapping_scheme = _current_mapping_scheme()
+                scheme_validation_issues = validate_mapping_scheme(mapping, mapping_scheme)
+                process_block_reason = mapping_processing_block_reason(mapping_scheme)
+                mapping_issues = (
+                    pd.DataFrame(columns=["raw_sheet", "field", "message"])
+                    if process_block_reason
+                    else validate_mapping_for_processing(detected_sheet_names, mapping)
+                )
+                if process_block_reason:
+                    _render_alert(process_block_reason, "warning")
+                elif mapping_issues.empty and not scheme_validation_issues:
                     _render_alert("Mapping พร้อมใช้งาน", "success")
                 else:
                     _render_alert("มีรายการที่ต้องตรวจสอบก่อนประมวลผล", "warning")
@@ -3864,7 +3915,7 @@ def _run_streamlit_app() -> None:
                 if mapping_counts["excluded"]:
                     _render_alert(f"มีแถวที่ไม่แสดงในรายงาน {mapping_counts['excluded']:,} แถว", "info")
 
-                if run and mapping_issues.empty:
+                if run and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
                     try:
                         raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
                         result = process_tmc(
@@ -3901,7 +3952,9 @@ def _run_streamlit_app() -> None:
             uploaded_workbook_count=len(batch_uploads or []),
             mapping_available=mapping_ready,
             pce_factors_ready=pce_ready,
+            movement_code_scheme=batch_mapping_scheme,
         )
+        batch_process_block_reason = mapping_processing_block_reason(batch_mapping_scheme)
         batch_signature = _batch_analysis_signature(
             uploads_signature=_batch_upload_signature(batch_uploads),
             preset_signature=batch_preset_signature,
@@ -4032,6 +4085,8 @@ def _run_streamlit_app() -> None:
                 ],
                 columns=4,
             )
+            if loaded_batch_preset:
+                _render_mapping_scheme_status(batch_mapping_scheme)
 
             if not batch_uploads:
                 _render_action_hint("อัปโหลดไฟล์ TMC หลายไฟล์ที่แถบด้านซ้ายก่อนตรวจ Mapping")
@@ -4048,7 +4103,10 @@ def _run_streamlit_app() -> None:
                 ]
             )
             if mapping_ready:
-                _render_action_hint("เมื่อ Mapping พร้อมใช้งานแล้ว ไปที่แท็บ ตรวจ Peak เพื่อวิเคราะห์ Batch")
+                if batch_process_block_reason:
+                    _render_alert(batch_process_block_reason, "warning")
+                else:
+                    _render_action_hint("เมื่อ Mapping พร้อมใช้งานแล้ว ไปที่แท็บ ตรวจ Peak เพื่อวิเคราะห์ Batch")
 
             with st.expander("สถานะ Sheet matching รายไฟล์", expanded=False):
                 _render_action_hint("ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
@@ -4117,7 +4175,10 @@ def _run_streamlit_app() -> None:
                         ("ค่า PCE", pce_ready, "พร้อมใช้งาน" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
                     ]
                 )
-                _render_action_hint("เตรียมไฟล์ Mapping Preset และค่า PCE ให้พร้อมก่อนวิเคราะห์ Batch")
+                if batch_process_block_reason:
+                    _render_alert(batch_process_block_reason, "warning")
+                else:
+                    _render_action_hint("เตรียมไฟล์ Mapping Preset และค่า PCE ให้พร้อมก่อนวิเคราะห์ Batch")
             elif not batch_analysis or batch_stale:
                 _render_action_hint("วิเคราะห์ Batch เพื่อสร้างรายการตรวจ Peak รายไฟล์")
             analyze_batch = st.button("วิเคราะห์ Batch", type="primary", disabled=not batch_ready, key="analyze_batch_processing")
@@ -4127,7 +4188,7 @@ def _run_streamlit_app() -> None:
                     batch_analysis = analyze_batch_files(
                         items,
                         mapping_preset=loaded_batch_preset,
-                        setup=setup,
+                        setup={**setup, "movement_code_scheme": batch_mapping_scheme},
                         pce_factors=selected_pce_factors,
                         peak_mode=peak_mode,
                         peak_windows=peak_windows,
@@ -4800,6 +4861,7 @@ def _run_streamlit_app() -> None:
                         build_mapping_preset(
                             mapping_df,
                             preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
+                            movement_code_scheme=_current_mapping_scheme(),
                         )
                     ),
                     mapping_preset_filename="mapping_preset.mapping.json",

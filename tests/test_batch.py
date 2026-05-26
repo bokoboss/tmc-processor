@@ -17,6 +17,7 @@ from tmc_processor.batch import (
     batch_change_invalidates,
     batch_file_metadata_defaults,
     batch_inputs_ready,
+    batch_processing_block_reason,
     batch_qc_frame,
     batch_selected_file_preview,
     batch_zip_contents_preview,
@@ -29,6 +30,7 @@ from tmc_processor.batch import (
     unique_safe_output_stems,
 )
 from tmc_processor.mapping_preset import load_mapping_preset
+from tmc_processor.movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +38,7 @@ DEMO_DIR = ROOT / "samples" / "demo"
 DAY1 = DEMO_DIR / "DEMO_TMC1_FourLeg.xlsx"
 DAY2 = DEMO_DIR / "DEMO_TMC1_FourLeg_Day2.xlsx"
 PRESET = DEMO_DIR / "DEMO_TMC1_FourLeg.mapping.json"
+V2_PRESET = DEMO_DIR / "DEMO_TMC1_FourLeg_approach_v2.mapping.json"
 
 
 def _demo_items() -> list[BatchItem]:
@@ -47,6 +50,10 @@ def _demo_items() -> list[BatchItem]:
 
 def _preset() -> dict[str, object]:
     return load_mapping_preset(PRESET.read_bytes()).preset
+
+
+def _v2_preset() -> dict[str, object]:
+    return load_mapping_preset(V2_PRESET.read_bytes()).preset
 
 
 def _setup() -> dict[str, object]:
@@ -85,6 +92,32 @@ def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
     assert not batch_inputs_ready(uploaded_workbook_count=0, mapping_available=True, pce_factors_ready=True)
     assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=False, pce_factors_ready=True)
     assert not batch_inputs_ready(uploaded_workbook_count=2, mapping_available=True, pce_factors_ready=False)
+    assert batch_inputs_ready(
+        uploaded_workbook_count=2,
+        mapping_available=True,
+        pce_factors_ready=True,
+        movement_code_scheme=MOVEMENT_SCHEME_V1,
+    )
+    assert not batch_inputs_ready(
+        uploaded_workbook_count=2,
+        mapping_available=True,
+        pce_factors_ready=True,
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+    )
+
+
+def test_batch_v2_mapping_is_blocked_not_processed() -> None:
+    assert "approach_movement v2" in batch_processing_block_reason(MOVEMENT_SCHEME_V2)
+
+    analysis = analyze_batch_files(
+        [BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes())],
+        mapping_preset=_v2_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert [item.status for item in analysis.items] == ["failed"]
+    assert "approach_movement v2" in analysis.items[0].notes
 
 
 def test_filename_date_extraction_and_safe_output_stem() -> None:

@@ -194,10 +194,11 @@ Phase C status note:
 
 ### Phase D: mapping editor and preset schema
 
-- Add scheme-aware mapping editor columns.
-- Create mapping preset schema v2.
-- Load v1 presets as from-to and v2 presets as approach-movement.
-- Block or require explicit review for scheme mismatches.
+- Implemented safe scheme awareness for Mapping Preset and Mapping Excel loading. Old files without `movement_code_scheme` default to `from_to`; v2 files with `movement_code_scheme = "approach_movement"` can now be detected and validated, including `output_movement_code`, `approach_direction`, and `movement_type`.
+- Added Project Session preservation for the active mapping scheme while keeping old sessions defaulted to `from_to`.
+- Added UI scheme status in Mapping/Batch mapping areas. V2 approach-movement mappings can be loaded, previewed, and validated, but are intentionally marked as not process-compatible yet.
+- Added guards so v2 mappings are blocked before single-file processing or batch analysis can run through the active v1 pipeline. This prevents `NT`/`WT`/`ET` approach-movement codes from being silently treated as v1 from-to codes.
+- V1 `from_to` remains the active processing/export/report scheme until normalizer, summary, report template, exporter, and diagram support are implemented in later phases.
 
 ### Phase E: normalizer, summaries, export, report
 
