@@ -200,4 +200,6 @@ The v2 workbook has now been manually finalized in Excel and validated against t
 - Template version: `four_leg_approach_movement_v2`
 - Movement code scheme: `approach_movement`
 
-Phase I2C uses this Excel-authored workbook as the source for openpyxl template export. Export code writes only to an output copy in memory, preserves the template formula ownership where the map declares `preserve_template`, and keeps native Excel COM/template export blocked for v2.
+Phase I2C keeps the Excel-authored workbook as the v2 visual template source, but the current openpyxl helper is limited to structural/internal validation. It writes only to an output copy in memory and preserves template formula ownership where the map declares `preserve_template`, but it is not native-template-preserving: openpyxl can drop or damage Excel-authored drawings, charts, shapes, lines, and arrows when saving.
+
+User-facing v2 Excel Template Mode must therefore require a native Excel/COM preservation path. Until that path is implemented, the Streamlit UI blocks v2 Excel Template Mode with a clear message and directs users to Safe PNG Export Mode. Safe PNG/generated workbook export remains the supported fallback for v2.

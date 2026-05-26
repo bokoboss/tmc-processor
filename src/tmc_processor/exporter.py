@@ -86,13 +86,15 @@ V2_TEMPLATE_EXPORT_TEMPLATE = "four_leg_approach_movement_v2"
 V2_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
 V2_EXPORT_LIMITATION_NOTES = (
-    "Generated v2 workbook export does not use an Excel template; openpyxl template export is supported separately. "
-    "Native Excel COM template export remains unsupported; v2 diagram support is table-based in Movement_Diagram_Data "
+    "Generated v2 workbook export does not use an Excel template; the openpyxl template helper is limited to "
+    "structural/internal validation and is not native-template-preserving. Native Excel COM template export remains "
+    "unsupported; v2 diagram support is table-based in Movement_Diagram_Data "
     "with a visual PNG included in generated export packages."
 )
 V2_TEMPLATE_EXPORT_LIMITATION_NOTES = (
-    "openpyxl Excel Template Mode is supported for approach_movement v2; "
-    "native Excel COM template export, broad UI enablement, and batch export remain blocked."
+    "Limited openpyxl structural template export for approach_movement v2; not safe for visual Excel Template Mode "
+    "because Excel-authored drawings, shapes, arrows, and charts may be dropped or damaged on save. Native Excel COM "
+    "template export, UI Excel Template Mode, and batch export remain blocked."
 )
 
 
@@ -1330,7 +1332,7 @@ def _v2_template_export_sheets(
             generated_at=generated_at,
             template_version=V2_TEMPLATE_EXPORT_TEMPLATE,
             export_template=V2_TEMPLATE_EXPORT_TEMPLATE,
-            excel_template_mode_supported=True,
+            excel_template_mode_supported=False,
             limitation_notes=V2_TEMPLATE_EXPORT_LIMITATION_NOTES,
         ),
         "Setup": _setup_frame(setup),
@@ -1376,7 +1378,11 @@ def export_v2_template_workbook(
     template_map_path: str | None = None,
     create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
 ) -> bytes:
-    """Export an approach_movement v2 dry-run result through the openpyxl template path."""
+    """Export a limited v2 structural workbook through openpyxl.
+
+    This helper is for internal validation only. It is not native-template-preserving
+    and must not be routed from the UI as Excel Template Mode.
+    """
 
     if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
         raise ValueError("export_v2_template_workbook requires an approach_movement v2 dry-run result.")

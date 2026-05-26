@@ -256,7 +256,7 @@ def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
     assert metadata["template_version"] == "generated_approach_movement_v2"
     assert metadata["export_template"] == "generated_approach_movement_v2"
     assert metadata["export_mode_used"] == "Safe PNG Export Mode"
-    assert "openpyxl template export is supported separately" in metadata["v2_export_limitation_notes"]
+    assert "openpyxl template helper is limited to structural/internal validation" in metadata["v2_export_limitation_notes"]
 
 
 def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:
@@ -405,7 +405,7 @@ def test_v2_dry_run_result_exports_template_workbook_bytes() -> None:
     assert metadata["template_version"] == "four_leg_approach_movement_v2"
     assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
     assert metadata["export_template"] == "four_leg_approach_movement_v2"
-    assert metadata["excel_template_mode_supported"] is True
+    assert metadata["excel_template_mode_supported"] is False
     assert metadata["native_template_export_supported"] is False
 
     assert summary["B2"].value == "Custom v2 TMC Report"
@@ -439,6 +439,17 @@ def test_v2_template_export_uses_v2_template_map_only() -> None:
     args, _ = loader.call_args
     assert Path(args[0]).name == V2_TEMPLATE_WORKBOOK.name
     assert Path(args[1]).name == V2_TEMPLATE_MAP.name
+
+
+def test_v2_openpyxl_template_helper_is_limited_non_visual_export() -> None:
+    result = _dry_run_with_preset()
+
+    workbook_bytes = export_v2_template_workbook(result, setup=_setup(), mapping=_v2_preset_mapping(_raw_sheets()))
+    metadata = _sheet_records(load_workbook(BytesIO(workbook_bytes), read_only=True), "Export_Metadata")
+
+    assert metadata["excel_template_mode_supported"] is False
+    assert metadata["native_template_export_supported"] is False
+    assert "not safe for visual Excel Template Mode" in metadata["v2_export_limitation_notes"]
 
 
 def test_v2_template_export_rejects_v1_template_files_and_excel_com() -> None:

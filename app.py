@@ -49,13 +49,14 @@ from tmc_processor.constants import (
     SOURCE_STREAM_OPTIONS,
     TURN_TYPE_OPTIONS,
 )
-from tmc_processor.diagram import DiagramConfig, generate_four_leg_tmc_diagram
+from tmc_processor.diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram
 from tmc_processor.downloads import EXCEL_MIME, PNG_MIME, download_buffer, safe_workbook_filename
 from tmc_processor.excel_com_export import ExcelComStatus, probe_excel_com
 from tmc_processor.export_package import (
     PACKAGE_MIME,
     build_export_summary_text,
     create_export_package_zip,
+    create_v2_generated_export_package_zip,
     safe_package_filename,
 )
 from tmc_processor.importer import detect_raw_direction_sheet_names, load_detected_sheet_details, preview_detected_sheets
@@ -100,9 +101,10 @@ from tmc_processor.pcu import (
     validate_pce_factors,
 )
 from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED
-from tmc_processor.pipeline import process_tmc
-from tmc_processor.movement_scheme import MOVEMENT_SCHEME_V1
+from tmc_processor.pipeline import process_tmc, process_tmc_dry_run_v2
+from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
+from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook
 from tmc_processor.session import (
     PROJECT_SESSION_MIME,
     ProjectSessionError,
@@ -125,6 +127,10 @@ from tmc_processor.time_utils import (
 
 EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode — แนะนำ"
 SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode — โหมดสำรอง"
+V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE = (
+    "Excel Template Mode สำหรับ approach_movement ต้องใช้ Excel COM เพื่อรักษากราฟและ diagram จาก template "
+    "ขณะนี้ไม่สามารถใช้โหมดนี้ได้ กรุณาใช้ Safe PNG Export Mode หรือเปิดใช้งาน Excel COM"
+)
 BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = EXCEL_TEMPLATE_EXPORT_MODE
 BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอง"
 WORKFLOW_TAB_LABELS = ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
@@ -585,6 +591,129 @@ def _use_template_layout_for_export(export_mode: str | None) -> bool:
 
 def _use_excel_native_charts_for_export(export_mode: str | None, excel_com_status: ExcelComStatus) -> bool:
     return bool(getattr(excel_com_status, "available", False) and _use_template_layout_for_export(export_mode))
+
+
+def _movement_scheme(value: str | None) -> str:
+    return normalize_movement_code_scheme(value or MOVEMENT_SCHEME_V1)
+
+
+def _is_v2_scheme(value: str | None) -> bool:
+    return _movement_scheme(value) == MOVEMENT_SCHEME_V2
+
+
+def _is_v2_result(result: object | None) -> bool:
+    return _is_v2_scheme(str(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V1)))
+
+
+def _single_file_processing_block_reason(movement_code_scheme: str) -> str:
+    return "" if _is_v2_scheme(movement_code_scheme) else mapping_processing_block_reason(movement_code_scheme)
+
+
+def _single_file_mapping_issues(
+    detected_sheet_names: list[str],
+    mapping: pd.DataFrame,
+    movement_code_scheme: str,
+) -> pd.DataFrame:
+    if _is_v2_scheme(movement_code_scheme):
+        return pd.DataFrame(columns=["raw_sheet", "field", "message"])
+    return validate_mapping_for_processing(detected_sheet_names, mapping)
+
+
+def _process_single_file_for_ui(
+    *,
+    raw_sheets: dict[str, pd.DataFrame],
+    mapping: pd.DataFrame,
+    setup: dict[str, object],
+    detected_sheets: list[str],
+    peak_mode: str,
+    peak_windows: dict[str, tuple[str, str]],
+    pce_factors: dict[str, float],
+) -> object:
+    scheme = _movement_scheme(str(setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1))
+    if scheme == MOVEMENT_SCHEME_V2:
+        return process_tmc_dry_run_v2(
+            raw_sheets=raw_sheets,
+            mapping=mapping,
+            setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
+            detected_sheets=detected_sheets,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
+            pce_factors=pce_factors,
+        )
+    return process_tmc(
+        raw_sheets=raw_sheets,
+        mapping=mapping,
+        setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V1},
+        detected_sheets=detected_sheets,
+        peak_mode=peak_mode,
+        peak_windows=peak_windows,
+        pce_factors=pce_factors,
+        generate_workbook=False,
+    )
+
+
+def _hourly_movement_for_ui(result: object | None, mapping: pd.DataFrame) -> pd.DataFrame:
+    if result is None:
+        return pd.DataFrame()
+    if _is_v2_result(result):
+        return getattr(result, "hourly_movement_pcu", pd.DataFrame()).copy()
+    return hourly_movement_pcu(result.normalized, mapping)
+
+
+def _v2_movement_code_reference_frame() -> pd.DataFrame:
+    rows = []
+    for code in APPROACH_MOVEMENT_CODES:
+        rows.append(
+            {
+                "movement_code_scheme": MOVEMENT_SCHEME_V2,
+                "movement_code": code,
+                "approach_direction": code[0],
+                "movement_type": code[1],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _v2_native_template_block_reason(export_mode: str | None, use_template_report_layout: bool) -> str:
+    if export_mode == EXCEL_TEMPLATE_EXPORT_MODE or use_template_report_layout:
+        return V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
+    return ""
+
+
+def _export_single_file_for_ui(
+    *,
+    result: object,
+    mapping: pd.DataFrame,
+    setup: dict[str, object],
+    export_mode: str,
+    use_template_report_layout: bool,
+    use_excel_com_native_charts: bool,
+    source_file_name: str,
+    generated_at: str,
+) -> bytes:
+    if _is_v2_result(result):
+        block_reason = _v2_native_template_block_reason(export_mode, use_template_report_layout)
+        if block_reason:
+            raise ValueError(block_reason)
+        if use_template_report_layout:
+            return export_v2_template_workbook(
+                result,
+                setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
+                mapping=mapping,
+                export_mode=export_mode,
+                source_file_name=source_file_name,
+                generated_at=generated_at,
+                use_excel_com_native_charts=False,
+            )
+        return export_v2_generated_workbook(
+            result,
+            setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
+            mapping=mapping,
+            export_mode=export_mode,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
+        )
+    raise ValueError("v1 export continues to use the existing process_tmc export path.")
 
 
 def _excel_com_status_fields(status: ExcelComStatus) -> dict[str, object]:
@@ -1834,12 +1963,13 @@ def _render_top_status_bar(
     excel_com_status: ExcelComStatus,
 ) -> None:
     mode_value = "ไฟล์เดียว" if is_single_file_mode else "Batch"
+    current_scheme = _current_mapping_scheme()
     if is_single_file_mode:
         source_value = "โหลดแล้ว" if uploaded_name else "ยังไม่มีไฟล์สำรวจ"
         source_note = "พร้อมกำหนด Mapping" if uploaded_name else "อัปโหลดจากแถบด้านซ้าย"
         mapping_rows = len(st.session_state.get("mapping_table") or [])
         mapping_value = "พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"
-        mapping_note = f"{mapping_rows:,} แถว" if mapping_rows else "รอกำหนดทิศทาง"
+        mapping_note = f"{current_scheme} · {mapping_rows:,} แถว" if mapping_rows else f"{current_scheme} · รอกำหนดทิศทาง"
     else:
         source_value = f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่มีไฟล์ Batch"
         source_note = "โหลดไฟล์ Batch แล้ว" if uploaded_count else "อัปโหลดจากแถบด้านซ้าย"
@@ -2076,6 +2206,7 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
 
     summary = [
         ("ไฟล์สำรวจ", "โหลดแล้ว" if uploaded_name else "ยังไม่ได้โหลด", "success" if uploaded_name else "neutral"),
+        ("Scheme", _current_mapping_scheme(), "success" if _is_v2_scheme(_current_mapping_scheme()) else "neutral"),
         ("Mapping", "ต้องตรวจสอบ" if mapping_needs_review else ("พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"), "warning" if mapping_needs_review else ("success" if mapping_rows else "neutral")),
         ("ประมวลผล", "เสร็จแล้ว" if processed else "ยังไม่ได้ประมวลผล", "success" if processed else "neutral"),
         ("Peak", str(peak_state["summary_text"]), str(peak_state["summary_kind"])),
@@ -2155,6 +2286,7 @@ def derive_batch_workflow_state(
 
     summary = [
         ("ไฟล์สำรวจ", f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่ได้โหลด", "success" if uploaded_count else "neutral"),
+        ("Scheme", str(st.session_state.get("tmc_batch_mapping_code_scheme") or MOVEMENT_SCHEME_V1), "warning" if _is_v2_scheme(str(st.session_state.get("tmc_batch_mapping_code_scheme") or MOVEMENT_SCHEME_V1)) else "neutral"),
         ("Mapping Preset", "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม", "success" if batch_mapping_ready else "neutral"),
         ("Batch Analysis", "ต้องวิเคราะห์ใหม่" if batch_stale else ("วิเคราะห์แล้ว" if batch_analysis else "ยังไม่ได้วิเคราะห์"), "warning" if batch_stale else ("success" if batch_analysis else "neutral")),
         ("Peak", f"กำหนดแล้ว {confirmed_count:,}/{successful_count:,} ไฟล์" if successful_count else "ยังไม่มีไฟล์สำเร็จ", "success" if peaks_ready else ("warning" if successful_count else "neutral")),
@@ -2221,6 +2353,8 @@ def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
 
 
 def _single_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
+    if _is_v2_scheme(_current_mapping_scheme()):
+        return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
     return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE] if excel_com_status.available else [SAFE_PNG_EXPORT_MODE]
 
 
@@ -3278,7 +3412,10 @@ def _set_current_mapping_scheme(scheme: str) -> None:
 
 
 def _render_mapping_scheme_status(scheme: str) -> None:
-    if mapping_is_process_compatible(scheme):
+    if _is_v2_scheme(scheme):
+        _render_alert(f"movement_code_scheme: {scheme} / supported for single-file workflow", "success")
+        _render_alert("Batch สำหรับ approach_movement ยังไม่รองรับ", "warning")
+    elif mapping_is_process_compatible(scheme):
         _render_alert(f"movement_code_scheme: {scheme} / compatible", "success")
     else:
         _render_alert(f"movement_code_scheme: {scheme} / loaded and valid, not process-compatible yet", "warning")
@@ -3471,6 +3608,7 @@ def _run_streamlit_app() -> None:
             loaded = load_mapping_preset(batch_preset_bytes)
             loaded_batch_preset = loaded.preset
             batch_mapping_scheme = detect_mapping_preset_scheme(loaded)
+            st.session_state["tmc_batch_mapping_code_scheme"] = batch_mapping_scheme
             batch_preset_name = str(loaded.preset.get("preset_name") or batch_preset_upload.name)
             for warning_message in loaded.warnings:
                 st.sidebar.warning(warning_message)
@@ -3792,12 +3930,8 @@ def _run_streamlit_app() -> None:
 
                 mapping_scheme = _current_mapping_scheme()
                 scheme_validation_issues = validate_mapping_scheme(default_mapping, mapping_scheme)
-                process_block_reason = mapping_processing_block_reason(mapping_scheme)
-                mapping_issues = (
-                    pd.DataFrame(columns=["raw_sheet", "field", "message"])
-                    if process_block_reason
-                    else validate_mapping_for_processing(detected_sheet_names, default_mapping)
-                )
+                process_block_reason = _single_file_processing_block_reason(mapping_scheme)
+                mapping_issues = _single_file_mapping_issues(detected_sheet_names, default_mapping, mapping_scheme)
                 mapping_counts = _mapping_workspace_counts(default_mapping, detected_sheet_names)
                 _render_mapping_scheme_status(mapping_scheme)
                 for issue in scheme_validation_issues:
@@ -3896,14 +4030,12 @@ def _run_streamlit_app() -> None:
     
                 mapping_scheme = _current_mapping_scheme()
                 scheme_validation_issues = validate_mapping_scheme(mapping, mapping_scheme)
-                process_block_reason = mapping_processing_block_reason(mapping_scheme)
-                mapping_issues = (
-                    pd.DataFrame(columns=["raw_sheet", "field", "message"])
-                    if process_block_reason
-                    else validate_mapping_for_processing(detected_sheet_names, mapping)
-                )
+                process_block_reason = _single_file_processing_block_reason(mapping_scheme)
+                mapping_issues = _single_file_mapping_issues(detected_sheet_names, mapping, mapping_scheme)
                 if process_block_reason:
                     _render_alert(process_block_reason, "warning")
+                elif _is_v2_scheme(mapping_scheme):
+                    _render_alert("Mapping approach_movement พร้อมใช้งานสำหรับ single-file workflow", "success")
                 elif mapping_issues.empty and not scheme_validation_issues:
                     _render_alert("Mapping พร้อมใช้งาน", "success")
                 else:
@@ -3918,7 +4050,7 @@ def _run_streamlit_app() -> None:
                 if run and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
                     try:
                         raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                        result = process_tmc(
+                        result = _process_single_file_for_ui(
                             raw_sheets=raw_sheets,
                             mapping=mapping,
                             setup=setup,
@@ -3926,7 +4058,6 @@ def _run_streamlit_app() -> None:
                             peak_mode=peak_mode,
                             peak_windows=peak_windows,
                             pce_factors=selected_pce_factors,
-                            generate_workbook=False,
                         )
                     except Exception as exc:  # pragma: no cover - UI guardrail
                         st.error(f"ประมวลผลไม่สำเร็จ: {exc}")
@@ -4565,7 +4696,7 @@ def _run_streamlit_app() -> None:
         st.session_state.pop("tmc_output", None)
     result = None if pce_results_stale else (processed["result"] if processed else None)
     mapping_df = processed["mapping"] if processed and not pce_results_stale else mapping
-    hourly_movement = hourly_movement_pcu(result.normalized, mapping_df) if result is not None else pd.DataFrame()
+    hourly_movement = _hourly_movement_for_ui(result, mapping_df)
     confirmed_am_start = st.session_state.get("tmc_confirmed_am_peak_start", "")
     confirmed_am_end = st.session_state.get("tmc_confirmed_am_peak_end", "")
     confirmed_pm_start = st.session_state.get("tmc_confirmed_pm_peak_start", "")
@@ -4678,6 +4809,9 @@ def _run_streamlit_app() -> None:
             export_mode = selected_export_mode
             use_template_report_layout = _use_template_layout_for_export(export_mode)
             use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
+            is_v2_single_result = _is_v2_result(result)
+            if is_v2_single_result:
+                use_excel_com_native_charts = False
             if pce_results_stale:
                 _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
             _render_action_hint("สร้างรายงานหลังจากประมวลผลและมีช่วงเร่งด่วน AM/PM พร้อมใช้งานแล้ว")
@@ -4689,7 +4823,10 @@ def _run_streamlit_app() -> None:
                     _render_section_header("โหมดส่งออก", "เลือกวิธีสร้างรายงานจากหน้านี้")
                     if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
                         st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
-                        st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน")
+                        if is_v2_single_result:
+                            st.caption(V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE)
+                        else:
+                            st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน")
                     else:
                         st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
                         st.caption("โหมดสำรอง เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้")
@@ -4716,8 +4853,8 @@ def _run_streamlit_app() -> None:
                             ("กำหนดช่วงเร่งด่วน AM/PM แล้ว", confirmed_ready, str(export_peak_state.get("summary_text") or "")),
                             (
                                 "Excel COM พร้อมใช้งาน",
-                                bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-                                "จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง",
+                                False if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE else (bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True),
+                                V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE else ("จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง"),
                             ),
                         ]
                     )
@@ -4748,59 +4885,84 @@ def _run_streamlit_app() -> None:
                 export_generated_at = generated_timestamp_text()
                 try:
                     raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                    with warnings.catch_warnings(record=True) as export_warnings:
-                        warnings.simplefilter("always", RuntimeWarning)
-                        confirmed_result = process_tmc(
+                    if is_v2_single_result:
+                        confirmed_result = process_tmc_dry_run_v2(
                             raw_sheets=raw_sheets,
                             mapping=mapping_df,
-                            setup=confirmed_setup,
+                            setup={**confirmed_setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
                             detected_sheets=detected_sheet_names,
                             peak_mode=peak_mode,
                             peak_windows=peak_windows,
                             confirmed_peak_periods=confirmed_periods,
                             pce_factors=selected_pce_factors,
-                            generate_workbook=True,
-                            use_template_report_layout=use_template_report_layout,
-                            use_excel_com_native_charts=excel_com_enabled,
+                        )
+                        workbook_bytes = _export_single_file_for_ui(
+                            result=confirmed_result,
+                            mapping=mapping_df,
+                            setup=confirmed_setup,
                             export_mode=export_mode,
+                            use_template_report_layout=use_template_report_layout,
+                            use_excel_com_native_charts=False,
                             source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
                             generated_at=export_generated_at,
                         )
-                    for warning in export_warnings:
-                        message = str(warning.message)
-                        if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
-                            st.warning(f"Excel COM ส่งออก Native Chart ไม่สำเร็จ ระบบใช้โหมดสำรองแบบ PNG ({message})")
-                        elif excel_com_requested and "Excel COM unavailable" in message:
-                            st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                        confirmed_result.workbook_bytes = workbook_bytes
+                    else:
+                        with warnings.catch_warnings(record=True) as export_warnings:
+                            warnings.simplefilter("always", RuntimeWarning)
+                            confirmed_result = process_tmc(
+                                raw_sheets=raw_sheets,
+                                mapping=mapping_df,
+                                setup=confirmed_setup,
+                                detected_sheets=detected_sheet_names,
+                                peak_mode=peak_mode,
+                                peak_windows=peak_windows,
+                                confirmed_peak_periods=confirmed_periods,
+                                pce_factors=selected_pce_factors,
+                                generate_workbook=True,
+                                use_template_report_layout=use_template_report_layout,
+                                use_excel_com_native_charts=excel_com_enabled,
+                                export_mode=export_mode,
+                                source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                                generated_at=export_generated_at,
+                            )
+                        for warning in export_warnings:
+                            message = str(warning.message)
+                            if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
+                                st.warning(f"Excel COM ส่งออก Native Chart ไม่สำเร็จ ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                            elif excel_com_requested and "Excel COM unavailable" in message:
+                                st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบใช้โหมดสำรองแบบ PNG ({message})")
                     if not confirmed_result.workbook_bytes:
                         st.error("ส่งออกเสร็จแล้ว แต่ไฟล์ Excel ที่สร้างไม่มีข้อมูล")
                     else:
-                        confirmed_hourly_movement = hourly_movement_pcu(confirmed_result.normalized, mapping_df)
+                        confirmed_hourly_movement = _hourly_movement_for_ui(confirmed_result, mapping_df)
                         chart_pngs = report_chart_pngs(
                             confirmed_hourly_movement,
                             vehicle_composition_report(confirmed_result.normalized),
                             setup=confirmed_setup,
                         )
-                        diagram_png = generate_four_leg_tmc_diagram(
-                            confirmed_hourly_movement,
-                            confirmed_result.peaks,
-                            DiagramConfig(
-                                tmc_id=tmc_id,
-                                tmc_name=tmc_title,
-                                survey_date_text=survey_date_text,
-                                north_label=north_label,
-                                south_label=south_label,
-                                east_label=east_label,
-                                west_label=west_label,
-                                north_road=north_road,
-                                south_road=south_road,
-                                east_road=east_road,
-                                west_road=west_road,
-                                survey_period_text=survey_period,
-                                caption_text=caption_text,
-                                show_u_turn=show_u_turn,
-                            ),
-                        )
+                        diagram_png = b""
+                        if not _is_v2_result(confirmed_result):
+                            diagram_png = generate_four_leg_tmc_diagram(
+                                confirmed_hourly_movement,
+                                confirmed_result.peaks,
+                                DiagramConfig(
+                                    tmc_id=tmc_id,
+                                    tmc_name=tmc_title,
+                                    survey_date_text=survey_date_text,
+                                    north_label=north_label,
+                                    south_label=south_label,
+                                    east_label=east_label,
+                                    west_label=west_label,
+                                    north_road=north_road,
+                                    south_road=south_road,
+                                    east_road=east_road,
+                                    west_road=west_road,
+                                    survey_period_text=survey_period,
+                                    caption_text=caption_text,
+                                    show_u_turn=show_u_turn,
+                                ),
+                            )
                         st.session_state["tmc_output"] = {
                             "result": confirmed_result,
                             "chart_pngs": dict(chart_pngs),
@@ -4851,40 +5013,62 @@ def _run_streamlit_app() -> None:
                     },
                     generated_at=output.get("generated_at"),
                 )
-                package_bytes = create_export_package_zip(
-                    workbook_bytes=output["workbook_bytes"],
-                    workbook_filename=output["workbook_filename"],
-                    export_summary_text=summary_text,
-                    project_session_bytes=session_bytes,
-                    project_session_filename=session_filename,
-                    mapping_preset_bytes=serialize_mapping_preset(
-                        build_mapping_preset(
-                            mapping_df,
-                            preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
-                            movement_code_scheme=_current_mapping_scheme(),
-                        )
-                    ),
-                    mapping_preset_filename="mapping_preset.mapping.json",
-                    mapping=mapping_df,
-                    chart_pngs=output.get("chart_pngs", {}),
-                    diagram_png=output.get("diagram_png"),
-                )
-                with st.expander("ตัวอย่างไฟล์ใน Export Package ZIP", expanded=False):
-                    st.code(
-                        "\n".join(
-                            [
-                                output["workbook_filename"],
-                                "export_summary.txt",
-                                session_filename,
-                                "mapping_preset.mapping.json",
-                                "mapping.csv",
-                                "charts/hourly_pcu_chart.png",
-                                "charts/vehicle_composition_chart.png",
-                                "charts/tmc_movement_diagram.png",
-                            ]
-                        ),
-                        language="text",
+                mapping_preset_bytes = serialize_mapping_preset(
+                    build_mapping_preset(
+                        mapping_df,
+                        preset_name=str(st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or "TMC Mapping Preset"),
+                        movement_code_scheme=_current_mapping_scheme(),
                     )
+                )
+                if _is_v2_result(output_result):
+                    package_bytes = create_v2_generated_export_package_zip(
+                        workbook_bytes=output["workbook_bytes"],
+                        workbook_filename=output["workbook_filename"],
+                        setup=output_setup,
+                        peaks=output_result.peaks,
+                        mapping=mapping_df,
+                        qc=output_result.qc,
+                        mapping_preset_bytes=mapping_preset_bytes,
+                        mapping_preset_filename="mapping_preset.mapping.json",
+                        source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
+                        export_mode=output.get("export_mode", export_mode),
+                        generated_at=output.get("generated_at"),
+                    )
+                else:
+                    package_bytes = create_export_package_zip(
+                        workbook_bytes=output["workbook_bytes"],
+                        workbook_filename=output["workbook_filename"],
+                        export_summary_text=summary_text,
+                        project_session_bytes=session_bytes,
+                        project_session_filename=session_filename,
+                        mapping_preset_bytes=mapping_preset_bytes,
+                        mapping_preset_filename="mapping_preset.mapping.json",
+                        mapping=mapping_df,
+                        chart_pngs=output.get("chart_pngs", {}),
+                        diagram_png=output.get("diagram_png"),
+                    )
+                with st.expander("ตัวอย่างไฟล์ใน Export Package ZIP", expanded=False):
+                    if _is_v2_result(output_result):
+                        preview_files = [
+                            output["workbook_filename"],
+                            "export_summary.txt",
+                            "mapping_preset.mapping.json",
+                            "mapping_table.xlsx",
+                            "diagram/movement_diagram_data.csv",
+                            "diagram/movement_diagram.png",
+                        ]
+                    else:
+                        preview_files = [
+                            output["workbook_filename"],
+                            "export_summary.txt",
+                            session_filename,
+                            "mapping_preset.mapping.json",
+                            "mapping_table.xlsx",
+                            "charts/hourly_pcu_chart.png",
+                            "charts/vehicle_composition_chart.png",
+                            "charts/tmc_movement_diagram.png",
+                        ]
+                    st.code("\n".join(preview_files), language="text")
                     st.caption("Export Package ZIP ไม่รวม raw input Excel")
                 _render_download_button(
                     "ดาวน์โหลด Export Package ZIP",
@@ -4914,8 +5098,11 @@ def _run_streamlit_app() -> None:
                             "vehicle_composition_chart.png",
                             PNG_MIME,
                         )
-                    st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
-                    _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
+                    if output.get("diagram_png"):
+                        st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
+                        _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
+                    elif _is_v2_result(output_result):
+                        st.caption("approach_movement diagram PNG อยู่ใน Export Package ZIP ที่ path diagram/movement_diagram.png")
             else:
                 _render_empty_state(
                     "ยังไม่มีไฟล์ส่งออก",
@@ -4973,6 +5160,18 @@ def _run_streamlit_app() -> None:
                     if not result.hourly.empty:
                         st.caption("Hourly raw summary")
                         st.dataframe(_format_display_columns(result.hourly), width="stretch", hide_index=True)
+                with st.expander("Movement Summary", expanded=False):
+                    st.dataframe(_format_display_columns(result.movement), width="stretch", hide_index=True)
+                if _is_v2_result(result):
+                    with st.expander("Movement Diagram Data", expanded=False):
+                        diagram_data = build_v2_movement_diagram_data(
+                            movement_summary=result.movement,
+                            hourly_movement_pcu=hourly_movement,
+                            peaks=result.peaks,
+                        )
+                        st.dataframe(_format_display_columns(diagram_data), width="stretch", hide_index=True)
+                    with st.expander("Movement Code Reference", expanded=False):
+                        st.dataframe(_v2_movement_code_reference_frame(), width="stretch", hide_index=True)
                 with st.expander("Peak / PHF Data", expanded=False):
                     peak_display = _format_display_columns(result.peaks)
                     if "peak_start" in peak_display.columns:

@@ -354,16 +354,16 @@ No v2 `.xlsx` draft was created. The current v1 template contains native charts 
 
 Next step: Phase I2 can implement v2 template export only after a manually finalized `four_leg_tmc_report_template_approach_v2.xlsx` passes the integrity checks.
 
-### Phase I2C: v2 openpyxl Excel Template Mode
+### Phase I2C: v2 openpyxl structural template helper
 
-Implemented v2 Excel Template Mode for the openpyxl path only through `export_v2_template_workbook()`. The v2 template export always selects the validated v2 resources:
+Implemented a limited v2 openpyxl structural helper through `export_v2_template_workbook()`. This helper is not visual/native-template-preserving and must not be treated as UI Excel Template Mode because openpyxl can drop or damage Excel-authored drawings, charts, shapes, lines, and arrows when saving. The helper always selects the validated v2 resources:
 
 - Workbook: `templates/four_leg_tmc_report_template_approach_v2.xlsx`
 - Map: `templates/four_leg_tmc_report_template_approach_v2_map.json`
 
-The exporter writes to an in-memory output workbook copy and does not overwrite or rewrite the source template file. The `Summary` sheet keeps the v2 movement headers in `W9:AL9` using `APPROACH_MOVEMENT_CODES`, writes mapped setup metadata, populates the mapped hourly movement and vehicle-class tables, preserves template formulas such as `HLOOKUP(...,$W$9:$AL$22,...)`, and adds a `Movement_Diagram_Data` sheet for the table-based v2 diagram data.
+The helper writes to an in-memory output workbook copy and does not overwrite or rewrite the source template file. It is useful for structural validation of mapped cells, v2 headers, and formulas only. The `Summary` sheet keeps the v2 movement headers in `W9:AL9` using `APPROACH_MOVEMENT_CODES`, writes mapped setup metadata, populates the mapped hourly movement and vehicle-class tables, preserves template formulas such as `HLOOKUP(...,$W$9:$AL$22,...)`, and adds a `Movement_Diagram_Data` sheet for the table-based v2 diagram data.
 
-Native Excel COM template export remains blocked for v2. Broad UI enablement and v2 batch export also remain blocked. The normal v1 `from_to` Excel Template Mode continues to use `templates/four_leg_tmc_report_template.xlsx` and `templates/four_leg_tmc_report_template_map.json`.
+Native Excel COM template export remains pending for v2. UI Excel Template Mode and v2 batch export are blocked until a native Excel/COM preservation path is implemented. The normal v1 `from_to` Excel Template Mode continues to use `templates/four_leg_tmc_report_template.xlsx` and `templates/four_leg_tmc_report_template_map.json`.
 
 Remaining blockers before full UI/batch parity:
 
@@ -372,9 +372,24 @@ Remaining blockers before full UI/batch parity:
 - Verify native Excel chart/drawing behavior manually before any v2 COM/native path is considered.
 - Keep validating that `N`, `S`, `E`, and `W` mean travel direction, not source leg.
 
-### Phase J: UI enablement and release notes
+### Phase J: limited Streamlit UI enablement
 
-Enable v2 processing in the UI only for supported paths. Add release notes, experimental warnings if applicable, and compatibility guidance for v1 sessions/presets.
+Implemented limited UI enablement for `approach_movement` v2 in the single-file workflow only.
+
+Supported UI scope:
+
+- Single-file v2 processing is enabled when the loaded mapping declares `movement_code_scheme = "approach_movement"` and validates successfully.
+- The UI routes v2 processing through `process_tmc_dry_run_v2()` and keeps the v2 result separate from unsafe v1 `ProcessingResult` assumptions.
+- Peak Review uses the v2 hourly movement summary and shows approach-movement codes directly.
+- Data Review exposes v2 QC, `Normalized_Data`, `Hourly_Movement_PCU`, `Movement_Summary`, `Movement_Diagram_Data`, and `Movement_Code_Reference`.
+- Export supports v2 Generated Workbook / Safe PNG mode. v2 Excel Template Mode is blocked in the UI until a native Excel/COM preservation path is implemented. The openpyxl helper remains available only for internal structural validation with `templates/four_leg_tmc_report_template_approach_v2.xlsx` and `templates/four_leg_tmc_report_template_approach_v2_map.json`.
+- The v2 export package includes the workbook, `export_summary.txt`, mapping artifacts, `diagram/movement_diagram_data.csv`, and `diagram/movement_diagram.png` when the package helper can render it. Raw input Excel files are not included.
+
+Still blocked:
+
+- Batch analysis/export for `approach_movement` remains blocked. Loading/detecting a v2 Mapping Preset is allowed, but Analyze Batch must not run.
+- Excel Template Mode remains blocked for `approach_movement` with the UI message: `Excel Template Mode สำหรับ approach_movement ต้องใช้ Excel COM เพื่อรักษากราฟและ diagram จาก template ขณะนี้ไม่สามารถใช้โหมดนี้ได้ กรุณาใช้ Safe PNG Export Mode หรือเปิดใช้งาน Excel COM`.
+- v2 is not silently converted into v1, and v2 exports must not use the v1 template or v1 template map.
 
 ## Current Recommendation Summary
 
