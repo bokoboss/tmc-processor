@@ -13,10 +13,12 @@ import pandas as pd
 
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, get_app_version
+from .movement_scheme import MOVEMENT_SCHEME_V2
 from .pcu import pce_factor_traceability_frame
 
 
 PACKAGE_MIME = "application/zip"
+V2_GENERATED_TEMPLATE_VERSION = "generated_approach_movement_v2"
 
 
 def app_version() -> str:
@@ -193,3 +195,46 @@ def create_export_package_zip(
         if diagram_png:
             archive.writestr("charts/tmc_movement_diagram.png", bytes(diagram_png))
     return output.getvalue()
+
+
+def create_v2_generated_export_package_zip(
+    *,
+    workbook_bytes: bytes,
+    workbook_filename: str = "approach_movement_v2_generated_workbook.xlsx",
+    setup: dict[str, Any] | None = None,
+    peaks: pd.DataFrame | None = None,
+    mapping: pd.DataFrame | None = None,
+    qc: pd.DataFrame | None = None,
+    mapping_preset_bytes: bytes | None = None,
+    mapping_preset_filename: str | None = None,
+    source_file_name: str | None = None,
+    export_mode: str = "Safe PNG Export Mode",
+    generated_at: datetime | str | None = None,
+) -> bytes:
+    """Package a v2 generated workbook and traceability text without raw input files."""
+
+    package_setup = {**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2}
+    summary = build_export_summary_text(
+        setup=package_setup,
+        source_file_name=source_file_name,
+        export_mode=export_mode,
+        peaks=peaks,
+        mapping=mapping,
+        qc=qc,
+        workbook_filename=workbook_filename,
+        export_settings={
+            "movement_code_scheme": MOVEMENT_SCHEME_V2,
+            "template_version": V2_GENERATED_TEMPLATE_VERSION,
+            "v2_export_scope": "generated workbook only; template/native/diagram export unsupported",
+        },
+        template_version=V2_GENERATED_TEMPLATE_VERSION,
+        generated_at=generated_at,
+    )
+    return create_export_package_zip(
+        workbook_bytes=workbook_bytes,
+        workbook_filename=workbook_filename,
+        export_summary_text=summary,
+        mapping_preset_bytes=mapping_preset_bytes,
+        mapping_preset_filename=mapping_preset_filename,
+        mapping=mapping,
+    )

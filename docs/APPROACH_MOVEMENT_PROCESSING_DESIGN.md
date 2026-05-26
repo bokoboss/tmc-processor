@@ -34,6 +34,34 @@ Remaining blockers before v2 export/report:
 
 Phase F test coverage includes v2 preset/XLSX loading, dry-run normalization, v2 movement-code validation, hourly movement ordering, AM/PM peak suggestions, export blocking, mixed-code rejection, and batch v2 blocking. The existing v1 smoke/export tests remain unchanged.
 
+## Phase G Implementation Note
+
+Phase G adds generated workbook export for v2 dry-run results through `export_v2_generated_workbook()`. This is a generated-only / Safe PNG-style export path: it writes workbook data sheets directly and does not load the v1 template map, the v1 template workbook, Excel COM/native charts, or the v1 movement diagram path.
+
+Implemented in Phase G:
+
+- `Export_Metadata` records `movement_code_scheme = "approach_movement"`, `template_version = "generated_approach_movement_v2"`, `export_template = "generated_approach_movement_v2"`, `export_mode_used`, and limitation notes.
+- The generated workbook includes `PCE_Factors`, `Normalized_Data`, `Hourly_Totals`, `Hourly_Movement_PCU`, `Movement_Summary`, `Vehicle_Composition`, `Peak_Summary`, `QC_Check`, `Movement_Code_Reference`, and `Mapping_Scheme_Info`; it also includes `Mapping` when a mapping table is supplied.
+- `Hourly_Movement_PCU` follows `APPROACH_MOVEMENT_CODES` order exactly: `NL`, `NT`, `NR`, `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, `WU`.
+- `Movement_Code_Reference` enumerates all 16 approach-movement codes with direction, movement type, readable labels, and display labels.
+- A v2 generated package helper, `create_v2_generated_export_package_zip()`, can package the generated workbook and `export_summary.txt` without including raw input Excel files.
+
+Still unsupported after Phase G:
+
+- Normal `process_tmc()` v2 processing/export remains blocked.
+- `export_workbook()` still rejects `approach_movement` v2 input and therefore keeps Excel Template Mode and Excel COM/native template export blocked for v2.
+- v2 diagram export remains unsupported/omitted.
+- UI enablement remains deferred to Phase J so the application does not expose a broad new v2 export workflow before the unsupported modes are clearly handled.
+- Batch v2 processing/export remains blocked.
+
+Remaining blockers before UI enablement/full release:
+
+- Decide whether v2 single-file processing should call the dry-run plus generated export path directly or gain a separate explicit processing entry point.
+- Add or formally omit v2 diagram support with user-facing messaging.
+- Finalize and verify a real v2 Excel template before enabling Excel Template Mode.
+- Add UI controls that only allow the generated workbook/Safe PNG-style v2 path and keep all template/native paths disabled.
+- Decide whether batch v2 should support generated exports or remain dry-run only.
+
 The current production scheme is `from_to` v1. Examples are `NS`, `WE`, and `EN`, where the code represents from leg to destination leg. The target v2 scheme is `approach_movement`. Examples are `NL`, `NT`, `NR`, and `NU`, where the first token is travel direction and the second token is movement type:
 
 - `N`, `S`, `E`, `W`: northbound / มุ่งเหนือ, southbound / มุ่งใต้, eastbound / มุ่งตะวันออก, westbound / มุ่งตะวันตก.
@@ -293,7 +321,7 @@ Add an internal v2 processing dry-run path and summaries only. No Excel Template
 
 ### Phase G: v2 generated workbook support
 
-Add v2 generated workbook / Safe PNG export support. Use v2 movement headers and metadata. Keep Excel native template disabled for v2 if the workbook template is not verified. Keep the full diagram disabled unless Phase H is done.
+Implemented generated workbook / Safe PNG-style export support for v2 dry-run results. Use v2 movement headers and metadata. Excel native/template export remains disabled for v2 because the workbook template is not verified. The full diagram remains disabled unless Phase H is done.
 
 ### Phase H: v2 diagram support or limitation
 

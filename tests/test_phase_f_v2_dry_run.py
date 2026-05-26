@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
+from unittest.mock import patch
+from zipfile import ZipFile
 
+from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
-from tmc_processor.exporter import export_workbook
+from tmc_processor.export_package import create_v2_generated_export_package_zip
+from tmc_processor.exporter import export_v2_generated_workbook, export_workbook
 from tmc_processor.importer import load_detected_sheets
 from tmc_processor.mapping import apply_saved_mapping_to_sheets, read_mapping_excel_with_metadata, validate_mapping_scheme
 from tmc_processor.mapping_preset import apply_mapping_preset_to_detected_sheets, load_mapping_preset
@@ -139,6 +144,34 @@ def test_v2_dry_run_does_not_enable_final_excel_export() -> None:
             result.peaks,
         )
 
+    with pytest.raises(ValueError, match="v2 export/report generation is not supported"):
+        export_workbook(
+            _setup(),
+            pd.DataFrame(),
+            result.normalized,
+            result.qc,
+            result.hourly,
+            result.movement,
+            result.vehicle,
+            result.peaks,
+            use_template_report_layout=True,
+            export_mode="Excel Template Mode",
+        )
+
+    with pytest.raises(ValueError, match="v2 export/report generation is not supported"):
+        export_workbook(
+            _setup(),
+            pd.DataFrame(),
+            result.normalized,
+            result.qc,
+            result.hourly,
+            result.movement,
+            result.vehicle,
+            result.peaks,
+            use_excel_com_native_charts=True,
+            export_mode="Excel Template Mode",
+        )
+
     with pytest.raises(ValueError, match="approach_movement v2"):
         process_tmc(
             raw_sheets=_raw_sheets(),
@@ -165,3 +198,111 @@ def test_mixed_v1_v2_mapping_codes_are_rejected() -> None:
 
 def test_batch_v2_dry_run_is_explicitly_unsupported() -> None:
     assert "approach_movement v2" in batch_processing_block_reason(MOVEMENT_SCHEME_V2)
+
+
+def _sheet_records(workbook, sheet_name: str) -> dict[object, object]:
+    return {
+        row[0]: row[1]
+        for row in workbook[sheet_name].iter_rows(min_row=2, values_only=True)
+        if row[0] is not None
+    }
+
+
+def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
+    result = _dry_run_with_preset()
+
+    workbook_bytes = export_v2_generated_workbook(
+        result,
+        setup=_setup(),
+        mapping=_v2_preset_mapping(_raw_sheets()),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert workbook_bytes.startswith(b"PK")
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    assert "Export_Metadata" in workbook.sheetnames
+    assert "Normalized_Data" in workbook.sheetnames
+    assert "Hourly_Movement_PCU" in workbook.sheetnames
+    assert "Movement_Summary" in workbook.sheetnames
+    assert "Vehicle_Composition" in workbook.sheetnames
+    assert "Peak_Summary" in workbook.sheetnames
+    assert "QC_Check" in workbook.sheetnames
+
+    metadata = _sheet_records(workbook, "Export_Metadata")
+    assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert metadata["template_version"] == "generated_approach_movement_v2"
+    assert metadata["export_template"] == "generated_approach_movement_v2"
+    assert metadata["export_mode_used"] == "Safe PNG Export Mode"
+    assert "Excel Template Mode unsupported" in metadata["v2_export_limitation_notes"]
+
+
+def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:
+    result = _dry_run_with_preset()
+    workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
+    headers = [cell.value for cell in workbook["Hourly_Movement_PCU"][1]]
+
+    assert headers[1:17] == APPROACH_MOVEMENT_CODES
+    assert headers[-1] == "Total"
+
+
+def test_v2_generated_workbook_contains_all_movement_code_references() -> None:
+    result = _dry_run_with_preset()
+    workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
+    worksheet = workbook["Movement_Code_Reference"]
+    rows = list(worksheet.iter_rows(min_row=2, values_only=True))
+
+    assert [row[0] for row in rows] == APPROACH_MOVEMENT_CODES
+    assert len(rows) == 16
+    assert rows[0] == ("NL", "N", "Northbound", "L", "Left turn", "NL - Northbound Left turn")
+
+
+def test_v2_generated_workbook_keeps_v2_normalized_and_movement_labels() -> None:
+    result = _dry_run_with_preset()
+    workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
+
+    normalized_headers = [cell.value for cell in workbook["Normalized_Data"][1]]
+    movement_rows = list(workbook["Movement_Summary"].iter_rows(min_row=2, values_only=True))
+
+    for column in [
+        "movement_code_scheme",
+        "movement_code",
+        "output_movement_code",
+        "approach_direction",
+        "movement_type",
+    ]:
+        assert column in normalized_headers
+    assert [row[1] for row in movement_rows] == APPROACH_MOVEMENT_CODES
+    assert all(row[0] == MOVEMENT_SCHEME_V2 for row in movement_rows)
+
+
+def test_v2_generated_export_does_not_use_v1_template_map() -> None:
+    result = _dry_run_with_preset()
+
+    with patch("tmc_processor.exporter.load_report_template_resources") as loader:
+        workbook_bytes = export_v2_generated_workbook(result, setup=_setup())
+
+    assert workbook_bytes.startswith(b"PK")
+    loader.assert_not_called()
+
+
+def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None:
+    result = _dry_run_with_preset()
+    workbook_bytes = export_v2_generated_workbook(result, setup=_setup())
+    package = create_v2_generated_export_package_zip(
+        workbook_bytes=workbook_bytes,
+        setup=_setup(),
+        peaks=result.peaks,
+        qc=result.qc,
+        workbook_filename="v2_generated.xlsx",
+        source_file_name="raw_input.xlsx",
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(package)) as archive:
+        names = set(archive.namelist())
+        summary = archive.read("export_summary.txt").decode("utf-8")
+
+    assert "v2_generated.xlsx" in names
+    assert "export_summary.txt" in names
+    assert "raw_input.xlsx" not in names
+    assert "Template version: generated_approach_movement_v2" in summary

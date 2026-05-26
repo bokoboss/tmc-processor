@@ -23,7 +23,15 @@ from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
 from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
-from .movement_scheme import MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
+from .movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
+    MOVEMENT_SCHEME_V2,
+    approach_direction_label,
+    approach_movement_display_label,
+    movement_type_label,
+    normalize_movement_code_scheme,
+    parse_approach_movement_code,
+)
 from .pcu import pce_factor_traceability_frame
 from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
 from .report_template import (
@@ -69,6 +77,12 @@ DIAGRAM_DATA_SHEET_NAME = "Diagram_Data"
 TMC_REPORT_SHEET_NAME = "TMC_Report"
 DIAGRAM_SHEET_NAME = "Diagram"
 DEFAULT_CREATE_EXCEL_TABLES = False
+V2_GENERATED_EXPORT_TEMPLATE = "generated_approach_movement_v2"
+V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
+V2_EXPORT_LIMITATION_NOTES = (
+    "Excel Template Mode unsupported for approach_movement v2; "
+    "native template export unsupported; v2 diagram export unsupported."
+)
 
 
 def _export_metadata_frame(
@@ -105,6 +119,35 @@ def _export_metadata_frame(
         ("show_u_turn", setup.get("show_u_turn", "")),
     ]
     return pd.DataFrame(rows, columns=["field", "value"])
+
+
+def _v2_export_metadata_frame(
+    setup: dict[str, Any],
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+) -> pd.DataFrame:
+    metadata = _export_metadata_frame(
+        setup,
+        export_mode=export_mode or V2_GENERATED_EXPORT_MODE,
+        source_file_name=source_file_name,
+        generated_at=generated_at,
+        template_version=V2_GENERATED_EXPORT_TEMPLATE,
+    )
+    extra = pd.DataFrame(
+        [
+            ("movement_code_scheme", MOVEMENT_SCHEME_V2),
+            ("export_template", V2_GENERATED_EXPORT_TEMPLATE),
+            ("export_mode_used", export_mode or V2_GENERATED_EXPORT_MODE),
+            ("excel_template_mode_supported", False),
+            ("native_template_export_supported", False),
+            ("diagram_export_supported", False),
+            ("v2_export_limitation_notes", V2_EXPORT_LIMITATION_NOTES),
+        ],
+        columns=["field", "value"],
+    )
+    return pd.concat([metadata, extra], ignore_index=True)
 
 
 class _WorkbookAdapter:
@@ -197,6 +240,136 @@ def _peak_report_frame(setup: dict[str, Any], peaks: pd.DataFrame) -> pd.DataFra
             }
         ]
     )
+
+
+def _v2_movement_code_reference_frame() -> pd.DataFrame:
+    rows = []
+    for code in APPROACH_MOVEMENT_CODES:
+        parsed = parse_approach_movement_code(code)
+        rows.append(
+            {
+                "code": code,
+                "approach_direction": parsed.approach_direction,
+                "approach_direction_label": approach_direction_label(parsed.approach_direction),
+                "movement_type": parsed.movement_type,
+                "movement_type_label": movement_type_label(parsed.movement_type),
+                "display_label": approach_movement_display_label(code),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "code",
+            "approach_direction",
+            "approach_direction_label",
+            "movement_type",
+            "movement_type_label",
+            "display_label",
+        ],
+    )
+
+
+def _v2_mapping_scheme_info_frame(mapping: pd.DataFrame | None) -> pd.DataFrame:
+    rows = [
+        {"field": "movement_code_scheme", "value": MOVEMENT_SCHEME_V2},
+        {"field": "movement_code_order", "value": ", ".join(APPROACH_MOVEMENT_CODES)},
+        {"field": "canonical_movement_key", "value": "movement_code"},
+        {"field": "output_movement_code", "value": "Alias preserved when present."},
+        {"field": "diagram_export", "value": "unsupported"},
+        {"field": "excel_template_mode", "value": "unsupported"},
+        {"field": "native_template_export", "value": "unsupported"},
+    ]
+    if mapping is not None and not mapping.empty:
+        cleaned = clean_mapping(mapping)
+        rows.extend(
+            [
+                {"field": "mapping_rows", "value": len(cleaned)},
+                {"field": "included_in_report_rows", "value": int(cleaned["include_in_report"].sum())},
+                {"field": "included_in_peak_rows", "value": int(cleaned["include_in_peak"].sum())},
+            ]
+        )
+    return pd.DataFrame(rows, columns=["field", "value"])
+
+
+def _v2_normalized_frame(normalized: pd.DataFrame) -> pd.DataFrame:
+    frame = normalized.copy()
+    if "movement_code_scheme" not in frame.columns:
+        frame.insert(0, "movement_code_scheme", MOVEMENT_SCHEME_V2)
+    else:
+        frame["movement_code_scheme"] = MOVEMENT_SCHEME_V2
+    if "output_movement_code" not in frame.columns and "movement_code" in frame.columns:
+        frame.insert(frame.columns.get_loc("movement_code") + 1, "output_movement_code", frame["movement_code"])
+    return frame
+
+
+def _v2_movement_summary_frame(movement: pd.DataFrame, normalized: pd.DataFrame) -> pd.DataFrame:
+    if movement.empty and normalized.empty:
+        totals = pd.DataFrame(columns=["movement_code", "count", "pcu"])
+    elif not normalized.empty and {"movement_code", "count", "pcu"}.issubset(normalized.columns):
+        totals = normalized.groupby("movement_code", dropna=False, as_index=False).agg(count=("count", "sum"), pcu=("pcu", "sum"))
+    else:
+        totals = movement.copy()
+
+    lookup: dict[str, dict[str, Any]] = {}
+    if not totals.empty and "movement_code" in totals.columns:
+        for _, row in totals.iterrows():
+            code = str(row.get("movement_code") or "").strip()
+            if code:
+                lookup[code] = row.to_dict()
+
+    rows = []
+    for code in APPROACH_MOVEMENT_CODES:
+        parsed = parse_approach_movement_code(code)
+        source = lookup.get(code, {})
+        rows.append(
+            {
+                "movement_code_scheme": MOVEMENT_SCHEME_V2,
+                "movement_code": code,
+                "approach_direction": parsed.approach_direction,
+                "movement_type": parsed.movement_type,
+                "display_label": approach_movement_display_label(code),
+                "count": source.get("count", 0),
+                "pcu": source.get("pcu", 0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _v2_peak_summary_frame(peaks: pd.DataFrame) -> pd.DataFrame:
+    if peaks.empty:
+        return pd.DataFrame(
+            columns=[
+                "period",
+                "peak_start",
+                "peak_end",
+                "hourly_pcu",
+                "phf",
+                "peak_mode",
+                "peak_selection_source",
+                "movement_code_scheme",
+            ]
+        )
+    frame = peaks.copy()
+    if "movement_code_scheme" not in frame.columns:
+        frame["movement_code_scheme"] = MOVEMENT_SCHEME_V2
+    if "period" in frame.columns:
+        order = {"AM": 0, "PM": 1}
+        frame["_period_order"] = frame["period"].astype(str).str.upper().map(order).fillna(99)
+        frame = frame.sort_values("_period_order").drop(columns=["_period_order"])
+    return frame
+
+
+def _v2_hourly_movement_frame(hourly_movement: pd.DataFrame) -> pd.DataFrame:
+    frame = hourly_movement.copy()
+    time_columns = [column for column in frame.columns if column not in [*APPROACH_MOVEMENT_CODES, "Total"]]
+    first_column = time_columns[:1] or (list(frame.columns[:1]) if len(frame.columns) else [])
+    ordered = [*first_column, *APPROACH_MOVEMENT_CODES]
+    if "Total" in frame.columns:
+        ordered.append("Total")
+    for code in APPROACH_MOVEMENT_CODES:
+        if code not in frame.columns:
+            frame[code] = 0
+    return frame[[column for column in ordered if column in frame.columns]]
 
 
 def _report_text(normalized: pd.DataFrame, peaks: pd.DataFrame, vehicle: pd.DataFrame) -> pd.DataFrame:
@@ -1029,6 +1202,68 @@ def _export_workbook_with_excel_com(
             chart_source_data=chart_source_data,
         )
         return output_path.read_bytes()
+
+
+def export_v2_generated_workbook(
+    result: Any,
+    setup: dict[str, Any] | None = None,
+    mapping: pd.DataFrame | None = None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
+) -> bytes:
+    """Export approach_movement v2 dry-run results as a generated-only workbook."""
+
+    if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
+        raise ValueError("export_v2_generated_workbook requires an approach_movement v2 dry-run result.")
+
+    setup = setup_with_metadata({**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2})
+    mapping_frame = clean_mapping(mapping) if mapping is not None else pd.DataFrame()
+    normalized = _v2_normalized_frame(getattr(result, "normalized"))
+    qc = getattr(result, "qc")
+    hourly = getattr(result, "hourly")
+    hourly_movement = _v2_hourly_movement_frame(getattr(result, "hourly_movement_pcu"))
+    movement = _v2_movement_summary_frame(getattr(result, "movement"), normalized)
+    vehicle = getattr(result, "vehicle")
+    peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
+    pce_factors = getattr(result, "pce_factors", None)
+
+    sheets: dict[str, pd.DataFrame] = {
+        "Export_Metadata": _v2_export_metadata_frame(
+            setup,
+            export_mode=export_mode or V2_GENERATED_EXPORT_MODE,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
+        ),
+        "PCE_Factors": pce_factor_traceability_frame(pce_factors),
+        "Normalized_Data": normalized,
+        "Hourly_Totals": hourly,
+        "Hourly_Movement_PCU": hourly_movement,
+        "Movement_Summary": movement,
+        "Vehicle_Composition": vehicle,
+        "Peak_Summary": peaks,
+        "QC_Check": qc,
+        "Movement_Code_Reference": _v2_movement_code_reference_frame(),
+        "Mapping_Scheme_Info": _v2_mapping_scheme_info_frame(mapping_frame),
+    }
+    if mapping is not None:
+        sheets["Mapping"] = mapping_frame
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        writer.book.calculation.calcMode = "auto"
+        writer.book.calculation.fullCalcOnLoad = True
+        writer.book.calculation.forceFullCalc = True
+        for sheet_name, dataframe in sheets.items():
+            dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+            _format_worksheet(
+                writer.sheets[sheet_name],
+                sheet_name,
+                create_excel_tables=create_excel_tables,
+            )
+    return buffer.getvalue()
 
 
 def export_workbook(
