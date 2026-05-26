@@ -40,6 +40,24 @@ peak around 17:00-18:00.
 7. Review or adjust the per-file AM/PM confirmed peaks.
 8. Generate and download the Batch ZIP.
 
+## v2 Batch Demo
+
+Phase K enables v2 `approach_movement` Batch analysis and Safe PNG/generated ZIP export.
+
+1. Start the app with `start_tmc_processor.bat`.
+2. Choose Batch mode.
+3. Upload both demo workbooks:
+   - `samples/demo/DEMO_TMC1_FourLeg.xlsx`
+   - `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`
+4. Load `samples/demo/DEMO_TMC1_FourLeg_approach_v2.mapping.json` as the shared Mapping Preset.
+5. Analyze the batch.
+6. Review or adjust per-file AM/PM confirmed peaks.
+7. Use Safe PNG Export Mode to generate the Batch ZIP.
+
+The v2 Batch ZIP includes `batch_summary.xlsx`, one per-file generated report workbook, export summary text, session JSON, mapping JSON, `diagram/movement_diagram_data.csv`, `diagram/movement_diagram.png`, and generated charts when available. Raw input Excel files are excluded.
+
+Excel Template Mode for v2 Batch is intentionally blocked in this version with the message: `Excel Template Mode สำหรับ Batch approach_movement ยังไม่รองรับในเวอร์ชันนี้ กรุณาใช้ Safe PNG Export Mode`.
+
 ## Mapping Excel Vs Mapping Preset
 
 The mapping Excel file is kept for compatibility with the saved mapping Excel
@@ -52,18 +70,13 @@ carrying full project setup or raw workbook content.
 ## Movement-Code Schemes
 
 The original demo artifacts use the v1 `from_to` movement-code scheme, with
-codes such as `NS`, `WE`, and `EW`. These files remain the active demo path for
-the current app pipeline.
+codes such as `NS`, `WE`, and `EW`.
 
 The `*_approach_v2*` demo artifacts use the v2 `approach_movement` scheme, with
 codes such as `NT`, `WT`, and `ET` from the standard v2 set `NL`, `NT`, `NR`,
 `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, `WU`.
-They are migration/demo artifacts and are not yet fully wired into the active
-app pipeline.
-
-In the current app version, v2 demo mapping files are intended for migration
-validation and preview only. They should not be used as active processing inputs;
-single-file processing and batch analysis intentionally require v1 `from_to`
-mapping files until v2 pipeline/report support is completed.
+They are now supported for v2 single-file generated/Safe PNG export and v2 Batch
+generated/Safe PNG export. v2 Batch Excel Template Mode remains blocked until a
+safe per-file COM template export path is implemented.
 
 All demo data in this folder is synthetic.

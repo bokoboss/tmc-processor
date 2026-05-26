@@ -19,6 +19,7 @@ from tmc_processor.batch import (
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
     BATCH_PACKAGE_MIME,
     BATCH_SAFE_PNG_EXPORT_MODE,
+    BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH,
     BatchItem,
     analyze_batch_files,
     batch_analysis_qc_rows,
@@ -27,6 +28,7 @@ from tmc_processor.batch import (
     batch_file_metadata_defaults,
     batch_inputs_ready,
     batch_package_filename,
+    batch_processing_block_reason,
     batch_qc_frame,
     batch_selected_file_preview,
     batch_zip_generation_block_reason,
@@ -3007,6 +3009,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                     "file_name": item.file_name,
                     "survey_date_text": item.survey_date_text,
                     "output_stem": item.output_stem,
+                    "movement_code_scheme": getattr(item, "movement_code_scheme", MOVEMENT_SCHEME_V1),
                     "status": item.status,
                     "mapping_status": item.mapping_status,
                     "AM suggested": item.suggested_AM_peak,
@@ -3028,6 +3031,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                 "file_name": row.file_name,
                 "survey_date_text": row.survey_date_text,
                 "output_stem": row.output_stem,
+                "movement_code_scheme": getattr(row, "movement_code_scheme", MOVEMENT_SCHEME_V1),
                 "status": row.status,
                 "mapping_status": "",
                 "AM suggested": row.suggested_AM_peak,
@@ -4088,7 +4092,7 @@ def _run_streamlit_app() -> None:
             pce_factors_ready=pce_ready,
             movement_code_scheme=batch_mapping_scheme,
         )
-        batch_process_block_reason = mapping_processing_block_reason(batch_mapping_scheme)
+        batch_process_block_reason = batch_processing_block_reason(batch_mapping_scheme)
         batch_signature = _batch_analysis_signature(
             uploads_signature=_batch_upload_signature(batch_uploads),
             preset_signature=batch_preset_signature,
@@ -4468,10 +4472,17 @@ def _run_streamlit_app() -> None:
             no_successful_files = not batch_analysis or not batch_analysis.successful_items
             peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
             output_stems_valid = all(str(row.get("output_stem", "")).strip() for row in st.session_state.get("tmc_batch_file_metadata_table") or [])
+            v2_batch_template_mode_blocked = (
+                _is_v2_scheme(batch_mapping_scheme)
+                and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+            )
             export_mode_ready = bool(
-                batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
-                or excel_com_status.available
-                or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+                not v2_batch_template_mode_blocked
+                and (
+                    batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
+                    or excel_com_status.available
+                    or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
+                )
             )
             if batch_stale:
                 _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
@@ -4485,6 +4496,8 @@ def _run_streamlit_app() -> None:
             generate_disabled = bool(block_reason) or not output_stems_valid or not export_mode_ready
             if not output_stems_valid and not block_reason:
                 block_reason = "ตรวจสอบ output_stem ในแท็บตั้งค่า Batch ก่อนสร้าง ZIP"
+            if v2_batch_template_mode_blocked and not block_reason:
+                block_reason = BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH
             if not export_mode_ready and not block_reason:
                 block_reason = "โหมดส่งออกยังไม่พร้อม"
             _render_action_hint(block_reason or "พร้อมสร้าง Batch ZIP")

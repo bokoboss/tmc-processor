@@ -6,6 +6,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+import pytest
 
 from tmc_processor.batch import (
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
@@ -14,6 +15,7 @@ from tmc_processor.batch import (
     BATCH_SUMMARY_COLUMNS,
     BatchItem,
     analyze_batch_files,
+    batch_analysis_qc_rows,
     batch_change_invalidates,
     batch_file_metadata_defaults,
     batch_inputs_ready,
@@ -30,7 +32,7 @@ from tmc_processor.batch import (
     unique_safe_output_stems,
 )
 from tmc_processor.mapping_preset import load_mapping_preset
-from tmc_processor.movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
+from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +100,7 @@ def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
         pce_factors_ready=True,
         movement_code_scheme=MOVEMENT_SCHEME_V1,
     )
-    assert not batch_inputs_ready(
+    assert batch_inputs_ready(
         uploaded_workbook_count=2,
         mapping_available=True,
         pce_factors_ready=True,
@@ -106,8 +108,8 @@ def test_batch_inputs_ready_requires_workbooks_and_mapping() -> None:
     )
 
 
-def test_batch_v2_mapping_is_blocked_not_processed() -> None:
-    assert "approach_movement v2" in batch_processing_block_reason(MOVEMENT_SCHEME_V2)
+def test_batch_v2_mapping_is_supported_for_analysis() -> None:
+    assert batch_processing_block_reason(MOVEMENT_SCHEME_V2) == ""
 
     analysis = analyze_batch_files(
         [BatchItem(file_name=DAY1.name, workbook_bytes=DAY1.read_bytes())],
@@ -116,8 +118,9 @@ def test_batch_v2_mapping_is_blocked_not_processed() -> None:
         generated_at="2026-05-19T10:00:00Z",
     )
 
-    assert [item.status for item in analysis.items] == ["failed"]
-    assert "approach_movement v2" in analysis.items[0].notes
+    assert analysis.movement_code_scheme == MOVEMENT_SCHEME_V2
+    assert [item.status for item in analysis.items] == ["success"]
+    assert analysis.items[0].suggested_AM_peak
 
 
 def test_filename_date_extraction_and_safe_output_stem() -> None:
@@ -576,3 +579,135 @@ def test_duplicate_output_stems_use_predictable_safe_zip_paths() -> None:
     assert "file_02_same_name_02/same_name_02_report.xlsx" in names
     assert DAY1.name not in names
     assert DAY2.name not in names
+
+
+def test_v2_batch_analyzes_demo_files_with_approach_movement_order_and_qc_scheme() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_v2_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert analysis.movement_code_scheme == MOVEMENT_SCHEME_V2
+    assert [item.status for item in analysis.items] == ["success", "success"]
+    for item in analysis.successful_items:
+        assert item.suggested_AM_peak
+        assert item.suggested_PM_peak
+        assert item.confirmed_AM_peak == item.suggested_AM_peak
+        assert item.confirmed_PM_peak == item.suggested_PM_peak
+        assert list(item.hourly_movement_pcu.columns[1:-1]) == APPROACH_MOVEMENT_CODES
+        assert not item.hourly_totals.empty
+        assert not item.movement_summary.empty
+        assert item.movement_diagram_data["movement_code"].tolist() == APPROACH_MOVEMENT_CODES
+
+    qc = batch_qc_frame(batch_analysis_qc_rows(analysis))
+    assert not qc.empty
+    assert set(qc["movement_code_scheme"]) == {MOVEMENT_SCHEME_V2}
+
+
+def test_v2_batch_rejects_mixed_v1_v2_mapping_codes() -> None:
+    preset = _v2_preset()
+    for row in preset["mapping_rows"]:
+        row["output_movement_code"] = "NS"
+        row["movement_code"] = "NS"
+
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=preset,
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    assert [item.status for item in analysis.items] == ["failed", "failed"]
+    assert all("invalid approach_movement" in item.notes for item in analysis.items)
+
+
+def test_v2_batch_safe_png_zip_contains_expected_artifacts_without_raw_inputs() -> None:
+    result = process_batch_files(
+        _demo_items(),
+        mapping_preset=_v2_preset(),
+        setup=_setup(),
+        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        names = set(archive.namelist())
+        summary_bytes = archive.read("batch_summary.xlsx")
+        first = result.summary_rows[0]
+        summary_text = archive.read(f"{first.folder_name}/{first.output_stem}_export_summary.txt").decode("utf-8")
+        diagram_csv = archive.read(f"{first.folder_name}/diagram/movement_diagram_data.csv").decode("utf-8")
+        diagram_png = archive.read(f"{first.folder_name}/diagram/movement_diagram.png")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    assert {"metadata", "Batch_Summary", "Batch_QC"}.issubset(set(workbook.sheetnames))
+    metadata_rows = list(workbook["metadata"].iter_rows(values_only=True))
+    metadata = {row[0]: row[1] for row in metadata_rows[1:]}
+    summary_rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
+    summary_records = [dict(zip(summary_rows[0], row)) for row in summary_rows[1:]]
+
+    assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert all(record["movement_code_scheme"] == MOVEMENT_SCHEME_V2 for record in summary_records)
+    assert all(record["export_mode_requested"] == BATCH_SAFE_PNG_EXPORT_MODE for record in summary_records)
+    assert all(record["export_mode_used"] == BATCH_SAFE_PNG_EXPORT_MODE for record in summary_records)
+    assert all(record["export_status"] == "success" for record in summary_records)
+    for row in result.summary_rows:
+        assert row.movement_code_scheme == MOVEMENT_SCHEME_V2
+        assert f"{row.folder_name}/{row.output_stem}_report.xlsx" in names
+        assert f"{row.folder_name}/diagram/movement_diagram_data.csv" in names
+        assert f"{row.folder_name}/diagram/movement_diagram.png" in names
+    assert DAY1.name not in names
+    assert DAY2.name not in names
+    assert "movement_code_scheme: approach_movement" in summary_text
+    assert "NL,N,Northbound,L,Left turn" in diagram_csv
+    assert diagram_png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_v2_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+    first = analysis.successful_items[0]
+    custom_am = next(option for option in first.hourly_period_options if option != first.suggested_AM_peak)
+    first.confirmed_AM_peak = custom_am
+
+    result = generate_batch_zip_from_reviewed_peaks(
+        analysis,
+        setup=_setup(),
+        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+    )
+
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        first_row = result.summary_rows[0]
+        summary_text = archive.read(f"{first_row.folder_name}/{first_row.output_stem}_export_summary.txt").decode("utf-8")
+        summary_bytes = archive.read("batch_summary.xlsx")
+
+    workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
+    rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
+    first_record = dict(zip(rows[0], rows[1]))
+
+    assert first_record["suggested_AM_peak"] == first.suggested_AM_peak
+    assert first_record["confirmed_AM_peak"] == custom_am
+    assert first_record["AM_peak"] == custom_am
+    assert f"AM peak period: {custom_am}" in summary_text
+    assert "Peak selection source: user_confirmed_batch" in summary_text
+
+
+def test_v2_batch_excel_template_mode_is_blocked_with_clear_message() -> None:
+    analysis = analyze_batch_files(
+        _demo_items(),
+        mapping_preset=_v2_preset(),
+        setup=_setup(),
+        generated_at="2026-05-19T10:00:00Z",
+    )
+
+    with pytest.raises(ValueError, match="Excel Template Mode สำหรับ Batch approach_movement"):
+        generate_batch_zip_from_reviewed_peaks(
+            analysis,
+            setup=_setup(),
+            export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
+        )

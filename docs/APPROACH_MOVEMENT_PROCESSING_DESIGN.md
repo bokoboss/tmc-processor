@@ -411,4 +411,43 @@ Still blocked:
 
 ## Current Recommendation Summary
 
-Use `movement_code` as the canonical key and keep `output_movement_code` as an alias. Build toward a common normalized movement record model instead of converting between schemes. Keep v2 processing blocked until Phase F+ tests prove the v2 path. Support v2 summaries first, generated workbook second, diagram/template last.
+Use `movement_code` as the canonical key and keep `output_movement_code` as an alias. Build toward a common normalized movement record model instead of converting between schemes. v2 single-file and v2 Batch now support generated/Safe PNG exports; v2 Batch Template Mode remains the main parity gap.
+
+### Phase K: v2 Batch Safe PNG/generated support
+
+Implemented `approach_movement` Batch analysis and Safe PNG/generated ZIP export.
+
+Supported v2 Batch scope:
+
+- Batch runs use one shared `movement_code_scheme` from the Mapping Preset/setup.
+- `from_to` and `approach_movement` mapping codes are validated as separate schemes; mixed or mismatched mappings fail per file during analysis and are recorded as failed rows.
+- v2 Batch analysis routes through `process_tmc_dry_run_v2()` and does not call v1 `process_tmc()`.
+- Per-file suggested AM/PM peaks are produced and defaulted as confirmed peaks; user overrides are carried into final export.
+- v2 hourly movement PCU uses `APPROACH_MOVEMENT_CODES` order.
+- Batch QC rows and Batch Summary rows include `movement_code_scheme`.
+- v2 Safe PNG/generated Batch export writes generated v2 workbooks and table-style movement diagram artifacts without raw input workbooks.
+
+v2 Batch ZIP contents:
+
+- `batch_summary.xlsx`
+- `file_01_<safe_output_stem>/<output_stem>_report.xlsx`
+- `file_01_<safe_output_stem>/<output_stem>_export_summary.txt`
+- `file_01_<safe_output_stem>/<output_stem>_session.tmcproj.json`
+- `file_01_<safe_output_stem>/<output_stem>.mapping.json`
+- `file_01_<safe_output_stem>/diagram/movement_diagram_data.csv`
+- `file_01_<safe_output_stem>/diagram/movement_diagram.png`
+- `file_01_<safe_output_stem>/charts/*.png` when chart rendering succeeds
+
+`batch_summary.xlsx` includes `metadata`, `Batch_Summary`, and `Batch_QC`. Metadata records the app version, template version, generated timestamp, mapping preset name, and `movement_code_scheme`. `Batch_Summary` records suggested/confirmed peaks, export mode requested/used, export status/error, generated report file name, and QC counts.
+
+Excel Template Mode decision:
+
+- v2 Batch Excel Template Mode is intentionally blocked for Phase K.
+- The UI/blocker message is: `Excel Template Mode สำหรับ Batch approach_movement ยังไม่รองรับในเวอร์ชันนี้ กรุณาใช้ Safe PNG Export Mode`.
+- There is no silent fallback from Template Mode to generated workbook for v2 Batch.
+
+Remaining blockers before full parity:
+
+- Implement and test per-file v2 COM Template Mode for Batch, if needed.
+- Keep COM-dependent tests optional/skipped so CI does not require Microsoft Excel.
+- Manually smoke-test native chart/drawing preservation before enabling Template Mode for v2 Batch.

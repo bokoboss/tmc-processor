@@ -151,8 +151,8 @@ def test_v2_excel_com_native_mode_uses_com_template_export(monkeypatch: pytest.M
     assert calls[0]["kwargs"]["setup"]["movement_code_scheme"] == MOVEMENT_SCHEME_V2
 
 
-def test_v2_batch_analysis_remains_blocked() -> None:
-    assert not batch_inputs_ready(
+def test_v2_batch_analysis_is_ready_for_phase_k() -> None:
+    assert batch_inputs_ready(
         uploaded_workbook_count=1,
         mapping_available=True,
         pce_factors_ready=True,

@@ -219,8 +219,8 @@ def test_mixed_v1_v2_mapping_codes_are_rejected() -> None:
     ]
 
 
-def test_batch_v2_dry_run_is_explicitly_unsupported() -> None:
-    assert "approach_movement v2" in batch_processing_block_reason(MOVEMENT_SCHEME_V2)
+def test_batch_v2_dry_run_is_supported_by_phase_k() -> None:
+    assert batch_processing_block_reason(MOVEMENT_SCHEME_V2) == ""
 
 
 def _sheet_records(workbook, sheet_name: str) -> dict[object, object]:

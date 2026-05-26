@@ -229,4 +229,4 @@ Formula and chart notes:
 - CI tests do not require Excel COM and should test workbook cells/formulas and resource selection rather than native chart cache pixels.
 - Final visual confirmation of native chart/drawing preservation requires a local Windows Excel smoke test.
 
-Remaining blocker: v2 batch support is still disabled.
+Phase K update: v2 Batch now supports Safe PNG/generated exports only. Excel Template Mode for v2 Batch is still blocked with the Thai message `Excel Template Mode สำหรับ Batch approach_movement ยังไม่รองรับในเวอร์ชันนี้ กรุณาใช้ Safe PNG Export Mode` until a per-file COM batch path is implemented and tested.
