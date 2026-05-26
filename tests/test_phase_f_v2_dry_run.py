@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
-from tmc_processor.diagram import build_v2_movement_diagram_data
+from tmc_processor.diagram import build_v2_movement_diagram_data, render_v2_movement_diagram_png
 from tmc_processor.export_package import create_v2_generated_export_package_zip
 from tmc_processor.exporter import export_v2_generated_workbook, export_workbook
 from tmc_processor.importer import load_detected_sheets
@@ -301,6 +301,20 @@ def test_v2_diagram_data_totals_match_movement_summary() -> None:
         assert row["total_pcu"] == pytest.approx(summary.loc[code, "pcu"])
 
 
+def test_v2_visual_diagram_png_renders_headlessly() -> None:
+    result = _dry_run_with_preset()
+    diagram = build_v2_movement_diagram_data(
+        movement_summary=result.movement,
+        hourly_movement_pcu=result.hourly_movement_pcu,
+        peaks=result.peaks,
+    )
+
+    png = render_v2_movement_diagram_png(diagram)
+
+    assert len(png) > 1000
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_v2_generated_workbook_includes_movement_diagram_data_sheet() -> None:
     result = _dry_run_with_preset()
     workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
@@ -358,12 +372,16 @@ def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None
         names = set(archive.namelist())
         summary = archive.read("export_summary.txt").decode("utf-8")
         diagram_csv = archive.read("diagram/movement_diagram_data.csv").decode("utf-8")
+        diagram_png = archive.read("diagram/movement_diagram.png")
 
     assert "v2_generated.xlsx" in names
     assert "export_summary.txt" in names
     assert "diagram/movement_diagram_data.csv" in names
+    assert "diagram/movement_diagram.png" in names
     assert "raw_input.xlsx" not in names
     assert "Template version: generated_approach_movement_v2" in summary
     assert "NL, N,Northbound" not in diagram_csv
     assert "NL,N,Northbound,L,Left turn" in diagram_csv
     assert "NS," not in diagram_csv
+    assert diagram_png.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(diagram_png) > 1000

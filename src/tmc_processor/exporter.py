@@ -82,7 +82,8 @@ V2_GENERATED_EXPORT_TEMPLATE = "generated_approach_movement_v2"
 V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
 V2_EXPORT_LIMITATION_NOTES = (
     "Excel Template Mode unsupported for approach_movement v2; "
-    "native template export unsupported; v2 diagram support is table-based in Movement_Diagram_Data."
+    "native template export unsupported; v2 diagram support is table-based in Movement_Diagram_Data "
+    "with a visual PNG included in generated export packages."
 )
 
 
@@ -145,6 +146,7 @@ def _v2_export_metadata_frame(
             ("native_template_export_supported", False),
             ("diagram_export_supported", "table_based"),
             ("diagram_export_artifact", V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
+            ("diagram_png_package_path", "diagram/movement_diagram.png"),
             ("v2_export_limitation_notes", V2_EXPORT_LIMITATION_NOTES),
         ],
         columns=["field", "value"],
@@ -279,6 +281,7 @@ def _v2_mapping_scheme_info_frame(mapping: pd.DataFrame | None) -> pd.DataFrame:
         {"field": "output_movement_code", "value": "Alias preserved when present."},
         {"field": "diagram_export", "value": "table_based"},
         {"field": "diagram_export_artifact", "value": V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME},
+        {"field": "diagram_png_package_path", "value": "diagram/movement_diagram.png"},
         {"field": "excel_template_mode", "value": "unsupported"},
         {"field": "native_template_export", "value": "unsupported"},
     ]

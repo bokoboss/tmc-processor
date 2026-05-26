@@ -156,7 +156,9 @@ Semantic assumptions:
 - `NL` is labeled "Northbound Left turn" and is not interpreted as "from north leg".
 - No v2 diagram code converts or aliases v2 codes to v1 `from_to` codes.
 
-Current limitation: Phase H does not add a v2 PNG arrow diagram or enable the v1 `Diagram_Data` / `Diagram` sheet path for v2. The existing v1 PNG and generated/template diagram behavior remains unchanged. A visual arrow diagram should only be added after a tested coordinate model verifies left/right/U-turn placement for every travel direction.
+Phase H2 implementation: generated v2 export packages also include `diagram/movement_diagram.png`. The PNG is rendered from `Movement_Diagram_Data` with a deterministic 2x2 table-style visual: Northbound, Southbound, Eastbound, and Westbound groups, each with L/T/R/U tiles showing movement code, movement label, total PCU, and count. It uses `matplotlib` with the headless `Agg` backend and adds no new dependency.
+
+Current limitation: Phase H/H2 does not add a v2 PNG arrow diagram or enable the v1 `Diagram_Data` / `Diagram` sheet path for v2. The existing v1 PNG and generated/template diagram behavior remains unchanged. A visual arrow diagram should only be added after a tested coordinate model verifies left/right/U-turn placement for every travel direction.
 
 ## Export and Report Behavior
 
@@ -335,6 +337,10 @@ Implemented generated workbook / Safe PNG-style export support for v2 dry-run re
 ### Phase H: v2 diagram support
 
 Implemented table-based v2 movement visualization support. Generated v2 workbooks include `Movement_Diagram_Data`, and generated v2 ZIP packages include `diagram/movement_diagram_data.csv`. This is intentionally not a PNG arrow diagram; it preserves correct approach-movement semantics while full v2 template/native/batch workflows remain blocked.
+
+### Phase H2: v2 visual diagram PNG
+
+Implemented a simple package PNG at `diagram/movement_diagram.png`. The visual is a quadrant/table-style movement tile layout rather than an intersection arrow drawing, so it does not imply v1 `from_to` geometry. Excel Template Mode, native template export, and v2 batch processing remain blocked.
 
 ### Phase I: v2 Excel template finalization
 

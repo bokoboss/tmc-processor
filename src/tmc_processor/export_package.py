@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from openpyxl import load_workbook
 import pandas as pd
 
+from .diagram import render_v2_movement_diagram_png
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, get_app_version
 from .movement_scheme import MOVEMENT_SCHEME_V2
@@ -200,6 +201,13 @@ def create_export_package_zip(
 
 
 def _workbook_sheet_csv_bytes(workbook_bytes: bytes, sheet_name: str) -> bytes | None:
+    frame = _workbook_sheet_dataframe(workbook_bytes, sheet_name)
+    if frame is None:
+        return None
+    return frame.to_csv(index=False).encode("utf-8")
+
+
+def _workbook_sheet_dataframe(workbook_bytes: bytes, sheet_name: str) -> pd.DataFrame | None:
     try:
         workbook = load_workbook(BytesIO(workbook_bytes), read_only=True, data_only=True)
     except Exception:
@@ -210,7 +218,7 @@ def _workbook_sheet_csv_bytes(workbook_bytes: bytes, sheet_name: str) -> bytes |
         rows = list(workbook[sheet_name].iter_rows(values_only=True))
         if not rows:
             return None
-        return pd.DataFrame(rows[1:], columns=list(rows[0])).to_csv(index=False).encode("utf-8")
+        return pd.DataFrame(rows[1:], columns=list(rows[0]))
     finally:
         workbook.close()
 
@@ -243,7 +251,7 @@ def create_v2_generated_export_package_zip(
         export_settings={
             "movement_code_scheme": MOVEMENT_SCHEME_V2,
             "template_version": V2_GENERATED_TEMPLATE_VERSION,
-            "v2_export_scope": "generated workbook with table-based movement diagram data; template/native export unsupported",
+            "v2_export_scope": "generated workbook with table-based movement diagram data and package PNG; template/native export unsupported",
         },
         template_version=V2_GENERATED_TEMPLATE_VERSION,
         generated_at=generated_at,
@@ -259,7 +267,10 @@ def create_v2_generated_export_package_zip(
             )
         if mapping is not None and not mapping.empty:
             archive.writestr("mapping_table.xlsx", mapping_to_excel_bytes(mapping))
-        diagram_csv = _workbook_sheet_csv_bytes(workbook_bytes, V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME)
-        if diagram_csv:
-            archive.writestr("diagram/movement_diagram_data.csv", diagram_csv)
+        diagram_data = _workbook_sheet_dataframe(workbook_bytes, V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME)
+        if diagram_data is not None:
+            archive.writestr("diagram/movement_diagram_data.csv", diagram_data.to_csv(index=False).encode("utf-8"))
+            diagram_png = render_v2_movement_diagram_png(diagram_data)
+            if diagram_png:
+                archive.writestr("diagram/movement_diagram.png", diagram_png)
     return output.getvalue()
