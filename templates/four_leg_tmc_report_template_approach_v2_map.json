@@ -396,38 +396,6 @@
           "SU": "M27"
         }
       },
-      "west": {
-        "movement_codes": [
-          "WL",
-          "WT",
-          "WR",
-          "WU"
-        ],
-        "header_cells": {
-          "WL": "D19",
-          "WT": "D20",
-          "WR": "D21",
-          "WU": "D22"
-        },
-        "total_12_hour_cells": {
-          "WL": "E19",
-          "WT": "E20",
-          "WR": "E21",
-          "WU": "E22"
-        },
-        "pm_peak_hour_cells": {
-          "WL": "F19",
-          "WT": "F20",
-          "WR": "F21",
-          "WU": "F22"
-        },
-        "am_peak_hour_cells": {
-          "WL": "G19",
-          "WT": "G20",
-          "WR": "G21",
-          "WU": "G22"
-        }
-      },
       "east": {
         "movement_codes": [
           "EL",
@@ -458,6 +426,38 @@
           "ET": "O22",
           "ER": "O23",
           "EU": "O24"
+        }
+      },
+      "west": {
+        "movement_codes": [
+          "WL",
+          "WT",
+          "WR",
+          "WU"
+        ],
+        "header_cells": {
+          "WL": "D19",
+          "WT": "D20",
+          "WR": "D21",
+          "WU": "D22"
+        },
+        "total_12_hour_cells": {
+          "WL": "E19",
+          "WT": "E20",
+          "WR": "E21",
+          "WU": "E22"
+        },
+        "pm_peak_hour_cells": {
+          "WL": "F19",
+          "WT": "F20",
+          "WR": "F21",
+          "WU": "F22"
+        },
+        "am_peak_hour_cells": {
+          "WL": "G19",
+          "WT": "G20",
+          "WR": "G21",
+          "WU": "G22"
         }
       }
     },

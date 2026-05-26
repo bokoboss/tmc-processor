@@ -295,8 +295,8 @@ Mapping presets:
 
 ### `templates/`
 
-- Current: v1 `.xlsx` template plus v1 map, and draft v2 map only.
-- Future: create/finalize a v2 `.xlsx` template after generated workbook v2 support is stable.
+- Current: v1 `.xlsx` template plus v1 map, a draft v2 map, and Phase I1 template design/integrity documentation.
+- Future: create/finalize a v2 `.xlsx` template manually in Excel, then verify it read-only before enabling v2 Excel Template Mode.
 
 ## Risk Assessment
 
@@ -345,6 +345,14 @@ Implemented a simple package PNG at `diagram/movement_diagram.png`. The visual i
 ### Phase I: v2 Excel template finalization
 
 Create or finalize the v2 Excel template manually or programmatically after verifying workbook integrity, formulas, charts, drawing preservation, and template map alignment.
+
+### Phase I1: v2 template design and integrity tests
+
+Implemented the v2 template design document and map integrity tests. The v2 map now declares `four_leg_approach_movement_v2`, uses `APPROACH_MOVEMENT_CODES` order across hourly, diagram, and approach-table headers, and excludes v1-only movement codes from v2 movement areas. A read-only template integrity helper verifies workbook/map alignment without comparing fragile chart or drawing binaries.
+
+No v2 `.xlsx` draft was created. The current v1 template contains native charts and many shape/drawing elements, and `openpyxl` warns those drawings may be lost on save. v2 template XLSX finalization is deferred to manual Excel editing. v2 Excel Template Mode and Excel COM/native template export remain blocked; v2 generated workbook export remains the supported export artifact for v2 dry-run results.
+
+Next step: Phase I2 can implement v2 template export only after a manually finalized `four_leg_tmc_report_template_approach_v2.xlsx` passes the integrity checks.
 
 ### Phase J: UI enablement and release notes
 
