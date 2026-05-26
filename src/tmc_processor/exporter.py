@@ -23,6 +23,7 @@ from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
 from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
+from .movement_scheme import MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 from .pcu import pce_factor_traceability_frame
 from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
 from .report_template import (
@@ -1053,6 +1054,10 @@ def export_workbook(
     template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
     setup = setup_with_metadata(setup)
+    if normalize_movement_code_scheme(setup.get("movement_code_scheme")) == MOVEMENT_SCHEME_V2:
+        raise ValueError(
+            "approach_movement v2 export/report generation is not supported yet; use the v2 dry-run path for summaries only."
+        )
     mapping = clean_mapping(mapping)
     peaks = _resolved_peaks_for_export(setup, normalized, peaks)
     buffer = BytesIO()

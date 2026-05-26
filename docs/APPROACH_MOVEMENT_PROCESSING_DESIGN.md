@@ -4,6 +4,36 @@
 
 This is the Phase E design for eventual `approach_movement` v2 processing. It does not enable v2 processing. The active processing guard must remain in place until the later phases described here are complete and tested.
 
+## Phase F Implementation Note
+
+Phase F adds a dedicated internal dry-run entry point, `process_tmc_dry_run_v2()`, for `approach_movement` normalization and summaries only. The normal `process_tmc()` application/report path remains guarded for v2 and still raises before processing.
+
+Supported in the Phase F dry-run:
+
+- Load and validate v2 Mapping Preset / Mapping Excel inputs with `movement_code_scheme = "approach_movement"`.
+- Normalize records with canonical `movement_code` and compatibility alias `output_movement_code` carrying v2 values such as `NT`, `WT`, and `ET`.
+- Preserve v2 normalized metadata columns: `movement_code_scheme`, `approach_direction`, and `movement_type`.
+- Produce hourly totals, movement summary, vehicle composition, QC rows, and AM/PM peak suggestions using the existing peak method.
+- Produce hourly movement PCU summaries ordered exactly by `APPROACH_MOVEMENT_CODES`.
+
+Still unsupported after Phase F:
+
+- Final Excel workbook/report export for v2.
+- Excel Template Mode for v2.
+- v2 movement diagram export.
+- Batch v2 processing/export.
+- Any silent conversion between v2 approach-movement codes and v1 from-to codes.
+
+Remaining blockers before v2 export/report:
+
+- Generated workbook v2 support with explicit movement-code scheme metadata.
+- A verified v2 report layout that does not use v1 diagram assumptions.
+- Either a verified v2 diagram or an enforced no-diagram report path.
+- UI enablement that clearly labels v2 as experimental and disables unsupported export modes.
+- Batch support, if desired, with explicit v2 dry-run or export tests.
+
+Phase F test coverage includes v2 preset/XLSX loading, dry-run normalization, v2 movement-code validation, hourly movement ordering, AM/PM peak suggestions, export blocking, mixed-code rejection, and batch v2 blocking. The existing v1 smoke/export tests remain unchanged.
+
 The current production scheme is `from_to` v1. Examples are `NS`, `WE`, and `EN`, where the code represents from leg to destination leg. The target v2 scheme is `approach_movement`. Examples are `NL`, `NT`, `NR`, and `NU`, where the first token is travel direction and the second token is movement type:
 
 - `N`, `S`, `E`, `W`: northbound / มุ่งเหนือ, southbound / มุ่งใต้, eastbound / มุ่งตะวันออก, westbound / มุ่งตะวันตก.

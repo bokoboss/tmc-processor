@@ -302,12 +302,28 @@ def _read_mapping_excel_metadata(workbook: pd.ExcelFile) -> dict[str, str]:
     return metadata
 
 
+def _mixed_movement_code_issues(cleaned: pd.DataFrame) -> list[str]:
+    if "movement_code" not in cleaned:
+        return []
+    codes = {
+        str(code).strip()
+        for code in cleaned.loc[cleaned["include_in_report"], "movement_code"].dropna()
+        if str(code).strip()
+    }
+    has_v1 = any(code in MOVEMENT_CODE_OPTIONS for code in codes)
+    has_v2 = any(is_approach_movement_code(code) for code in codes)
+    if has_v1 and has_v2:
+        return ["Mapping contains mixed from_to and approach_movement movement codes."]
+    return []
+
+
 def validate_mapping_scheme(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
     scheme = normalize_movement_code_scheme(movement_code_scheme)
-    if scheme == MOVEMENT_SCHEME_V1:
-        return []
     cleaned = clean_mapping(mapping)
     issues: list[str] = []
+    issues.extend(_mixed_movement_code_issues(cleaned))
+    if scheme == MOVEMENT_SCHEME_V1:
+        return issues
     included = cleaned[cleaned["include_in_report"]] if "include_in_report" in cleaned else cleaned
     for row_number, row in enumerate(included.to_dict("records"), start=1):
         code = str(row.get("movement_code") or "").strip()
