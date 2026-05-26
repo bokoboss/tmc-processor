@@ -190,3 +190,14 @@ Before enabling v2 Excel Template Mode:
 - Run `python -m pytest tests/test_template_integrity.py`.
 
 Phase I1 decision: v2 template XLSX finalization is deferred to manual Excel editing. No v2 `.xlsx` draft is created in this phase because the current source workbook has shapes/drawings that are unsafe to round-trip with `openpyxl`.
+
+## Phase I2B/I2C Status
+
+The v2 workbook has now been manually finalized in Excel and validated against the v2 map:
+
+- Workbook: `templates/four_leg_tmc_report_template_approach_v2.xlsx`
+- Map: `templates/four_leg_tmc_report_template_approach_v2_map.json`
+- Template version: `four_leg_approach_movement_v2`
+- Movement code scheme: `approach_movement`
+
+Phase I2C uses this Excel-authored workbook as the source for openpyxl template export. Export code writes only to an output copy in memory, preserves the template formula ownership where the map declares `preserve_template`, and keeps native Excel COM/template export blocked for v2.

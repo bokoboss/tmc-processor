@@ -354,6 +354,24 @@ No v2 `.xlsx` draft was created. The current v1 template contains native charts 
 
 Next step: Phase I2 can implement v2 template export only after a manually finalized `four_leg_tmc_report_template_approach_v2.xlsx` passes the integrity checks.
 
+### Phase I2C: v2 openpyxl Excel Template Mode
+
+Implemented v2 Excel Template Mode for the openpyxl path only through `export_v2_template_workbook()`. The v2 template export always selects the validated v2 resources:
+
+- Workbook: `templates/four_leg_tmc_report_template_approach_v2.xlsx`
+- Map: `templates/four_leg_tmc_report_template_approach_v2_map.json`
+
+The exporter writes to an in-memory output workbook copy and does not overwrite or rewrite the source template file. The `Summary` sheet keeps the v2 movement headers in `W9:AL9` using `APPROACH_MOVEMENT_CODES`, writes mapped setup metadata, populates the mapped hourly movement and vehicle-class tables, preserves template formulas such as `HLOOKUP(...,$W$9:$AL$22,...)`, and adds a `Movement_Diagram_Data` sheet for the table-based v2 diagram data.
+
+Native Excel COM template export remains blocked for v2. Broad UI enablement and v2 batch export also remain blocked. The normal v1 `from_to` Excel Template Mode continues to use `templates/four_leg_tmc_report_template.xlsx` and `templates/four_leg_tmc_report_template_map.json`.
+
+Remaining blockers before full UI/batch parity:
+
+- Decide which user-facing v2 export modes should be exposed and how to label the experimental support.
+- Add v2 batch processing/export design and mixed-scheme safeguards for batch inputs.
+- Verify native Excel chart/drawing behavior manually before any v2 COM/native path is considered.
+- Keep validating that `N`, `S`, `E`, and `W` mean travel direction, not source leg.
+
 ### Phase J: UI enablement and release notes
 
 Enable v2 processing in the UI only for supported paths. Add release notes, experimental warnings if applicable, and compatibility guidance for v1 sessions/presets.

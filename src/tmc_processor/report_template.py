@@ -24,6 +24,8 @@ from .template_audit import validate_template_before_export
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATE_PATH = ROOT_DIR / "templates" / "four_leg_tmc_report_template.xlsx"
 DEFAULT_TEMPLATE_MAP_PATH = ROOT_DIR / "templates" / "four_leg_tmc_report_template_map.json"
+V2_TEMPLATE_PATH = ROOT_DIR / "templates" / "four_leg_tmc_report_template_approach_v2.xlsx"
+V2_TEMPLATE_MAP_PATH = ROOT_DIR / "templates" / "four_leg_tmc_report_template_approach_v2_map.json"
 
 
 @dataclass(frozen=True)
@@ -334,6 +336,8 @@ def _mapped_label_value(setup: dict[str, Any], label_key: str) -> str:
 
 
 def _write_movement_formulas(worksheet, mapping: dict[str, Any]) -> None:
+    if mapping.get("movement_diagram_cells", {}).get("formula_write_mode") == "preserve_template":
+        return
     for movement_code, cell_ref, value_key in _movement_formula_targets(mapping):
         _set_cell(worksheet, cell_ref, _diagram_formula(movement_code, value_key), [])
 

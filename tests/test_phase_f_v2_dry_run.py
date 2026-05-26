@@ -9,9 +9,10 @@ from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
+import tmc_processor.exporter as exporter_module
 from tmc_processor.diagram import build_v2_movement_diagram_data, render_v2_movement_diagram_png
 from tmc_processor.export_package import create_v2_generated_export_package_zip
-from tmc_processor.exporter import export_v2_generated_workbook, export_workbook
+from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook, export_workbook
 from tmc_processor.importer import load_detected_sheets
 from tmc_processor.mapping import apply_saved_mapping_to_sheets, read_mapping_excel_with_metadata, validate_mapping_scheme
 from tmc_processor.mapping_preset import apply_mapping_preset_to_detected_sheets, load_mapping_preset
@@ -25,6 +26,8 @@ DEMO_DIR = ROOT / "samples" / "demo"
 RAW_WORKBOOK = DEMO_DIR / "DEMO_TMC1_FourLeg.xlsx"
 V2_PRESET = DEMO_DIR / "DEMO_TMC1_FourLeg_approach_v2.mapping.json"
 V2_MAPPING_XLSX = DEMO_DIR / "DEMO_TMC1_FourLeg_approach_v2_mapping.xlsx"
+V2_TEMPLATE_WORKBOOK = ROOT / "templates" / "four_leg_tmc_report_template_approach_v2.xlsx"
+V2_TEMPLATE_MAP = ROOT / "templates" / "four_leg_tmc_report_template_approach_v2_map.json"
 
 
 def _setup() -> dict[str, object]:
@@ -34,6 +37,25 @@ def _setup() -> dict[str, object]:
         "tmc_name": "Synthetic Four-Leg Demo Intersection",
         "survey_date": "2026-01-01",
         "movement_code_scheme": MOVEMENT_SCHEME_V2,
+    }
+
+
+def _custom_setup() -> dict[str, object]:
+    return {
+        **_setup(),
+        "report_title": "Custom v2 TMC Report",
+        "survey_point": "Approach V2 Test Point",
+        "survey_date_text": "2026-05-26",
+        "responsible_party": "Phase I2C QA",
+        "north_label": "North Destination",
+        "south_label": "South Destination",
+        "east_label": "East Destination",
+        "west_label": "West Destination",
+        "north_road": "North Road",
+        "south_road": "South Road",
+        "east_road": "East Road",
+        "west_road": "West Road",
+        "caption_text": "Custom approach movement caption",
     }
 
 
@@ -234,7 +256,7 @@ def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
     assert metadata["template_version"] == "generated_approach_movement_v2"
     assert metadata["export_template"] == "generated_approach_movement_v2"
     assert metadata["export_mode_used"] == "Safe PNG Export Mode"
-    assert "Excel Template Mode unsupported" in metadata["v2_export_limitation_notes"]
+    assert "openpyxl template export is supported separately" in metadata["v2_export_limitation_notes"]
 
 
 def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:
@@ -353,6 +375,105 @@ def test_v2_generated_export_does_not_use_v1_template_map() -> None:
 
     assert workbook_bytes.startswith(b"PK")
     loader.assert_not_called()
+
+
+def test_v2_template_workbook_and_map_exist() -> None:
+    assert V2_TEMPLATE_WORKBOOK.exists()
+    assert V2_TEMPLATE_MAP.exists()
+
+
+def test_v2_dry_run_result_exports_template_workbook_bytes() -> None:
+    result = _dry_run_with_preset()
+
+    workbook_bytes = export_v2_template_workbook(
+        result,
+        setup=_custom_setup(),
+        mapping=_v2_preset_mapping(_raw_sheets()),
+        generated_at="2026-05-26T08:00:00Z",
+    )
+
+    assert workbook_bytes.startswith(b"PK")
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    assert "Summary" in workbook.sheetnames
+    assert "Movement_Diagram_Data" in workbook.sheetnames
+
+    summary = workbook["Summary"]
+    assert [summary.cell(9, column).value for column in range(23, 39)] == APPROACH_MOVEMENT_CODES
+    assert {"NS", "WE", "EN", "EW"}.isdisjoint({summary.cell(9, column).value for column in range(23, 39)})
+
+    metadata = _sheet_records(workbook, "Export_Metadata")
+    assert metadata["template_version"] == "four_leg_approach_movement_v2"
+    assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert metadata["export_template"] == "four_leg_approach_movement_v2"
+    assert metadata["excel_template_mode_supported"] is True
+    assert metadata["native_template_export_supported"] is False
+
+    assert summary["B2"].value == "Custom v2 TMC Report"
+    assert summary["E5"].value == "Approach V2 Test Point"
+    assert summary["K5"].value == "2026-05-26"
+    assert summary["E6"].value == "Phase I2C QA"
+    assert summary["G12"].value == "North Destination"
+    assert summary["O32"].value == "South Destination"
+    assert summary["Q17"].value == "East Destination"
+    assert summary["D26"].value == "West Destination"
+    assert summary["K11"].value == "North Road"
+    assert summary["K32"].value == "South Road"
+    assert summary["R19"].value == "East Road"
+    assert summary["D24"].value == "West Road"
+    assert summary["E35"].value == "Custom approach movement caption"
+
+    hourly_headers = [cell.value for cell in workbook["Hourly_Movement_PCU"][1]]
+    assert hourly_headers[1:17] == APPROACH_MOVEMENT_CODES
+    movement_rows = list(workbook["Movement_Summary"].iter_rows(min_row=2, values_only=True))
+    assert [row[1] for row in movement_rows] == APPROACH_MOVEMENT_CODES
+    assert workbook["Movement_Diagram_Data"]["A2"].value == "NL"
+
+
+def test_v2_template_export_uses_v2_template_map_only() -> None:
+    result = _dry_run_with_preset()
+
+    with patch("tmc_processor.exporter.load_report_template_resources", wraps=exporter_module.load_report_template_resources) as loader:
+        workbook_bytes = export_v2_template_workbook(result, setup=_setup(), mapping=_v2_preset_mapping(_raw_sheets()))
+
+    assert workbook_bytes.startswith(b"PK")
+    args, _ = loader.call_args
+    assert Path(args[0]).name == V2_TEMPLATE_WORKBOOK.name
+    assert Path(args[1]).name == V2_TEMPLATE_MAP.name
+
+
+def test_v2_template_export_rejects_v1_template_files_and_excel_com() -> None:
+    result = _dry_run_with_preset()
+
+    with pytest.raises(ValueError, match="must not use v1 template files"):
+        export_v2_template_workbook(
+            result,
+            setup=_setup(),
+            mapping=_v2_preset_mapping(_raw_sheets()),
+            template_map_path=str(ROOT / "templates" / "four_leg_tmc_report_template_map.json"),
+        )
+
+    with pytest.raises(ValueError, match="Excel COM/native"):
+        export_v2_template_workbook(
+            result,
+            setup=_setup(),
+            mapping=_v2_preset_mapping(_raw_sheets()),
+            use_excel_com_native_charts=True,
+        )
+
+
+def test_v2_template_export_preserves_hlookup_formula_structure() -> None:
+    result = _dry_run_with_preset()
+    workbook = load_workbook(
+        BytesIO(export_v2_template_workbook(result, setup=_setup(), mapping=_v2_preset_mapping(_raw_sheets()))),
+        data_only=False,
+    )
+    summary = workbook["Summary"]
+    formula_cells = ["J29", "K29", "M14", "E20", "Q23"]
+    formulas = [str(summary[cell].value or "") for cell in formula_cells]
+
+    assert all(formula.startswith("=") for formula in formulas)
+    assert all("$W$9:$AM$22" in formula or "$W$9:$AL$22" in formula for formula in formulas)
+    assert not any(code in formula for formula in formulas for code in ["NS", "WE", "EN", "EW"])
 
 
 def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None:
