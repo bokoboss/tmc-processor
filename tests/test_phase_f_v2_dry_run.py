@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 import pandas as pd
 import pytest
 
+from tmc_processor.diagram import build_v2_movement_diagram_data
 from tmc_processor.export_package import create_v2_generated_export_package_zip
 from tmc_processor.exporter import export_v2_generated_workbook, export_workbook
 from tmc_processor.importer import load_detected_sheets
@@ -256,6 +257,61 @@ def test_v2_generated_workbook_contains_all_movement_code_references() -> None:
     assert rows[0] == ("NL", "N", "Northbound", "L", "Left turn", "NL - Northbound Left turn")
 
 
+def test_v2_diagram_data_helper_returns_ordered_approach_movements() -> None:
+    result = _dry_run_with_preset()
+    diagram = build_v2_movement_diagram_data(
+        movement_summary=result.movement,
+        hourly_movement_pcu=result.hourly_movement_pcu,
+        peaks=result.peaks,
+    )
+
+    assert diagram["movement_code"].tolist() == APPROACH_MOVEMENT_CODES
+    assert len(diagram) == 16
+
+
+def test_v2_diagram_data_labels_nl_as_northbound_left() -> None:
+    diagram = build_v2_movement_diagram_data()
+    nl = diagram.loc[diagram["movement_code"] == "NL"].iloc[0]
+
+    assert nl["approach_direction"] == "N"
+    assert nl["approach_direction_label"] == "Northbound"
+    assert nl["movement_type"] == "L"
+    assert nl["movement_type_label"] == "Left turn"
+    assert nl["display_label"] == "NL - Northbound Left turn"
+
+
+def test_v2_diagram_data_excludes_v1_from_to_codes() -> None:
+    diagram = build_v2_movement_diagram_data()
+
+    assert set(diagram["movement_code"]).isdisjoint({"NS", "WE", "EN", "EW"})
+
+
+def test_v2_diagram_data_totals_match_movement_summary() -> None:
+    result = _dry_run_with_preset()
+    diagram = build_v2_movement_diagram_data(
+        movement_summary=result.movement,
+        hourly_movement_pcu=result.hourly_movement_pcu,
+        peaks=result.peaks,
+    )
+    summary = result.movement.groupby("movement_code", as_index=True)[["count", "pcu"]].sum()
+
+    for code in ["NT", "WT", "ET"]:
+        row = diagram.loc[diagram["movement_code"] == code].iloc[0]
+        assert row["total_count"] == pytest.approx(summary.loc[code, "count"])
+        assert row["total_pcu"] == pytest.approx(summary.loc[code, "pcu"])
+
+
+def test_v2_generated_workbook_includes_movement_diagram_data_sheet() -> None:
+    result = _dry_run_with_preset()
+    workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
+
+    assert "Movement_Diagram_Data" in workbook.sheetnames
+    rows = list(workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
+    assert [row[0] for row in rows] == APPROACH_MOVEMENT_CODES
+    assert rows[0][0:6] == ("NL", "N", "Northbound", "L", "Left turn", "NL - Northbound Left turn")
+    assert {row[0] for row in rows}.isdisjoint({"NS", "WE", "EN"})
+
+
 def test_v2_generated_workbook_keeps_v2_normalized_and_movement_labels() -> None:
     result = _dry_run_with_preset()
     workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
@@ -301,8 +357,13 @@ def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None
     with ZipFile(BytesIO(package)) as archive:
         names = set(archive.namelist())
         summary = archive.read("export_summary.txt").decode("utf-8")
+        diagram_csv = archive.read("diagram/movement_diagram_data.csv").decode("utf-8")
 
     assert "v2_generated.xlsx" in names
     assert "export_summary.txt" in names
+    assert "diagram/movement_diagram_data.csv" in names
     assert "raw_input.xlsx" not in names
     assert "Template version: generated_approach_movement_v2" in summary
+    assert "NL, N,Northbound" not in diagram_csv
+    assert "NL,N,Northbound,L,Left turn" in diagram_csv
+    assert "NS," not in diagram_csv

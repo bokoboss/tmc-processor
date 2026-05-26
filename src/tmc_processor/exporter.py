@@ -20,7 +20,7 @@ import pandas as pd
 
 from .charts import report_chart_pngs
 from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
-from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
+from .diagram import DiagramConfig, MOVEMENT_CODES, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
 from .movement_scheme import (
@@ -74,6 +74,7 @@ EXPORT_SHEETS = [
 
 CHART_SHEET_NAME = "Charts"
 DIAGRAM_DATA_SHEET_NAME = "Diagram_Data"
+V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME = "Movement_Diagram_Data"
 TMC_REPORT_SHEET_NAME = "TMC_Report"
 DIAGRAM_SHEET_NAME = "Diagram"
 DEFAULT_CREATE_EXCEL_TABLES = False
@@ -81,7 +82,7 @@ V2_GENERATED_EXPORT_TEMPLATE = "generated_approach_movement_v2"
 V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
 V2_EXPORT_LIMITATION_NOTES = (
     "Excel Template Mode unsupported for approach_movement v2; "
-    "native template export unsupported; v2 diagram export unsupported."
+    "native template export unsupported; v2 diagram support is table-based in Movement_Diagram_Data."
 )
 
 
@@ -142,7 +143,8 @@ def _v2_export_metadata_frame(
             ("export_mode_used", export_mode or V2_GENERATED_EXPORT_MODE),
             ("excel_template_mode_supported", False),
             ("native_template_export_supported", False),
-            ("diagram_export_supported", False),
+            ("diagram_export_supported", "table_based"),
+            ("diagram_export_artifact", V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
             ("v2_export_limitation_notes", V2_EXPORT_LIMITATION_NOTES),
         ],
         columns=["field", "value"],
@@ -275,7 +277,8 @@ def _v2_mapping_scheme_info_frame(mapping: pd.DataFrame | None) -> pd.DataFrame:
         {"field": "movement_code_order", "value": ", ".join(APPROACH_MOVEMENT_CODES)},
         {"field": "canonical_movement_key", "value": "movement_code"},
         {"field": "output_movement_code", "value": "Alias preserved when present."},
-        {"field": "diagram_export", "value": "unsupported"},
+        {"field": "diagram_export", "value": "table_based"},
+        {"field": "diagram_export_artifact", "value": V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME},
         {"field": "excel_template_mode", "value": "unsupported"},
         {"field": "native_template_export", "value": "unsupported"},
     ]
@@ -1229,6 +1232,11 @@ def export_v2_generated_workbook(
     vehicle = getattr(result, "vehicle")
     peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
     pce_factors = getattr(result, "pce_factors", None)
+    movement_diagram = build_v2_movement_diagram_data(
+        movement_summary=movement,
+        hourly_movement_pcu=hourly_movement,
+        peaks=peaks,
+    )
 
     sheets: dict[str, pd.DataFrame] = {
         "Export_Metadata": _v2_export_metadata_frame(
@@ -1242,6 +1250,7 @@ def export_v2_generated_workbook(
         "Hourly_Totals": hourly,
         "Hourly_Movement_PCU": hourly_movement,
         "Movement_Summary": movement,
+        V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME: movement_diagram,
         "Vehicle_Composition": vehicle,
         "Peak_Summary": peaks,
         "QC_Check": qc,

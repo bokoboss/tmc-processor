@@ -9,6 +9,7 @@ import re
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from openpyxl import load_workbook
 import pandas as pd
 
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
@@ -19,6 +20,7 @@ from .pcu import pce_factor_traceability_frame
 
 PACKAGE_MIME = "application/zip"
 V2_GENERATED_TEMPLATE_VERSION = "generated_approach_movement_v2"
+V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME = "Movement_Diagram_Data"
 
 
 def app_version() -> str:
@@ -197,6 +199,22 @@ def create_export_package_zip(
     return output.getvalue()
 
 
+def _workbook_sheet_csv_bytes(workbook_bytes: bytes, sheet_name: str) -> bytes | None:
+    try:
+        workbook = load_workbook(BytesIO(workbook_bytes), read_only=True, data_only=True)
+    except Exception:
+        return None
+    try:
+        if sheet_name not in workbook.sheetnames:
+            return None
+        rows = list(workbook[sheet_name].iter_rows(values_only=True))
+        if not rows:
+            return None
+        return pd.DataFrame(rows[1:], columns=list(rows[0])).to_csv(index=False).encode("utf-8")
+    finally:
+        workbook.close()
+
+
 def create_v2_generated_export_package_zip(
     *,
     workbook_bytes: bytes,
@@ -225,16 +243,23 @@ def create_v2_generated_export_package_zip(
         export_settings={
             "movement_code_scheme": MOVEMENT_SCHEME_V2,
             "template_version": V2_GENERATED_TEMPLATE_VERSION,
-            "v2_export_scope": "generated workbook only; template/native/diagram export unsupported",
+            "v2_export_scope": "generated workbook with table-based movement diagram data; template/native export unsupported",
         },
         template_version=V2_GENERATED_TEMPLATE_VERSION,
         generated_at=generated_at,
     )
-    return create_export_package_zip(
-        workbook_bytes=workbook_bytes,
-        workbook_filename=workbook_filename,
-        export_summary_text=summary,
-        mapping_preset_bytes=mapping_preset_bytes,
-        mapping_preset_filename=mapping_preset_filename,
-        mapping=mapping,
-    )
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(_safe_member_name(workbook_filename, "tmc_report.xlsx"), bytes(workbook_bytes))
+        archive.writestr("export_summary.txt", summary.encode("utf-8"))
+        if mapping_preset_bytes:
+            archive.writestr(
+                _safe_member_name(mapping_preset_filename, "mapping_preset.mapping.json"),
+                bytes(mapping_preset_bytes),
+            )
+        if mapping is not None and not mapping.empty:
+            archive.writestr("mapping_table.xlsx", mapping_to_excel_bytes(mapping))
+        diagram_csv = _workbook_sheet_csv_bytes(workbook_bytes, V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME)
+        if diagram_csv:
+            archive.writestr("diagram/movement_diagram_data.csv", diagram_csv)
+    return output.getvalue()

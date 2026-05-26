@@ -147,7 +147,16 @@ What must change:
 - Verify left/right orientation for every approach.
 - Verify U-turn placement and totals.
 
-Recommendation: disable the full movement diagram for v2 initially. Phase F should use v2 summaries only; Phase G can export generated workbook tables; Phase H should add either a verified v2 diagram or an explicit limitation. Before diagram support, a simpler v2 movement summary table is safer than a visually confident but semantically unproven diagram.
+Phase H implementation: v2 diagram support is table-based. `build_v2_movement_diagram_data()` emits one row for each `APPROACH_MOVEMENT_CODES` value in deterministic order (`NL`, `NT`, `NR`, `NU`, `SL`, ... `WU`). The sheet is named `Movement_Diagram_Data` and includes `approach_direction`, `approach_direction_label`, `movement_type`, `movement_type_label`, `display_label`, total count/PCU, AM/PM peak PCU when available, and diagram ordering fields.
+
+Semantic assumptions:
+
+- `N`, `S`, `E`, and `W` mean travel direction: northbound, southbound, eastbound, and westbound.
+- `L`, `T`, `R`, and `U` mean left, through, right, and U-turn.
+- `NL` is labeled "Northbound Left turn" and is not interpreted as "from north leg".
+- No v2 diagram code converts or aliases v2 codes to v1 `from_to` codes.
+
+Current limitation: Phase H does not add a v2 PNG arrow diagram or enable the v1 `Diagram_Data` / `Diagram` sheet path for v2. The existing v1 PNG and generated/template diagram behavior remains unchanged. A visual arrow diagram should only be added after a tested coordinate model verifies left/right/U-turn placement for every travel direction.
 
 ## Export and Report Behavior
 
@@ -323,9 +332,9 @@ Add an internal v2 processing dry-run path and summaries only. No Excel Template
 
 Implemented generated workbook / Safe PNG-style export support for v2 dry-run results. Use v2 movement headers and metadata. Excel native/template export remains disabled for v2 because the workbook template is not verified. The full diagram remains disabled unless Phase H is done.
 
-### Phase H: v2 diagram support or limitation
+### Phase H: v2 diagram support
 
-Either add verified v2 diagram support with visual tests/manual review, or document and enforce an explicit v2 diagram limitation.
+Implemented table-based v2 movement visualization support. Generated v2 workbooks include `Movement_Diagram_Data`, and generated v2 ZIP packages include `diagram/movement_diagram_data.csv`. This is intentionally not a PNG arrow diagram; it preserves correct approach-movement semantics while full v2 template/native/batch workflows remain blocked.
 
 ### Phase I: v2 Excel template finalization
 
