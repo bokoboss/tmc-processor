@@ -74,7 +74,7 @@ from tmc_processor.mapping import (
     read_mapping_excel_with_metadata,
     selectbox_options_with_existing_values,
     validate_mapping_scheme,
-    validate_mapping_for_processing,
+    validate_mapping_for_processing_by_scheme,
 )
 from tmc_processor.mapping_preset import (
     MAPPING_PRESET_MIME,
@@ -634,9 +634,7 @@ def _single_file_mapping_issues(
     mapping: pd.DataFrame,
     movement_code_scheme: str,
 ) -> pd.DataFrame:
-    if _is_v2_scheme(movement_code_scheme):
-        return pd.DataFrame(columns=["raw_sheet", "field", "message"])
-    return validate_mapping_for_processing(detected_sheet_names, mapping)
+    return validate_mapping_for_processing_by_scheme(detected_sheet_names, mapping, movement_code_scheme)
 
 
 def _movement_code_options_for_scheme(mapping: pd.DataFrame, movement_code_scheme: str) -> list[str]:
@@ -4196,8 +4194,12 @@ def _run_streamlit_app() -> None:
                 )
 
                 action_col, readiness_col = st.columns([0.82, 1.18])
+                process_requested = bool(st.session_state.get("tmc_single_file_process_requested"))
                 with action_col:
                     run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=bool(process_block_reason) or not mapping_issues.empty or bool(scheme_validation_issues), key="process_tmc_mapping_top")
+                    process_status_placeholder = st.empty()
+                    if process_requested:
+                        process_status_placeholder.status("กำลังประมวลผลไฟล์ TMC...", expanded=True)
                 with readiness_col:
                     if process_block_reason:
                         _render_alert(process_block_reason, "warning")
@@ -4266,17 +4268,28 @@ def _run_streamlit_app() -> None:
                     _render_alert(f"มีแถวที่ไม่แสดงในรายงาน {mapping_counts['excluded']:,} แถว", "info")
 
                 if run and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
+                    st.session_state["tmc_single_file_process_requested"] = True
+                    st.rerun()
+
+                if process_requested and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
+                    st.session_state.pop("tmc_single_file_process_requested", None)
                     try:
                         raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                        result = _process_single_file_for_ui(
-                            raw_sheets=raw_sheets,
-                            mapping=mapping,
-                            setup=setup,
-                            detected_sheets=detected_sheet_names,
-                            peak_mode=peak_mode,
-                            peak_windows=peak_windows,
-                            pce_factors=selected_pce_factors,
-                        )
+                        with process_status_placeholder.status("กำลังประมวลผลไฟล์ TMC...", expanded=True) as processing_status:
+                            try:
+                                result = _process_single_file_for_ui(
+                                    raw_sheets=raw_sheets,
+                                    mapping=mapping,
+                                    setup=setup,
+                                    detected_sheets=detected_sheet_names,
+                                    peak_mode=peak_mode,
+                                    peak_windows=peak_windows,
+                                    pce_factors=selected_pce_factors,
+                                )
+                            except Exception:
+                                processing_status.update(label="กำลังประมวลผลไฟล์ TMC...", state="error", expanded=True)
+                                raise
+                            processing_status.update(label="กำลังประมวลผลไฟล์ TMC...", state="complete", expanded=False)
                     except Exception as exc:  # pragma: no cover - UI guardrail
                         st.error(f"ประมวลผลไม่สำเร็จ: {exc}")
                     else:
@@ -4291,6 +4304,9 @@ def _run_streamlit_app() -> None:
                         st.session_state.pop("tmc_pce_results_stale", None)
                         set_active_tab("ตรวจ Peak")
                         _flash_and_rerun("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจ Peak”")
+                elif process_requested:
+                    st.session_state.pop("tmc_single_file_process_requested", None)
+                    process_status_placeholder.empty()
 
     if not is_single_file_mode:
         batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)

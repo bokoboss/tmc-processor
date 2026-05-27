@@ -763,7 +763,15 @@ def export_with_excel_com(
         raise ReportTemplateUnavailable(f"Report template workbook not found: {source}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    try:
+        shutil.copy2(source, target)
+    except PermissionError as exc:
+        raise PermissionError(
+            "ไม่สามารถเขียนไฟล์รายงานได้ กรุณาปิดไฟล์ Excel ที่เปิดค้างไว้ก่อนส่งออกใหม่ "
+            f"(target: {target})"
+        ) from exc
+    except OSError as exc:
+        raise OSError(f"Unable to prepare Excel COM export workbook at {target}: {exc}") from exc
     diagnostics = _build_export_diagnostics(source, template_map)
     _LAST_EXPORT_DIAGNOSTICS = diagnostics
 

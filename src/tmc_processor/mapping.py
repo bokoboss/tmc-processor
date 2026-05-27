@@ -439,6 +439,44 @@ def validate_mapping_for_processing(detected_sheets: list[str], mapping: pd.Data
     return pd.DataFrame(issues, columns=["raw_sheet", "field", "message"])
 
 
+def validate_mapping_for_processing_by_scheme(
+    detected_sheets: list[str],
+    mapping: pd.DataFrame,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    if scheme == MOVEMENT_SCHEME_V1:
+        return validate_mapping_for_processing(detected_sheets, mapping)
+
+    cleaned = normalize_approach_movement_mapping(mapping)
+    issues = []
+    for issue in validate_mapping_scheme(cleaned, scheme):
+        issues.append({"raw_sheet": "", "field": "movement_code", "message": issue})
+
+    for sheet in detected_sheets:
+        sheet_rows = cleaned[cleaned["raw_sheet"] == sheet]
+        included_rows = sheet_rows[sheet_rows["include_in_report"]] if not sheet_rows.empty else sheet_rows
+        if sheet_rows.empty or included_rows.empty:
+            issues.append(
+                {
+                    "raw_sheet": sheet,
+                    "field": "movement_code",
+                    "message": "Detected raw sheet requires an approach_movement mapping before processing.",
+                }
+            )
+            continue
+        for _, row in included_rows.iterrows():
+            if not str(row.get("movement_code") or "").strip():
+                issues.append(
+                    {
+                        "raw_sheet": sheet,
+                        "field": "movement_code",
+                        "message": "Detected raw sheet requires movement_code before processing.",
+                    }
+                )
+    return pd.DataFrame(issues, columns=["raw_sheet", "field", "message"])
+
+
 def movement_aggregation_messages(mapping: pd.DataFrame) -> list[str]:
     """Return non-blocking messages for many-to-one report movement mappings."""
 

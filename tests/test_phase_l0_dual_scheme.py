@@ -8,7 +8,13 @@ import pandas as pd
 import app
 from tmc_processor.excel_com_export import ExcelComStatus
 from tmc_processor.exporter import template_paths_for_movement_scheme
-from tmc_processor.mapping import mapping_to_excel_bytes, normalize_approach_movement_mapping, validate_mapping_scheme
+from tmc_processor.mapping import (
+    mapping_to_excel_bytes,
+    normalize_approach_movement_mapping,
+    validate_mapping_for_processing,
+    validate_mapping_for_processing_by_scheme,
+    validate_mapping_scheme,
+)
 from tmc_processor.mapping_preset import load_mapping_preset
 from tmc_processor.mapping_preset import MAPPING_PRESET_TYPE
 from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
@@ -214,6 +220,61 @@ def test_approach_movement_valid_and_invalid_codes_are_scheme_specific() -> None
     assert issues
     assert all("invalid approach_movement" in issue for issue in issues)
     assert validate_mapping_scheme(_mapping(["NE"]), MOVEMENT_SCHEME_V1) == []
+
+
+def test_approach_movement_blank_movement_code_is_not_ready_for_processing() -> None:
+    issues = validate_mapping_for_processing_by_scheme(["Sheet 1"], _mapping([""]), MOVEMENT_SCHEME_V2)
+
+    assert not issues.empty
+    assert set(issues["field"]) == {"movement_code"}
+
+
+def test_approach_movement_detected_sheet_without_included_row_is_not_ready_for_processing() -> None:
+    mapping = _mapping(["NT"])
+    mapping.loc[0, "include_in_report"] = False
+
+    issues = validate_mapping_for_processing_by_scheme(["Sheet 1"], mapping, MOVEMENT_SCHEME_V2)
+
+    assert not issues.empty
+    assert "approach_movement mapping" in issues.loc[0, "message"]
+
+
+def test_approach_movement_valid_movement_code_rows_are_ready_for_processing() -> None:
+    issues = validate_mapping_for_processing_by_scheme(["Sheet 1"], _mapping(["NT"]), MOVEMENT_SCHEME_V2)
+
+    assert issues.empty
+
+
+def test_approach_movement_invalid_codes_are_not_ready_for_processing() -> None:
+    issues = validate_mapping_for_processing_by_scheme(["Sheet 1"], _mapping(["NE"]), MOVEMENT_SCHEME_V2)
+
+    assert not issues.empty
+    assert any("invalid approach_movement" in message for message in issues["message"])
+
+
+def test_from_to_processing_validation_remains_unchanged() -> None:
+    mapping = _mapping(["NE"])
+
+    expected = validate_mapping_for_processing(["Sheet 1"], mapping)
+    actual = validate_mapping_for_processing_by_scheme(["Sheet 1"], mapping, MOVEMENT_SCHEME_V1)
+
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_mapping_tab_helper_uses_scheme_aware_processing_validation() -> None:
+    mapping = _mapping([""])
+
+    expected = validate_mapping_for_processing_by_scheme(["Sheet 1"], mapping, MOVEMENT_SCHEME_V2)
+    actual = app._single_file_mapping_issues(["Sheet 1"], mapping, MOVEMENT_SCHEME_V2)
+
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_project_session_utc_timestamp_is_python_310_safe() -> None:
+    session = build_project_session(mapping=_mapping(["NT"]), movement_code_scheme=MOVEMENT_SCHEME_V2)
+
+    assert session["created_at"].endswith("Z")
+    assert session["updated_at"].endswith("Z")
 
 
 def test_single_file_export_default_is_template_when_excel_com_available() -> None:

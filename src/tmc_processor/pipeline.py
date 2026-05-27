@@ -8,7 +8,12 @@ from typing import Any
 import pandas as pd
 
 from .exporter import export_workbook
-from .mapping import clean_mapping, mapping_processing_block_reason, validate_mapping_for_processing, validate_mapping_scheme
+from .mapping import (
+    mapping_processing_block_reason,
+    validate_mapping_for_processing,
+    validate_mapping_for_processing_by_scheme,
+    validate_mapping_scheme,
+)
 from .movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
 from .metadata import setup_with_metadata
 from .normalizer import normalize
@@ -55,33 +60,6 @@ def _raise_mapping_scheme_issues(mapping: pd.DataFrame, movement_code_scheme: st
     scheme_issues = validate_mapping_scheme(mapping, movement_code_scheme)
     if scheme_issues:
         raise ValueError("; ".join(scheme_issues))
-
-
-def _v2_mapping_dry_run_issues(detected_sheets: list[str], mapping: pd.DataFrame) -> pd.DataFrame:
-    cleaned = clean_mapping(mapping)
-    issues = []
-    for sheet in detected_sheets:
-        sheet_rows = cleaned[cleaned["raw_sheet"] == sheet]
-        included_rows = sheet_rows[sheet_rows["include_in_report"]] if not sheet_rows.empty else sheet_rows
-        if sheet_rows.empty or included_rows.empty:
-            issues.append(
-                {
-                    "raw_sheet": sheet,
-                    "field": "movement_code",
-                    "message": "Detected raw sheet requires an approach_movement mapping before v2 dry-run.",
-                }
-            )
-            continue
-        for _, row in included_rows.iterrows():
-            if not str(row.get("movement_code") or "").strip():
-                issues.append(
-                    {
-                        "raw_sheet": sheet,
-                        "field": "movement_code",
-                        "message": "Detected raw sheet requires movement_code before v2 dry-run.",
-                    }
-                )
-    return pd.DataFrame(issues, columns=["raw_sheet", "field", "message"])
 
 
 def process_tmc(
@@ -199,8 +177,7 @@ def process_tmc_dry_run_v2(
 
     detected_sheets = detected_sheets or list(raw_sheets)
     setup = {**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2}
-    _raise_mapping_scheme_issues(mapping, MOVEMENT_SCHEME_V2)
-    mapping_issues = _v2_mapping_dry_run_issues(detected_sheets, mapping)
+    mapping_issues = validate_mapping_for_processing_by_scheme(detected_sheets, mapping, MOVEMENT_SCHEME_V2)
     if not mapping_issues.empty:
         issue_text = "; ".join(
             f"{row.raw_sheet}: {row.field}" for row in mapping_issues.itertuples(index=False)
