@@ -69,6 +69,7 @@ from tmc_processor.mapping import (
     mapping_control_warnings,
     mapping_is_process_compatible,
     mapping_processing_block_reason,
+    normalize_approach_movement_mapping,
     movement_aggregation_messages,
     read_mapping_excel_with_metadata,
     selectbox_options_with_existing_values,
@@ -2487,17 +2488,27 @@ def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
 
 
 def _single_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
-    if _is_v2_scheme(_current_mapping_scheme()):
-        return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
     return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE] if excel_com_status.available else [SAFE_PNG_EXPORT_MODE]
 
 
-def _batch_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
+def _batch_export_mode_options(excel_com_status: ExcelComStatus, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
+    if _is_v2_scheme(movement_code_scheme):
+        return [BATCH_SAFE_PNG_EXPORT_LABEL]
     return [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
 
 
+def _default_single_export_mode(excel_com_status: ExcelComStatus) -> str:
+    return EXCEL_TEMPLATE_EXPORT_MODE if excel_com_status.available else SAFE_PNG_EXPORT_MODE
+
+
+def _default_batch_export_mode(excel_com_status: ExcelComStatus, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> str:
+    return BATCH_SAFE_PNG_EXPORT_LABEL if _is_v2_scheme(movement_code_scheme) or not excel_com_status.available else BATCH_EXCEL_TEMPLATE_EXPORT_LABEL
+
+
 def _coerce_export_mode(value: str | None, options: list[str], fallback: str) -> str:
-    return value if value in options else fallback
+    if value in options:
+        return str(value)
+    return fallback if fallback in options else options[0]
 
 
 def _flash_and_rerun(message: str, kind: str = "success") -> None:
@@ -2813,8 +2824,6 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_s
             "raw_sheet",
             "raw_direction",
             "source_stream",
-            "approach_direction",
-            "movement_type",
             "movement_code",
             "raw_movement_label",
             "include_in_report",
@@ -2899,6 +2908,8 @@ def _merge_mapping_editor_result(base_mapping: pd.DataFrame, edited_visible: pd.
     for column, default in defaults.items():
         if column in merged.columns:
             merged[column] = merged[column].fillna(default)
+    if _is_v2_scheme(_current_mapping_scheme()):
+        merged = normalize_approach_movement_mapping(merged)
     return _ordered_mapping_frame(merged)
 
 
@@ -3755,13 +3766,13 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("tmc_batch_selected_review_file", "")
     st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
     st.session_state.setdefault("tmc_batch_export_result", None)
-    st.session_state.setdefault("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
+    st.session_state.setdefault("tmc_batch_export_mode", None)
     _ensure_pce_factor_state()
     single_export_options = _single_export_mode_options(excel_com_status)
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
         single_export_options,
-        SAFE_PNG_EXPORT_MODE,
+        _default_single_export_mode(excel_com_status),
     )
     st.session_state["report_export_mode"] = export_mode
     use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
@@ -3769,7 +3780,7 @@ def _run_streamlit_app() -> None:
     st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
         st.session_state.get("tmc_batch_export_mode"),
         batch_export_options,
-        BATCH_SAFE_PNG_EXPORT_LABEL,
+        _default_batch_export_mode(excel_com_status),
     )
 
     with st.sidebar:
@@ -3815,6 +3826,12 @@ def _run_streamlit_app() -> None:
             loaded_batch_preset = loaded.preset
             batch_mapping_scheme = detect_mapping_preset_scheme(loaded)
             st.session_state["tmc_batch_mapping_code_scheme"] = batch_mapping_scheme
+            batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
+            st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
+                st.session_state.get("tmc_batch_export_mode"),
+                batch_export_options,
+                _default_batch_export_mode(excel_com_status, batch_mapping_scheme),
+            )
             batch_preset_name = str(loaded.preset.get("preset_name") or batch_preset_upload.name)
             for warning_message in loaded.warnings:
                 st.sidebar.warning(warning_message)
@@ -4657,12 +4674,18 @@ def _run_streamlit_app() -> None:
 
         if active_tab == "ส่งออก":
             _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
-            batch_export_options = _batch_export_mode_options(excel_com_status)
+            batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
             previous_batch_export_mode = st.session_state.get("tmc_batch_export_mode", batch_export_mode)
             selected_batch_export_mode = st.radio(
                 "โหมดส่งออก Batch",
                 options=batch_export_options,
-                index=batch_export_options.index(_coerce_export_mode(previous_batch_export_mode, batch_export_options, BATCH_SAFE_PNG_EXPORT_LABEL)),
+                index=batch_export_options.index(
+                    _coerce_export_mode(
+                        previous_batch_export_mode,
+                        batch_export_options,
+                        _default_batch_export_mode(excel_com_status, batch_mapping_scheme),
+                    )
+                ),
                 key="tmc_batch_export_mode_control",
                 horizontal=True,
                 help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",
@@ -5018,7 +5041,7 @@ def _run_streamlit_app() -> None:
             selected_export_mode = st.radio(
                 "โหมดส่งออกรายงาน",
                 options=single_export_options,
-                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, SAFE_PNG_EXPORT_MODE)),
+                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, _default_single_export_mode(excel_com_status))),
                 key="report_export_mode_control",
                 horizontal=True,
                 help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",

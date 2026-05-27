@@ -251,6 +251,23 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+def normalize_approach_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
+    """Return mapping with v2 component fields derived from movement_code."""
+
+    normalized = clean_mapping(mapping)
+    if "approach_direction" not in normalized.columns:
+        normalized["approach_direction"] = ""
+    if "movement_type" not in normalized.columns:
+        normalized["movement_type"] = ""
+    for index, code in normalized["movement_code"].fillna("").astype(str).str.strip().items():
+        if not is_approach_movement_code(code):
+            continue
+        parsed = parse_approach_movement_code(code)
+        normalized.at[index, "approach_direction"] = parsed.approach_direction
+        normalized.at[index, "movement_type"] = parsed.movement_type
+    return normalized
+
+
 REQUIRED_MAPPING_FIELDS = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type"]
 
 
@@ -322,7 +339,7 @@ def _mixed_movement_code_issues(cleaned: pd.DataFrame) -> list[str]:
 
 def validate_mapping_scheme(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
     scheme = normalize_movement_code_scheme(movement_code_scheme)
-    cleaned = clean_mapping(mapping)
+    cleaned = normalize_approach_movement_mapping(mapping) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(mapping)
     issues: list[str] = []
     issues.extend(_mixed_movement_code_issues(cleaned))
     if scheme == MOVEMENT_SCHEME_V1:
@@ -335,13 +352,6 @@ def validate_mapping_scheme(mapping: pd.DataFrame, movement_code_scheme: str = M
         if not is_approach_movement_code(code):
             issues.append(f"Row {row_number} has invalid approach_movement output_movement_code {code!r}.")
             continue
-        parsed = parse_approach_movement_code(code)
-        approach_direction = str(row.get("approach_direction") or "").strip()
-        movement_type = str(row.get("movement_type") or "").strip()
-        if approach_direction and approach_direction != parsed.approach_direction:
-            issues.append(f"Row {row_number} approach_direction does not match {code}.")
-        if movement_type and movement_type != parsed.movement_type:
-            issues.append(f"Row {row_number} movement_type does not match {code}.")
     return issues
 
 
@@ -358,7 +368,12 @@ def read_mapping_excel_with_metadata(excel_file: str | BinaryIO | BytesIO) -> Ma
     workbook = pd.ExcelFile(excel_file)
     sheet_name = "Mapping" if "Mapping" in workbook.sheet_names else workbook.sheet_names[0]
     metadata = _read_mapping_excel_metadata(workbook)
-    mapping = clean_mapping(pd.read_excel(workbook, sheet_name=sheet_name))
+    raw_mapping = pd.read_excel(workbook, sheet_name=sheet_name)
+    mapping = (
+        normalize_approach_movement_mapping(raw_mapping)
+        if metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+        else clean_mapping(raw_mapping)
+    )
     issues = validate_mapping_scheme(mapping, metadata["movement_code_scheme"])
     if issues:
         raise ValueError("; ".join(issues))
@@ -373,7 +388,7 @@ def mapping_to_excel_bytes(mapping: pd.DataFrame, movement_code_scheme: str = MO
     scheme = normalize_movement_code_scheme(movement_code_scheme)
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        cleaned = clean_mapping(mapping)
+        cleaned = normalize_approach_movement_mapping(mapping) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(mapping)
         if scheme == MOVEMENT_SCHEME_V2:
             for column in OPTIONAL_MAPPING_METADATA_COLUMNS:
                 if column not in cleaned.columns:

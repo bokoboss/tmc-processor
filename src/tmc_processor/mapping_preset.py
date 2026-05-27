@@ -13,7 +13,13 @@ import pandas as pd
 
 from .constants import MAPPING_COLUMNS
 from .importer import extract_raw_direction
-from .mapping import OPTIONAL_MAPPING_METADATA_COLUMNS, clean_mapping, default_mapping_for_sheets, validate_mapping_scheme
+from .mapping import (
+    OPTIONAL_MAPPING_METADATA_COLUMNS,
+    clean_mapping,
+    default_mapping_for_sheets,
+    normalize_approach_movement_mapping,
+    validate_mapping_scheme,
+)
 from .metadata import APP_VERSION
 from .movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 
@@ -303,7 +309,8 @@ def _rows_to_mapping_frame(
         mapping_rows.append(mapping_row)
     if not mapping_rows:
         return pd.DataFrame(columns=MAPPING_COLUMNS)
-    cleaned = clean_mapping(pd.DataFrame(mapping_rows))
+    raw_frame = pd.DataFrame(mapping_rows)
+    cleaned = normalize_approach_movement_mapping(raw_frame) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(raw_frame)
     for column in ("note", "remark"):
         if any(column in row for row in mapping_rows):
             cleaned[column] = [str(row.get(column, "") or "") for row in mapping_rows]
@@ -350,7 +357,7 @@ def apply_mapping_preset_to_detected_sheets(
     if active.empty:
         active = default_mapping_for_sheets(detected)
     else:
-        cleaned = clean_mapping(active)
+        cleaned = normalize_approach_movement_mapping(active) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(active)
         for column in ("note", "remark"):
             if column in active.columns:
                 cleaned[column] = active[column].fillna("").astype(str).tolist()

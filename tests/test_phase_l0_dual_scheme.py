@@ -6,8 +6,9 @@ from io import BytesIO
 import pandas as pd
 
 import app
+from tmc_processor.excel_com_export import ExcelComStatus
 from tmc_processor.exporter import template_paths_for_movement_scheme
-from tmc_processor.mapping import mapping_to_excel_bytes, validate_mapping_scheme
+from tmc_processor.mapping import mapping_to_excel_bytes, normalize_approach_movement_mapping, validate_mapping_scheme
 from tmc_processor.mapping_preset import load_mapping_preset
 from tmc_processor.mapping_preset import MAPPING_PRESET_TYPE
 from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2
@@ -64,8 +65,24 @@ def test_mapping_editor_basic_columns_are_scheme_aware() -> None:
 
     assert "raw_movement_label" in v1.columns
     assert "approach_direction" not in v1.columns
-    assert {"approach_direction", "movement_type", "movement_code"}.issubset(v2.columns)
+    assert "approach_direction" not in v2.columns
+    assert "movement_type" not in v2.columns
+    assert "movement_code" in v2.columns
     assert app._mapping_editor_labels(MOVEMENT_SCHEME_V2)["movement_code"] in {"รหัส movement", "movement_code"}
+
+
+def test_from_to_basic_columns_remain_unchanged() -> None:
+    basic = app._mapping_editor_frame(_mapping(["NE"]), "Basic", MOVEMENT_SCHEME_V1)
+
+    assert basic.columns.tolist() == [
+        "raw_sheet",
+        "raw_direction",
+        "source_stream",
+        "raw_movement_label",
+        "movement_code",
+        "include_in_report",
+        "include_in_peak",
+    ]
 
 
 def test_default_preview_mapping_rows_do_not_lock_scheme_selector() -> None:
@@ -125,7 +142,7 @@ def test_project_session_mapping_source_counts_as_committed() -> None:
 
 
 def test_mapping_excel_download_metadata_is_scheme_specific() -> None:
-    v2_bytes = mapping_to_excel_bytes(_mapping([""]), movement_code_scheme=MOVEMENT_SCHEME_V2)
+    v2_bytes = mapping_to_excel_bytes(_mapping(["WT"]), movement_code_scheme=MOVEMENT_SCHEME_V2)
     v1_bytes = mapping_to_excel_bytes(_mapping(["NE"]), movement_code_scheme=MOVEMENT_SCHEME_V1)
 
     v2_metadata = pd.read_excel(BytesIO(v2_bytes), sheet_name="Metadata")
@@ -134,7 +151,28 @@ def test_mapping_excel_download_metadata_is_scheme_specific() -> None:
 
     assert dict(zip(v2_metadata["field"], v2_metadata["value"]))["movement_code_scheme"] == MOVEMENT_SCHEME_V2
     assert {"approach_direction", "movement_type"}.issubset(v2_mapping.columns)
+    assert v2_mapping.loc[0, "approach_direction"] == "W"
+    assert v2_mapping.loc[0, "movement_type"] == "T"
     assert dict(zip(v1_metadata["field"], v1_metadata["value"]))["movement_code_scheme"] == MOVEMENT_SCHEME_V1
+
+
+def test_approach_movement_mapping_derives_components_from_movement_code() -> None:
+    normalized = normalize_approach_movement_mapping(_mapping(["EU"]))
+
+    assert normalized.loc[0, "approach_direction"] == "E"
+    assert normalized.loc[0, "movement_type"] == "U"
+
+
+def test_approach_movement_mapping_overwrites_conflicting_component_values() -> None:
+    frame = _mapping(["NT"])
+    frame["approach_direction"] = "S"
+    frame["movement_type"] = "R"
+
+    normalized = normalize_approach_movement_mapping(frame)
+
+    assert normalized.loc[0, "approach_direction"] == "N"
+    assert normalized.loc[0, "movement_type"] == "T"
+    assert validate_mapping_scheme(frame, MOVEMENT_SCHEME_V2) == []
 
 
 def test_approach_movement_editor_options_are_strict_v2_codes() -> None:
@@ -152,6 +190,38 @@ def test_approach_movement_valid_and_invalid_codes_are_scheme_specific() -> None
     assert issues
     assert all("invalid approach_movement" in issue for issue in issues)
     assert validate_mapping_scheme(_mapping(["NE"]), MOVEMENT_SCHEME_V1) == []
+
+
+def test_single_file_export_default_is_template_when_excel_com_available() -> None:
+    status = ExcelComStatus(available=True, reason="ok")
+
+    assert app._default_single_export_mode(status) == app.EXCEL_TEMPLATE_EXPORT_MODE
+    assert (
+        app._coerce_export_mode(None, app._single_export_mode_options(status), app._default_single_export_mode(status))
+        == app.EXCEL_TEMPLATE_EXPORT_MODE
+    )
+
+
+def test_single_file_export_default_is_safe_png_when_excel_com_unavailable() -> None:
+    status = ExcelComStatus(available=False, reason="missing")
+
+    assert app._single_export_mode_options(status) == [app.SAFE_PNG_EXPORT_MODE]
+    assert app._default_single_export_mode(status) == app.SAFE_PNG_EXPORT_MODE
+    assert (
+        app._coerce_export_mode(
+            app.EXCEL_TEMPLATE_EXPORT_MODE,
+            app._single_export_mode_options(status),
+            app._default_single_export_mode(status),
+        )
+        == app.SAFE_PNG_EXPORT_MODE
+    )
+
+
+def test_approach_movement_batch_export_default_is_safe_png() -> None:
+    status = ExcelComStatus(available=True, reason="ok")
+
+    assert app._batch_export_mode_options(status, MOVEMENT_SCHEME_V2) == [app.BATCH_SAFE_PNG_EXPORT_LABEL]
+    assert app._default_batch_export_mode(status, MOVEMENT_SCHEME_V2) == app.BATCH_SAFE_PNG_EXPORT_LABEL
 
 
 def test_export_template_paths_are_scheme_specific() -> None:

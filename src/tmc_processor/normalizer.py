@@ -69,8 +69,8 @@ def _v2_metadata(setup: dict[str, Any], map_row: pd.Series, movement_code: str) 
     parsed = parse_approach_movement_code(movement_code)
     return {
         "movement_code_scheme": MOVEMENT_SCHEME_V2,
-        "approach_direction": str(map_row.get("approach_direction") or parsed.approach_direction).strip(),
-        "movement_type": str(map_row.get("movement_type") or parsed.movement_type).strip(),
+        "approach_direction": parsed.approach_direction,
+        "movement_type": parsed.movement_type,
     }
 
 
