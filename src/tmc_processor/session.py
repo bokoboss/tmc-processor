@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time, timezone
 import json
 from pathlib import Path
 import re
@@ -14,6 +14,7 @@ import pandas as pd
 from .constants import AM_WINDOW, DEFAULT_PEAK_MODE, MAPPING_COLUMNS, PM_WINDOW
 from .mapping import clean_mapping
 from .metadata import APP_VERSION, TEMPLATE_VERSION
+from .movement_scheme import MOVEMENT_SCHEME_V1, normalize_movement_code_scheme
 from .pcu import normalize_pce_factors, validate_pce_factors
 
 
@@ -82,7 +83,7 @@ class ProjectSessionLoadResult:
 
 
 def _utc_now_text() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _time_text(value: Any) -> str:
@@ -149,6 +150,7 @@ def build_project_session(
     metadata: dict[str, Any] | None = None,
     directions: dict[str, Any] | None = None,
     mapping: Any = None,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
     detected_sheet_names: list[str] | tuple[str, ...] | None = None,
     peak_settings: dict[str, Any] | None = None,
     export_settings: dict[str, Any] | None = None,
@@ -176,6 +178,7 @@ def build_project_session(
         if key in peak_values:
             peak_values[key] = _time_text(peak_values[key])
 
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     return {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "app_version": APP_VERSION,
@@ -188,6 +191,7 @@ def build_project_session(
         "metadata": _copy_known_fields(metadata, METADATA_FIELDS),
         "directions": _copy_known_fields(directions, DIRECTION_FIELDS),
         "mapping": {
+            "movement_code_scheme": scheme,
             "detected_sheet_names": [str(name) for name in (detected_sheet_names or [])],
             "rows": _mapping_rows(mapping),
         },
@@ -220,6 +224,9 @@ def normalize_project_session(raw_session: dict[str, Any]) -> dict[str, Any]:
         "metadata": _copy_known_fields(raw_session.get("metadata"), METADATA_FIELDS),
         "directions": _copy_known_fields(raw_session.get("directions"), DIRECTION_FIELDS),
         "mapping": {
+            "movement_code_scheme": normalize_movement_code_scheme(
+                mapping_source.get("movement_code_scheme") or raw_session.get("movement_code_scheme") or MOVEMENT_SCHEME_V1
+            ),
             "detected_sheet_names": [str(name) for name in detected],
             "rows": _mapping_rows(rows),
         },
@@ -336,6 +343,10 @@ def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, A
         updates["mapping_table"] = rows
         updates["mapping_editor_version"] = int(state.get("mapping_editor_version", 0) or 0) + 1
         updates["tmc_mapping_table_from_session"] = True
+        updates["tmc_mapping_source"] = "project_session"
+        updates["tmc_mapping_code_scheme"] = normalize_movement_code_scheme(
+            session.get("mapping", {}).get("movement_code_scheme") or MOVEMENT_SCHEME_V1
+        )
     detected = session.get("mapping", {}).get("detected_sheet_names", [])
     if detected:
         updates["tmc_session_detected_sheet_names"] = detected

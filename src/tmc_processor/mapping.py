@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import BytesIO
 from typing import BinaryIO
 
@@ -16,6 +17,21 @@ from .constants import (
     TURN_TYPE_OPTIONS,
 )
 from .importer import extract_raw_direction
+from .movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
+    MOVEMENT_SCHEME_V1,
+    MOVEMENT_SCHEME_V2,
+    is_approach_movement_code,
+    normalize_movement_code_scheme,
+    parse_approach_movement_code,
+)
+
+
+APPROACH_MOVEMENT_PROCESSING_BLOCK_REASON = (
+    "Mapping นี้ใช้ระบบรหัส approach_movement v2 ซึ่งยังไม่ได้เปิดใช้ใน pipeline หลัก "
+    "โปรดใช้ Mapping แบบ from_to สำหรับการประมวลผลในเวอร์ชันนี้"
+)
+OPTIONAL_MAPPING_METADATA_COLUMNS = ["approach_direction", "movement_type"]
 
 
 _SOURCE_STREAM_DEFAULT = "mainline"
@@ -52,6 +68,17 @@ _FACILITY_TYPE_ALIASES = {
 }
 
 
+@dataclass(frozen=True)
+class MappingExcelLoadResult:
+    mapping: pd.DataFrame
+    metadata: dict[str, str]
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def movement_code_scheme(self) -> str:
+        return self.metadata.get("movement_code_scheme", MOVEMENT_SCHEME_V1)
+
+
 def _choice_key(value: object) -> str:
     return str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
 
@@ -83,9 +110,10 @@ def _unknown_values(series: pd.Series, aliases: dict[str, str], options: list[st
     return sorted(set(unknown))
 
 
-def mapping_control_warnings(mapping: pd.DataFrame) -> list[str]:
+def mapping_control_warnings(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
     """Return non-blocking warnings for legacy values outside editor dropdowns."""
 
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     warnings: list[str] = []
     checks = {
         "source_stream": (_SOURCE_STREAM_ALIASES, SOURCE_STREAM_OPTIONS, "other"),
@@ -104,11 +132,12 @@ def mapping_control_warnings(mapping: pd.DataFrame) -> list[str]:
 
     movement_column = "movement_code" if "movement_code" in mapping.columns else "output_movement_code"
     if movement_column in mapping.columns:
+        movement_options = APPROACH_MOVEMENT_CODES if scheme == MOVEMENT_SCHEME_V2 else MOVEMENT_CODE_OPTIONS
         values = sorted(
             {
                 text
                 for text in mapping[movement_column].dropna().astype(str).str.strip()
-                if text and text.upper() not in MOVEMENT_CODE_OPTIONS
+                if text and text.upper() not in movement_options
             }
         )
         if values:
@@ -188,6 +217,11 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
                 cleaned[column] = _FACILITY_TYPE_DEFAULT
             else:
                 cleaned[column] = ""
+    optional_values = {
+        column: cleaned[column].fillna("").astype(str).tolist()
+        for column in OPTIONAL_MAPPING_METADATA_COLUMNS
+        if column in cleaned.columns
+    }
     cleaned = cleaned[MAPPING_COLUMNS]
     cleaned["include_in_peak"] = _bool_series(cleaned["include_in_peak"], default=True)
     cleaned["include_in_report"] = _bool_series(cleaned["include_in_report"], default=True)
@@ -212,7 +246,26 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
             _AGGREGATION_METHOD_DEFAULT,
         )
     )
+    for column, values in optional_values.items():
+        cleaned[column] = values
     return cleaned
+
+
+def normalize_approach_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
+    """Return mapping with v2 component fields derived from movement_code."""
+
+    normalized = clean_mapping(mapping)
+    if "approach_direction" not in normalized.columns:
+        normalized["approach_direction"] = ""
+    if "movement_type" not in normalized.columns:
+        normalized["movement_type"] = ""
+    for index, code in normalized["movement_code"].fillna("").astype(str).str.strip().items():
+        if not is_approach_movement_code(code):
+            continue
+        parsed = parse_approach_movement_code(code)
+        normalized.at[index, "approach_direction"] = parsed.approach_direction
+        normalized.at[index, "movement_type"] = parsed.movement_type
+    return normalized
 
 
 REQUIRED_MAPPING_FIELDS = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type"]
@@ -223,7 +276,7 @@ def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataF
     current = default_mapping_for_sheets(raw_sheets)
     extra_columns = [
         column
-        for column in ("note", "remark")
+        for column in (*OPTIONAL_MAPPING_METADATA_COLUMNS, "note", "remark")
         if column in saved_mapping.columns and "raw_sheet" in saved_mapping.columns
     ]
     saved_extras = saved_mapping.copy() if extra_columns else pd.DataFrame()
@@ -254,16 +307,98 @@ def apply_saved_mapping_to_sheets(raw_sheets: list[str], saved_mapping: pd.DataF
     return pd.DataFrame(rows, columns=columns)
 
 
-def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
+def _read_mapping_excel_metadata(workbook: pd.ExcelFile) -> dict[str, str]:
+    if "Metadata" not in workbook.sheet_names:
+        return {"movement_code_scheme": MOVEMENT_SCHEME_V1}
+    raw = pd.read_excel(workbook, sheet_name="Metadata", header=None)
+    metadata: dict[str, str] = {}
+    if raw.shape[1] >= 2:
+        for _, row in raw.iloc[:, :2].iterrows():
+            key = str(row.iloc[0] or "").strip()
+            if key and key.casefold() not in {"field", "key"}:
+                value = "" if pd.isna(row.iloc[1]) else str(row.iloc[1]).strip()
+                metadata[key] = value
+    metadata["movement_code_scheme"] = normalize_movement_code_scheme(metadata.get("movement_code_scheme"))
+    return metadata
+
+
+def _mixed_movement_code_issues(cleaned: pd.DataFrame) -> list[str]:
+    if "movement_code" not in cleaned:
+        return []
+    codes = {
+        str(code).strip()
+        for code in cleaned.loc[cleaned["include_in_report"], "movement_code"].dropna()
+        if str(code).strip()
+    }
+    has_v1 = any(code in MOVEMENT_CODE_OPTIONS and not is_approach_movement_code(code) for code in codes)
+    has_v2 = any(is_approach_movement_code(code) and code not in MOVEMENT_CODE_OPTIONS for code in codes)
+    if has_v1 and has_v2:
+        return ["Mapping contains mixed from_to and approach_movement movement codes."]
+    return []
+
+
+def validate_mapping_scheme(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    cleaned = normalize_approach_movement_mapping(mapping) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(mapping)
+    issues: list[str] = []
+    issues.extend(_mixed_movement_code_issues(cleaned))
+    if scheme == MOVEMENT_SCHEME_V1:
+        return issues
+    included = cleaned[cleaned["include_in_report"]] if "include_in_report" in cleaned else cleaned
+    for row_number, row in enumerate(included.to_dict("records"), start=1):
+        code = str(row.get("movement_code") or "").strip()
+        if not code:
+            continue
+        if not is_approach_movement_code(code):
+            issues.append(f"Row {row_number} has invalid approach_movement output_movement_code {code!r}.")
+            continue
+    return issues
+
+
+def mapping_processing_block_reason(movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> str:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    return APPROACH_MOVEMENT_PROCESSING_BLOCK_REASON if scheme == MOVEMENT_SCHEME_V2 else ""
+
+
+def mapping_is_process_compatible(movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> bool:
+    return not mapping_processing_block_reason(movement_code_scheme)
+
+
+def read_mapping_excel_with_metadata(excel_file: str | BinaryIO | BytesIO) -> MappingExcelLoadResult:
     workbook = pd.ExcelFile(excel_file)
     sheet_name = "Mapping" if "Mapping" in workbook.sheet_names else workbook.sheet_names[0]
-    return clean_mapping(pd.read_excel(workbook, sheet_name=sheet_name))
+    metadata = _read_mapping_excel_metadata(workbook)
+    raw_mapping = pd.read_excel(workbook, sheet_name=sheet_name)
+    mapping = (
+        normalize_approach_movement_mapping(raw_mapping)
+        if metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+        else clean_mapping(raw_mapping)
+    )
+    issues = validate_mapping_scheme(mapping, metadata["movement_code_scheme"])
+    if issues:
+        raise ValueError("; ".join(issues))
+    return MappingExcelLoadResult(mapping=mapping, metadata=metadata)
 
 
-def mapping_to_excel_bytes(mapping: pd.DataFrame) -> bytes:
+def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
+    return read_mapping_excel_with_metadata(excel_file).mapping
+
+
+def mapping_to_excel_bytes(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> bytes:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        clean_mapping(mapping).to_excel(writer, sheet_name="Mapping", index=False)
+        cleaned = normalize_approach_movement_mapping(mapping) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(mapping)
+        if scheme == MOVEMENT_SCHEME_V2:
+            for column in OPTIONAL_MAPPING_METADATA_COLUMNS:
+                if column not in cleaned.columns:
+                    cleaned[column] = ""
+        cleaned.to_excel(writer, sheet_name="Mapping", index=False)
+        pd.DataFrame(
+            [
+                {"field": "movement_code_scheme", "value": scheme},
+            ]
+        ).to_excel(writer, sheet_name="Metadata", index=False)
         worksheet = writer.sheets["Mapping"]
         worksheet.freeze_panes = "A2"
         for column_cells in worksheet.columns:
@@ -301,6 +436,44 @@ def validate_mapping_for_processing(detected_sheets: list[str], mapping: pd.Data
                     }
                 )
 
+    return pd.DataFrame(issues, columns=["raw_sheet", "field", "message"])
+
+
+def validate_mapping_for_processing_by_scheme(
+    detected_sheets: list[str],
+    mapping: pd.DataFrame,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    if scheme == MOVEMENT_SCHEME_V1:
+        return validate_mapping_for_processing(detected_sheets, mapping)
+
+    cleaned = normalize_approach_movement_mapping(mapping)
+    issues = []
+    for issue in validate_mapping_scheme(cleaned, scheme):
+        issues.append({"raw_sheet": "", "field": "movement_code", "message": issue})
+
+    for sheet in detected_sheets:
+        sheet_rows = cleaned[cleaned["raw_sheet"] == sheet]
+        included_rows = sheet_rows[sheet_rows["include_in_report"]] if not sheet_rows.empty else sheet_rows
+        if sheet_rows.empty or included_rows.empty:
+            issues.append(
+                {
+                    "raw_sheet": sheet,
+                    "field": "movement_code",
+                    "message": "Detected raw sheet requires an approach_movement mapping before processing.",
+                }
+            )
+            continue
+        for _, row in included_rows.iterrows():
+            if not str(row.get("movement_code") or "").strip():
+                issues.append(
+                    {
+                        "raw_sheet": sheet,
+                        "field": "movement_code",
+                        "message": "Detected raw sheet requires movement_code before processing.",
+                    }
+                )
     return pd.DataFrame(issues, columns=["raw_sheet", "field", "message"])
 
 

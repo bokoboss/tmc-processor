@@ -13,17 +13,20 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 
 from .charts import report_chart_pngs
-from .diagram import DiagramConfig, generate_four_leg_tmc_diagram
+from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram, render_v2_movement_diagram_png
+from .exporter import export_v2_generated_workbook
 from .export_package import build_export_summary_text
 from .importer import load_detected_sheets
-from .mapping import clean_mapping
+from .mapping import clean_mapping, validate_mapping_scheme
 from .mapping_preset import (
     apply_mapping_preset_to_detected_sheets,
     build_mapping_preset,
+    detect_mapping_preset_scheme,
     serialize_mapping_preset,
 )
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, setup_with_metadata
-from .pipeline import ProcessingResult, process_tmc
+from .movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
+from .pipeline import ProcessingResult, process_tmc, process_tmc_dry_run_v2
 from .session import build_project_session, session_to_json_bytes
 from .summaries import hourly_movement_pcu, vehicle_composition_report
 from .time_utils import hourly_interval_options
@@ -33,12 +36,15 @@ BATCH_PACKAGE_MIME = "application/zip"
 SAFE_BATCH_EXPORT_MODE = "Safe PNG Export Mode - Batch v1"
 BATCH_EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 BATCH_SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
+BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH = "Excel Template Mode สำหรับ Batch approach_movement ยังไม่รองรับในเวอร์ชันนี้ กรุณาใช้ Safe PNG Export Mode"
 BATCH_STALE_MESSAGE_TH = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
 BATCH_SUMMARY_COLUMNS = [
     "file_name",
     "survey_date_text",
     "output_stem",
     "folder_name",
+    "movement_code_scheme",
+    "template_version",
     "status",
     "export_mode_requested",
     "export_mode_used",
@@ -63,6 +69,7 @@ BATCH_QC_COLUMNS = [
     "file_name",
     "output_stem",
     "survey_date_text",
+    "movement_code_scheme",
     "severity",
     "category",
     "check",
@@ -98,7 +105,9 @@ class BatchSummaryRow:
     survey_date_text: str
     output_stem: str
     folder_name: str
-    status: str
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1
+    template_version: str = TEMPLATE_VERSION
+    status: str = ""
     export_mode_requested: str = ""
     export_mode_used: str = ""
     export_status: str = ""
@@ -139,7 +148,8 @@ class BatchAnalysisItem:
     survey_date_text: str
     output_stem: str
     folder_name: str
-    status: str
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1
+    status: str = ""
     workbook_bytes: bytes = field(default=b"", repr=False)
     mapping: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     suggested_AM_peak: str = ""
@@ -148,6 +158,9 @@ class BatchAnalysisItem:
     confirmed_PM_peak: str = ""
     hourly_period_options: list[str] = field(default_factory=list)
     hourly_movement_pcu: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    hourly_totals: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    movement_summary: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
+    movement_diagram_data: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     qc: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     total_vehicles: float = 0.0
     total_PCU: float = 0.0
@@ -167,6 +180,8 @@ class BatchAnalysisResult:
     items: list[BatchAnalysisItem] = field(default_factory=list)
     generated_at: str = ""
     mapping_preset_name: str = ""
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1
+    template_version: str = TEMPLATE_VERSION
 
     @property
     def successful_items(self) -> list[BatchAnalysisItem]:
@@ -187,6 +202,8 @@ class _BatchFileArtifacts:
     mapping_preset_bytes: bytes
     chart_pngs: dict[str, bytes] = field(default_factory=dict)
     diagram_png: bytes | None = None
+    diagram_data_csv: bytes | None = None
+    diagram_data_png: bytes | None = None
 
 
 def safe_batch_name(name: str | None, default: str = "file") -> str:
@@ -265,10 +282,17 @@ def batch_inputs_ready(
     uploaded_workbook_count: int,
     mapping_available: bool,
     pce_factors_ready: bool = True,
+    movement_code_scheme: str = "from_to",
 ) -> bool:
-    """Return whether Basic Batch v1 has the required inputs to start."""
+    """Return whether Basic Batch has the required inputs to start."""
 
+    normalize_movement_code_scheme(movement_code_scheme)
     return uploaded_workbook_count > 0 and mapping_available and pce_factors_ready
+
+
+def batch_processing_block_reason(movement_code_scheme: str = "from_to") -> str:
+    normalize_movement_code_scheme(movement_code_scheme)
+    return ""
 
 
 def batch_change_invalidates(previous: object, current: object, has_analysis: bool) -> bool:
@@ -313,9 +337,16 @@ def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[
                     f"{folder}/{stem}_export_summary.txt",
                     f"{folder}/{stem}_session.tmcproj.json",
                     f"{folder}/{stem}.mapping.json",
-                    f"{folder}/charts/",
                 ]
             )
+            if row.movement_code_scheme == MOVEMENT_SCHEME_V2:
+                preview.extend(
+                    [
+                        f"{folder}/diagram/movement_diagram_data.csv",
+                        f"{folder}/diagram/movement_diagram.png",
+                    ]
+                )
+            preview.append(f"{folder}/charts/")
     else:
         preview.append("(no successful file folders)")
     return preview
@@ -401,6 +432,33 @@ def _export_used_from_warnings(requested_mode: str, export_warnings: Iterable[wa
     return requested, "; ".join(messages)
 
 
+def _batch_template_version(mapping_preset: dict[str, Any] | None, movement_code_scheme: str) -> str:
+    if mapping_preset and str(mapping_preset.get("template_version") or "").strip():
+        return str(mapping_preset.get("template_version") or "").strip()
+    return "generated_approach_movement_v2" if movement_code_scheme == MOVEMENT_SCHEME_V2 else TEMPLATE_VERSION
+
+
+def _resolve_batch_scheme(
+    *,
+    mapping_preset: dict[str, Any] | None,
+    setup: dict[str, Any],
+) -> str:
+    preset_scheme = detect_mapping_preset_scheme(mapping_preset) if mapping_preset else ""
+    setup_scheme = normalize_movement_code_scheme(setup.get("movement_code_scheme") or preset_scheme or MOVEMENT_SCHEME_V1)
+    if preset_scheme and preset_scheme != setup_scheme:
+        raise ValueError(
+            f"Batch mapping scheme mismatch: setup movement_code_scheme is {setup_scheme!r}, "
+            f"but Mapping Preset is {preset_scheme!r}."
+        )
+    return preset_scheme or setup_scheme
+
+
+def _raise_batch_mapping_scheme_issues(mapping: pd.DataFrame, movement_code_scheme: str) -> None:
+    issues = validate_mapping_scheme(mapping, movement_code_scheme)
+    if issues:
+        raise ValueError("; ".join(issues))
+
+
 def _qc_counts(qc: pd.DataFrame) -> dict[str, int]:
     if qc.empty or "severity" not in qc.columns:
         return {"error": 0, "warning": 0, "info": 0}
@@ -417,6 +475,7 @@ def _batch_qc_rows_for_file(
     file_name: str,
     output_stem: str,
     survey_date_text: str,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
     qc: pd.DataFrame,
     notes: str = "",
 ) -> list[dict[str, str]]:
@@ -428,6 +487,7 @@ def _batch_qc_rows_for_file(
             "file_name": Path(file_name).name,
             "output_stem": safe_output_stem(output_stem, "file"),
             "survey_date_text": str(survey_date_text or ""),
+            "movement_code_scheme": normalize_movement_code_scheme(movement_code_scheme),
             "severity": str(raw_row.get("severity", "") or ""),
             "category": str(raw_row.get("category", "") or ""),
             "check": str(raw_row.get("check", "") or ""),
@@ -448,12 +508,14 @@ def _batch_failure_qc_row(
     output_stem: str,
     survey_date_text: str,
     message: str,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
     notes: str = "",
 ) -> dict[str, str]:
     return {
         "file_name": Path(file_name).name,
         "output_stem": safe_output_stem(output_stem, "file"),
         "survey_date_text": str(survey_date_text or ""),
+        "movement_code_scheme": normalize_movement_code_scheme(movement_code_scheme),
         "severity": "error",
         "category": "batch_processing",
         "check": "processing_failed",
@@ -485,6 +547,7 @@ def batch_analysis_qc_rows(analysis: BatchAnalysisResult | None) -> list[dict[st
                     file_name=item.file_name,
                     output_stem=item.output_stem,
                     survey_date_text=item.survey_date_text,
+                    movement_code_scheme=item.movement_code_scheme,
                     qc=item.qc,
                     notes=item.notes,
                 )
@@ -496,6 +559,7 @@ def batch_analysis_qc_rows(analysis: BatchAnalysisResult | None) -> list[dict[st
                     output_stem=item.output_stem,
                     survey_date_text=item.survey_date_text,
                     message=item.notes,
+                    movement_code_scheme=item.movement_code_scheme,
                     notes=item.notes,
                 )
             )
@@ -510,6 +574,7 @@ def batch_selected_file_preview(item: BatchAnalysisItem | BatchSummaryRow) -> di
         "survey_date_text": item.survey_date_text,
         "output_stem": item.output_stem,
         "status": item.status,
+        "movement_code_scheme": getattr(item, "movement_code_scheme", MOVEMENT_SCHEME_V1),
         "total_vehicles": getattr(item, "total_vehicles", 0.0),
         "total_PCU": getattr(item, "total_PCU", 0.0),
         "QC_errors": getattr(item, "QC_errors", 0),
@@ -528,13 +593,16 @@ def _batch_summary_workbook(
     qc_rows: list[dict[str, str]] | None = None,
     generated_at: str,
     mapping_preset_name: str,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+    template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
     summary = pd.DataFrame([row.__dict__ for row in rows], columns=BATCH_SUMMARY_COLUMNS)
     batch_qc = batch_qc_frame(qc_rows)
     metadata = pd.DataFrame(
         [
             {"field": "app_version", "value": APP_VERSION},
-            {"field": "template_version", "value": TEMPLATE_VERSION},
+            {"field": "template_version", "value": template_version},
+            {"field": "movement_code_scheme", "value": movement_code_scheme},
             {"field": "generated_at", "value": generated_at},
             {"field": "mapping_preset_name", "value": mapping_preset_name},
         ]
@@ -559,6 +627,8 @@ def create_batch_package_zip(
     file_artifacts: list[_BatchFileArtifacts],
     generated_at: str,
     mapping_preset_name: str = "",
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+    template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
     """Create a Basic Batch ZIP package without embedding raw inputs."""
 
@@ -568,6 +638,8 @@ def create_batch_package_zip(
         qc_rows=list(qc_rows or []),
         generated_at=generated_at,
         mapping_preset_name=mapping_preset_name,
+        movement_code_scheme=movement_code_scheme,
+        template_version=template_version,
     )
     with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("batch_summary.xlsx", summary_bytes)
@@ -583,6 +655,10 @@ def create_batch_package_zip(
                     archive.writestr(f"{folder}/charts/{safe_batch_name(chart_name, 'chart')}.png", bytes(png_bytes))
             if artifact.diagram_png:
                 archive.writestr(f"{folder}/charts/tmc_movement_diagram.png", bytes(artifact.diagram_png))
+            if artifact.diagram_data_csv:
+                archive.writestr(f"{folder}/diagram/movement_diagram_data.csv", bytes(artifact.diagram_data_csv))
+            if artifact.diagram_data_png:
+                archive.writestr(f"{folder}/diagram/movement_diagram.png", bytes(artifact.diagram_data_png))
     return output.getvalue()
 
 
@@ -695,12 +771,13 @@ def _process_one_file(
     )
     diagram_png = generate_four_leg_tmc_diagram(hourly_movement, result.peaks, _diagram_config(confirmed_setup))
     mapping_preset_bytes = serialize_mapping_preset(
-        build_mapping_preset(active_mapping, preset_name="Batch Mapping Preset")
+        build_mapping_preset(active_mapping, preset_name="Batch Mapping Preset", movement_code_scheme=MOVEMENT_SCHEME_V1)
     )
     session = build_project_session(
         metadata=confirmed_setup,
         directions=confirmed_setup,
         mapping=active_mapping,
+        movement_code_scheme=MOVEMENT_SCHEME_V1,
         detected_sheet_names=detected_sheets,
         peak_settings=confirmed_setup,
         export_settings={
@@ -751,6 +828,8 @@ def _process_one_file(
         survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
         output_stem=output_stem,
         folder_name=folder_name,
+        movement_code_scheme=MOVEMENT_SCHEME_V1,
+        template_version=TEMPLATE_VERSION,
         status="success",
         export_mode_requested=export_mode_requested,
         export_mode_used=export_mode_used,
@@ -785,6 +864,180 @@ def _process_one_file(
         file_name=item.file_name,
         output_stem=output_stem,
         survey_date_text=row.survey_date_text,
+        movement_code_scheme=MOVEMENT_SCHEME_V1,
+        qc=result.qc,
+        notes=item.notes,
+    )
+    return row, artifact, qc_rows
+
+
+def _process_one_file_v2(
+    item: BatchItem,
+    *,
+    folder_name: str,
+    mapping: pd.DataFrame,
+    setup: dict[str, Any],
+    pce_factors: dict[str, float] | None,
+    peak_mode: str,
+    peak_windows: dict[str, tuple[str, str]] | None,
+    export_mode: str,
+    generated_at: str,
+    confirmed_peak_periods: dict[str, tuple[str, str]],
+    suggested_am_peak: str = "",
+    suggested_pm_peak: str = "",
+) -> tuple[BatchSummaryRow, _BatchFileArtifacts, list[dict[str, str]]]:
+    export_mode_requested = _base_export_mode_label(export_mode)
+    if export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
+        raise ValueError(BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH)
+
+    output_stem = safe_output_stem(item.output_stem or item.file_name, folder_name)
+    per_file_setup = {
+        **setup,
+        "movement_code_scheme": MOVEMENT_SCHEME_V2,
+        "survey_date_text": item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+        "peak_selection_source": "user_confirmed_batch",
+    }
+    if "AM" in confirmed_peak_periods:
+        per_file_setup["am_peak_start"], per_file_setup["am_peak_end"] = confirmed_peak_periods["AM"]
+    if "PM" in confirmed_peak_periods:
+        per_file_setup["pm_peak_start"], per_file_setup["pm_peak_end"] = confirmed_peak_periods["PM"]
+
+    raw_sheets = load_detected_sheets(BytesIO(item.workbook_bytes))
+    detected_sheets = list(raw_sheets)
+    apply_result = apply_mapping_preset_to_detected_sheets(
+        build_mapping_preset(mapping, preset_name="Batch Mapping Preset", movement_code_scheme=MOVEMENT_SCHEME_V2),
+        detected_sheets,
+    )
+    active_mapping = apply_result.mapping
+    _raise_batch_mapping_scheme_issues(active_mapping, MOVEMENT_SCHEME_V2)
+    result = process_tmc_dry_run_v2(
+        raw_sheets=raw_sheets,
+        mapping=active_mapping,
+        setup=per_file_setup,
+        detected_sheets=detected_sheets,
+        peak_mode=peak_mode,
+        peak_windows=peak_windows,
+        confirmed_peak_periods=confirmed_peak_periods,
+        pce_factors=pce_factors,
+    )
+    workbook_bytes = export_v2_generated_workbook(
+        result,
+        setup=per_file_setup,
+        mapping=active_mapping,
+        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        source_file_name=item.file_name,
+        generated_at=generated_at,
+    )
+    diagram_data = build_v2_movement_diagram_data(
+        movement_summary=result.movement,
+        hourly_movement_pcu=result.hourly_movement_pcu,
+        peaks=result.peaks,
+    )
+    chart_pngs = dict(
+        report_chart_pngs(
+            result.hourly_movement_pcu,
+            vehicle_composition_report(result.normalized),
+            setup=per_file_setup,
+        )
+    )
+    mapping_preset_bytes = serialize_mapping_preset(
+        build_mapping_preset(active_mapping, preset_name="Batch Mapping Preset", movement_code_scheme=MOVEMENT_SCHEME_V2)
+    )
+    session = build_project_session(
+        metadata=per_file_setup,
+        directions=per_file_setup,
+        mapping=active_mapping,
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+        detected_sheet_names=detected_sheets,
+        peak_settings=per_file_setup,
+        export_settings={
+            "use_template_report_layout": False,
+            "use_excel_com_native_charts": False,
+            "template_version": "generated_approach_movement_v2",
+            "export_mode_requested": export_mode_requested,
+            "export_mode_used": BATCH_SAFE_PNG_EXPORT_MODE,
+        },
+        pce_factors=result.pce_factors,
+        source_file_name=Path(item.file_name).name,
+        source_file_size=len(item.workbook_bytes),
+    )
+    summary_text = build_export_summary_text(
+        setup=per_file_setup,
+        source_file_name=item.file_name,
+        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        peaks=result.peaks,
+        mapping=active_mapping,
+        qc=result.qc,
+        workbook_filename=f"{output_stem}_report.xlsx",
+        pce_factors=result.pce_factors,
+        export_settings={
+            "movement_code_scheme": MOVEMENT_SCHEME_V2,
+            "template_version": "generated_approach_movement_v2",
+            "export_mode_requested": export_mode_requested,
+            "export_mode_used": BATCH_SAFE_PNG_EXPORT_MODE,
+            "export_status": "success",
+            "export_error": "",
+        },
+        template_version="generated_approach_movement_v2",
+        generated_at=generated_at,
+    )
+    summary_text = "\n".join(
+        [
+            summary_text.rstrip(),
+            f"movement_code_scheme: {MOVEMENT_SCHEME_V2}",
+            f"survey_date_text: {per_file_setup.get('survey_date_text', '')}",
+            f"output_stem: {output_stem}",
+            f"export_mode_requested: {export_mode_requested}",
+            f"export_mode_used: {BATCH_SAFE_PNG_EXPORT_MODE}",
+            "export_status: success",
+            "export_error: ",
+            "",
+        ]
+    )
+    counts = _qc_counts(result.qc)
+    row = BatchSummaryRow(
+        file_name=Path(item.file_name).name,
+        survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
+        output_stem=output_stem,
+        folder_name=folder_name,
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+        template_version="generated_approach_movement_v2",
+        status="success",
+        export_mode_requested=export_mode_requested,
+        export_mode_used=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_status="success",
+        export_error="",
+        suggested_AM_peak=suggested_am_peak,
+        suggested_PM_peak=suggested_pm_peak,
+        confirmed_AM_peak=_peak_text(result.peaks, "AM"),
+        confirmed_PM_peak=_peak_text(result.peaks, "PM"),
+        AM_peak=_peak_text(result.peaks, "AM"),
+        PM_peak=_peak_text(result.peaks, "PM"),
+        total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
+        total_PCU=float(result.normalized["pcu"].sum()) if "pcu" in result.normalized else 0.0,
+        QC_errors=counts["error"],
+        QC_warnings=counts["warning"],
+        QC_info=counts["info"],
+        export_file=f"{folder_name}/{output_stem}_report.xlsx",
+        generated_report_filename=f"{output_stem}_report.xlsx",
+        notes=item.notes or "approach_movement Safe PNG/generated Batch export.",
+    )
+    artifact = _BatchFileArtifacts(
+        folder_name=folder_name,
+        output_stem=output_stem,
+        workbook_bytes=workbook_bytes,
+        export_summary_text=summary_text,
+        session_bytes=session_to_json_bytes(session),
+        mapping_preset_bytes=mapping_preset_bytes,
+        chart_pngs=chart_pngs,
+        diagram_data_csv=diagram_data.to_csv(index=False).encode("utf-8"),
+        diagram_data_png=render_v2_movement_diagram_png(diagram_data),
+    )
+    qc_rows = _batch_qc_rows_for_file(
+        file_name=item.file_name,
+        output_stem=output_stem,
+        survey_date_text=row.survey_date_text,
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
         qc=result.qc,
         notes=item.notes,
     )
@@ -807,9 +1060,14 @@ def analyze_batch_files(
 
     generated_at = generated_at or generated_timestamp_text()
     setup = dict(setup or {})
+    movement_code_scheme = _resolve_batch_scheme(mapping_preset=mapping_preset, setup=setup)
+    template_version = _batch_template_version(mapping_preset, movement_code_scheme)
+    setup["movement_code_scheme"] = movement_code_scheme
     source_mapping = clean_mapping(mapping if mapping is not None else pd.DataFrame())
     if source_mapping.empty and mapping_preset:
         source_mapping = apply_mapping_preset_to_detected_sheets(mapping_preset, []).mapping
+    if not source_mapping.empty:
+        _raise_batch_mapping_scheme_issues(source_mapping, movement_code_scheme)
 
     analysis_items: list[BatchAnalysisItem] = []
     item_list = list(items)
@@ -830,22 +1088,46 @@ def analyze_batch_files(
                 else source_mapping
             )
             apply_result = apply_mapping_preset_to_detected_sheets(
-                build_mapping_preset(active_mapping, preset_name="Batch Mapping Preset"),
+                build_mapping_preset(
+                    active_mapping,
+                    preset_name="Batch Mapping Preset",
+                    movement_code_scheme=movement_code_scheme,
+                    template_version=template_version,
+                ),
                 detected_sheets,
             )
             active_mapping = apply_result.mapping
-            result = process_tmc(
-                raw_sheets=raw_sheets,
-                mapping=active_mapping,
-                setup=per_file_setup,
-                detected_sheets=detected_sheets,
-                peak_mode=peak_mode,
-                peak_windows=peak_windows,
-                pce_factors=pce_factors,
-                generate_workbook=False,
-            )
+            _raise_batch_mapping_scheme_issues(active_mapping, movement_code_scheme)
+            if movement_code_scheme == MOVEMENT_SCHEME_V2:
+                result = process_tmc_dry_run_v2(
+                    raw_sheets=raw_sheets,
+                    mapping=active_mapping,
+                    setup=per_file_setup,
+                    detected_sheets=detected_sheets,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    pce_factors=pce_factors,
+                )
+                hourly_movement = result.hourly_movement_pcu
+                movement_diagram_data = build_v2_movement_diagram_data(
+                    movement_summary=result.movement,
+                    hourly_movement_pcu=result.hourly_movement_pcu,
+                    peaks=result.peaks,
+                )
+            else:
+                result = process_tmc(
+                    raw_sheets=raw_sheets,
+                    mapping=active_mapping,
+                    setup=per_file_setup,
+                    detected_sheets=detected_sheets,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    pce_factors=pce_factors,
+                    generate_workbook=False,
+                )
+                hourly_movement = hourly_movement_pcu(result.normalized, active_mapping)
+                movement_diagram_data = pd.DataFrame()
             counts = _qc_counts(result.qc)
-            hourly_movement = hourly_movement_pcu(result.normalized, active_mapping)
             options = [option[0] for option in hourly_interval_options(hourly_movement)]
             suggested_am = _peak_text(result.peaks, "AM")
             suggested_pm = _peak_text(result.peaks, "PM")
@@ -858,6 +1140,7 @@ def analyze_batch_files(
                     survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
                     output_stem=output_stem,
                     folder_name=folder_name,
+                    movement_code_scheme=movement_code_scheme,
                     status="success",
                     workbook_bytes=item.workbook_bytes,
                     mapping=active_mapping,
@@ -867,6 +1150,9 @@ def analyze_batch_files(
                     confirmed_PM_peak=suggested_pm,
                     hourly_period_options=options,
                     hourly_movement_pcu=hourly_movement,
+                    hourly_totals=result.hourly,
+                    movement_summary=result.movement,
+                    movement_diagram_data=movement_diagram_data,
                     qc=result.qc,
                     total_vehicles=float(result.normalized["count"].sum()) if "count" in result.normalized else 0.0,
                     total_PCU=float(result.normalized["pcu"].sum()) if "pcu" in result.normalized else 0.0,
@@ -888,6 +1174,7 @@ def analyze_batch_files(
                     survey_date_text=item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
                     output_stem=output_stem,
                     folder_name=folder_name,
+                    movement_code_scheme=movement_code_scheme,
                     status="failed",
                     mapping_status="failed",
                     notes=item.notes or str(exc),
@@ -897,6 +1184,8 @@ def analyze_batch_files(
         items=analysis_items,
         generated_at=generated_at,
         mapping_preset_name=mapping_preset_name,
+        movement_code_scheme=movement_code_scheme,
+        template_version=template_version,
     )
 
 
@@ -923,7 +1212,14 @@ def generate_batch_zip_from_reviewed_peaks(
     qc_rows: list[dict[str, str]] = []
     artifacts: list[_BatchFileArtifacts] = []
     setup = dict(setup or {})
+    movement_code_scheme = normalize_movement_code_scheme(
+        getattr(analysis, "movement_code_scheme", None) or setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1
+    )
+    template_version = getattr(analysis, "template_version", "") or _batch_template_version(None, movement_code_scheme)
+    setup["movement_code_scheme"] = movement_code_scheme
     export_mode_requested = _base_export_mode_label(export_mode)
+    if movement_code_scheme == MOVEMENT_SCHEME_V2 and export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
+        raise ValueError(BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH)
     for item in analysis.items:
         if item.status != "success":
             rows.append(
@@ -932,6 +1228,8 @@ def generate_batch_zip_from_reviewed_peaks(
                     survey_date_text=item.survey_date_text,
                     output_stem=item.output_stem,
                     folder_name=item.folder_name,
+                    movement_code_scheme=movement_code_scheme,
+                    template_version=template_version,
                     status="failed",
                     export_mode_requested=export_mode_requested,
                     export_mode_used="",
@@ -946,6 +1244,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     output_stem=item.output_stem,
                     survey_date_text=item.survey_date_text,
                     message=item.notes,
+                    movement_code_scheme=movement_code_scheme,
                     notes=item.notes,
                 )
             )
@@ -959,6 +1258,8 @@ def generate_batch_zip_from_reviewed_peaks(
                     survey_date_text=item.survey_date_text,
                     output_stem=item.output_stem,
                     folder_name=item.folder_name,
+                    movement_code_scheme=movement_code_scheme,
+                    template_version=template_version,
                     status="failed",
                     export_mode_requested=export_mode_requested,
                     export_mode_used="",
@@ -975,34 +1276,52 @@ def generate_batch_zip_from_reviewed_peaks(
                     output_stem=item.output_stem,
                     survey_date_text=item.survey_date_text,
                     message="Confirmed AM/PM peak is missing.",
+                    movement_code_scheme=movement_code_scheme,
                     notes="Confirmed AM/PM peak is missing.",
                 )
             )
             continue
 
         try:
-            row, artifact, file_qc_rows = _process_one_file(
-                BatchItem(
-                    file_name=item.file_name,
-                    workbook_bytes=item.workbook_bytes,
-                    survey_date_text=item.survey_date_text,
-                    output_stem=item.output_stem,
-                    notes=item.notes,
-                ),
-                folder_name=item.folder_name,
-                mapping=item.mapping,
-                setup=setup,
-                pce_factors=pce_factors,
-                peak_mode=peak_mode,
-                peak_windows=peak_windows,
-                export_mode=export_mode,
-                generated_at=analysis.generated_at,
-                use_template_report_layout=use_template_report_layout,
-                use_excel_com_native_charts=use_excel_com_native_charts,
-                confirmed_peak_periods=confirmed_periods,
-                suggested_am_peak=item.suggested_AM_peak,
-                suggested_pm_peak=item.suggested_PM_peak,
+            batch_item = BatchItem(
+                file_name=item.file_name,
+                workbook_bytes=item.workbook_bytes,
+                survey_date_text=item.survey_date_text,
+                output_stem=item.output_stem,
+                notes=item.notes,
             )
+            if movement_code_scheme == MOVEMENT_SCHEME_V2:
+                row, artifact, file_qc_rows = _process_one_file_v2(
+                    batch_item,
+                    folder_name=item.folder_name,
+                    mapping=item.mapping,
+                    setup=setup,
+                    pce_factors=pce_factors,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    export_mode=export_mode,
+                    generated_at=analysis.generated_at,
+                    confirmed_peak_periods=confirmed_periods,
+                    suggested_am_peak=item.suggested_AM_peak,
+                    suggested_pm_peak=item.suggested_PM_peak,
+                )
+            else:
+                row, artifact, file_qc_rows = _process_one_file(
+                    batch_item,
+                    folder_name=item.folder_name,
+                    mapping=item.mapping,
+                    setup=setup,
+                    pce_factors=pce_factors,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    export_mode=export_mode,
+                    generated_at=analysis.generated_at,
+                    use_template_report_layout=use_template_report_layout,
+                    use_excel_com_native_charts=use_excel_com_native_charts,
+                    confirmed_peak_periods=confirmed_periods,
+                    suggested_am_peak=item.suggested_AM_peak,
+                    suggested_pm_peak=item.suggested_PM_peak,
+                )
             rows.append(row)
             artifacts.append(artifact)
             qc_rows.extend(file_qc_rows)
@@ -1013,6 +1332,8 @@ def generate_batch_zip_from_reviewed_peaks(
                     survey_date_text=item.survey_date_text,
                     output_stem=item.output_stem,
                     folder_name=item.folder_name,
+                    movement_code_scheme=movement_code_scheme,
+                    template_version=template_version,
                     status="failed",
                     export_mode_requested=export_mode_requested,
                     export_mode_used="",
@@ -1031,6 +1352,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     output_stem=item.output_stem,
                     survey_date_text=item.survey_date_text,
                     message=str(exc),
+                    movement_code_scheme=movement_code_scheme,
                     notes=str(exc),
                 )
             )
@@ -1041,6 +1363,8 @@ def generate_batch_zip_from_reviewed_peaks(
         file_artifacts=artifacts,
         generated_at=analysis.generated_at,
         mapping_preset_name=analysis.mapping_preset_name,
+        movement_code_scheme=movement_code_scheme,
+        template_version=template_version,
     )
     return BatchResult(summary_rows=rows, qc_rows=qc_rows, package_bytes=package, generated_at=analysis.generated_at)
 

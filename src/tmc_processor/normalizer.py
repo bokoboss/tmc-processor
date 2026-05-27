@@ -8,6 +8,7 @@ import pandas as pd
 
 from .constants import BASE_INTERVAL_MINUTES, NORMALIZED_COLUMNS, VEHICLE_CLASSES
 from .mapping import clean_mapping
+from .movement_scheme import MOVEMENT_SCHEME_V2, parse_approach_movement_code
 from .pcu import add_pcu
 from .time_utils import add_minutes, parse_interval, parse_time
 
@@ -62,6 +63,17 @@ def _raw_movement_label(map_row: pd.Series, raw_row: pd.Series) -> str:
     return str(map_row.get("raw_direction", "") or raw_row.get("raw_direction", "") or "").strip()
 
 
+def _v2_metadata(setup: dict[str, Any], map_row: pd.Series, movement_code: str) -> dict[str, str]:
+    if str(setup.get("movement_code_scheme") or "").strip() != MOVEMENT_SCHEME_V2:
+        return {}
+    parsed = parse_approach_movement_code(movement_code)
+    return {
+        "movement_code_scheme": MOVEMENT_SCHEME_V2,
+        "approach_direction": parsed.approach_direction,
+        "movement_type": parsed.movement_type,
+    }
+
+
 def _append_normalized_row(rows: list[dict[str, Any]], setup: dict[str, Any], map_row: pd.Series, raw_sheet: str, raw_row: pd.Series) -> None:
     source_direction = map_row["raw_direction"] or raw_row.get("raw_direction", "")
     output_movement_code = str(map_row["movement_code"]).strip()
@@ -88,6 +100,7 @@ def _append_normalized_row(rows: list[dict[str, Any]], setup: dict[str, Any], ma
             "time_end": raw_row["time_end"],
             "vehicle_class": raw_row["vehicle_class"],
             "count": raw_row["count"],
+            **_v2_metadata(setup, map_row, output_movement_code),
         }
     )
 
@@ -144,4 +157,9 @@ def normalize(
     if normalized.empty:
         return pd.DataFrame(columns=NORMALIZED_COLUMNS)
     normalized = add_pcu(normalized, pce_factors=pce_factors)
-    return normalized[NORMALIZED_COLUMNS]
+    extra_columns = [
+        column
+        for column in ("movement_code_scheme", "approach_direction", "movement_type")
+        if column in normalized.columns
+    ]
+    return normalized[NORMALIZED_COLUMNS + extra_columns]

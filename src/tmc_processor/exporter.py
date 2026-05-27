@@ -20,15 +20,27 @@ import pandas as pd
 
 from .charts import report_chart_pngs
 from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
-from .diagram import DiagramConfig, MOVEMENT_CODES, generate_four_leg_tmc_diagram
+from .diagram import DiagramConfig, MOVEMENT_CODES, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
+from .movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
+    MOVEMENT_SCHEME_V1,
+    MOVEMENT_SCHEME_V2,
+    approach_direction_label,
+    approach_movement_display_label,
+    movement_type_label,
+    normalize_movement_code_scheme,
+    parse_approach_movement_code,
+)
 from .pcu import pce_factor_traceability_frame
 from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
 from .report_template import (
     DEFAULT_TEMPLATE_MAP_PATH,
     DEFAULT_TEMPLATE_PATH,
     ReportTemplateUnavailable,
+    V2_TEMPLATE_MAP_PATH,
+    V2_TEMPLATE_PATH,
     load_report_template_resources,
     populate_template_report_sheet,
 )
@@ -65,9 +77,30 @@ EXPORT_SHEETS = [
 
 CHART_SHEET_NAME = "Charts"
 DIAGRAM_DATA_SHEET_NAME = "Diagram_Data"
+V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME = "Movement_Diagram_Data"
 TMC_REPORT_SHEET_NAME = "TMC_Report"
 DIAGRAM_SHEET_NAME = "Diagram"
 DEFAULT_CREATE_EXCEL_TABLES = False
+V2_GENERATED_EXPORT_TEMPLATE = "generated_approach_movement_v2"
+V2_TEMPLATE_EXPORT_TEMPLATE = "four_leg_approach_movement_v2"
+V2_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
+V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
+V2_EXPORT_LIMITATION_NOTES = (
+    "Generated v2 workbook export does not use an Excel template; the openpyxl template helper is limited to "
+    "structural/internal validation and is not native-template-preserving. Native Excel COM template export remains "
+    "unsupported; v2 diagram support is table-based in Movement_Diagram_Data "
+    "with a visual PNG included in generated export packages."
+)
+V2_TEMPLATE_EXPORT_LIMITATION_NOTES = (
+    "Limited openpyxl structural template export for approach_movement v2; not safe for visual Excel Template Mode "
+    "because Excel-authored drawings, shapes, arrows, and charts may be dropped or damaged on save. Native Excel COM "
+    "template export, UI Excel Template Mode, and batch export remain blocked."
+)
+V2_TEMPLATE_COM_EXPORT_NOTES = (
+    "Excel Template Mode for approach_movement v2 is native Excel COM-only. "
+    "The export writes mapped data into a temporary copy of the manually authored template, lets Excel recalculate, "
+    "and preserves Excel-authored charts, drawings, shapes, lines, arrows, formulas, and page layout."
+)
 
 
 def _export_metadata_frame(
@@ -104,6 +137,53 @@ def _export_metadata_frame(
         ("show_u_turn", setup.get("show_u_turn", "")),
     ]
     return pd.DataFrame(rows, columns=["field", "value"])
+
+
+def template_paths_for_movement_scheme(movement_code_scheme: str) -> tuple[Path, Path]:
+    """Return the workbook/map pair for a supported movement-code scheme."""
+
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    if scheme == MOVEMENT_SCHEME_V1:
+        return DEFAULT_TEMPLATE_PATH, DEFAULT_TEMPLATE_MAP_PATH
+    if scheme == MOVEMENT_SCHEME_V2:
+        return V2_TEMPLATE_PATH, V2_TEMPLATE_MAP_PATH
+    raise ValueError(f"Unsupported movement_code_scheme: {movement_code_scheme!r}.")
+
+
+def _v2_export_metadata_frame(
+    setup: dict[str, Any],
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    template_version: str = V2_GENERATED_EXPORT_TEMPLATE,
+    export_template: str = V2_GENERATED_EXPORT_TEMPLATE,
+    excel_template_mode_supported: bool = False,
+    native_template_export_supported: bool = False,
+    limitation_notes: str = V2_EXPORT_LIMITATION_NOTES,
+) -> pd.DataFrame:
+    metadata = _export_metadata_frame(
+        setup,
+        export_mode=export_mode or V2_GENERATED_EXPORT_MODE,
+        source_file_name=source_file_name,
+        generated_at=generated_at,
+        template_version=template_version,
+    )
+    extra = pd.DataFrame(
+        [
+            ("movement_code_scheme", MOVEMENT_SCHEME_V2),
+            ("export_template", export_template),
+            ("export_mode_used", export_mode or V2_GENERATED_EXPORT_MODE),
+            ("excel_template_mode_supported", excel_template_mode_supported),
+            ("native_template_export_supported", native_template_export_supported),
+            ("diagram_export_supported", "table_based"),
+            ("diagram_export_artifact", V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
+            ("diagram_png_package_path", "diagram/movement_diagram.png"),
+            ("v2_export_limitation_notes", limitation_notes),
+        ],
+        columns=["field", "value"],
+    )
+    return pd.concat([metadata, extra], ignore_index=True)
 
 
 class _WorkbookAdapter:
@@ -196,6 +276,138 @@ def _peak_report_frame(setup: dict[str, Any], peaks: pd.DataFrame) -> pd.DataFra
             }
         ]
     )
+
+
+def _v2_movement_code_reference_frame() -> pd.DataFrame:
+    rows = []
+    for code in APPROACH_MOVEMENT_CODES:
+        parsed = parse_approach_movement_code(code)
+        rows.append(
+            {
+                "code": code,
+                "approach_direction": parsed.approach_direction,
+                "approach_direction_label": approach_direction_label(parsed.approach_direction),
+                "movement_type": parsed.movement_type,
+                "movement_type_label": movement_type_label(parsed.movement_type),
+                "display_label": approach_movement_display_label(code),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "code",
+            "approach_direction",
+            "approach_direction_label",
+            "movement_type",
+            "movement_type_label",
+            "display_label",
+        ],
+    )
+
+
+def _v2_mapping_scheme_info_frame(mapping: pd.DataFrame | None) -> pd.DataFrame:
+    rows = [
+        {"field": "movement_code_scheme", "value": MOVEMENT_SCHEME_V2},
+        {"field": "movement_code_order", "value": ", ".join(APPROACH_MOVEMENT_CODES)},
+        {"field": "canonical_movement_key", "value": "movement_code"},
+        {"field": "output_movement_code", "value": "Alias preserved when present."},
+        {"field": "diagram_export", "value": "table_based"},
+        {"field": "diagram_export_artifact", "value": V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME},
+        {"field": "diagram_png_package_path", "value": "diagram/movement_diagram.png"},
+        {"field": "excel_template_mode", "value": "openpyxl_template_supported"},
+        {"field": "native_template_export", "value": "unsupported"},
+    ]
+    if mapping is not None and not mapping.empty:
+        cleaned = clean_mapping(mapping)
+        rows.extend(
+            [
+                {"field": "mapping_rows", "value": len(cleaned)},
+                {"field": "included_in_report_rows", "value": int(cleaned["include_in_report"].sum())},
+                {"field": "included_in_peak_rows", "value": int(cleaned["include_in_peak"].sum())},
+            ]
+        )
+    return pd.DataFrame(rows, columns=["field", "value"])
+
+
+def _v2_normalized_frame(normalized: pd.DataFrame) -> pd.DataFrame:
+    frame = normalized.copy()
+    if "movement_code_scheme" not in frame.columns:
+        frame.insert(0, "movement_code_scheme", MOVEMENT_SCHEME_V2)
+    else:
+        frame["movement_code_scheme"] = MOVEMENT_SCHEME_V2
+    if "output_movement_code" not in frame.columns and "movement_code" in frame.columns:
+        frame.insert(frame.columns.get_loc("movement_code") + 1, "output_movement_code", frame["movement_code"])
+    return frame
+
+
+def _v2_movement_summary_frame(movement: pd.DataFrame, normalized: pd.DataFrame) -> pd.DataFrame:
+    if movement.empty and normalized.empty:
+        totals = pd.DataFrame(columns=["movement_code", "count", "pcu"])
+    elif not normalized.empty and {"movement_code", "count", "pcu"}.issubset(normalized.columns):
+        totals = normalized.groupby("movement_code", dropna=False, as_index=False).agg(count=("count", "sum"), pcu=("pcu", "sum"))
+    else:
+        totals = movement.copy()
+
+    lookup: dict[str, dict[str, Any]] = {}
+    if not totals.empty and "movement_code" in totals.columns:
+        for _, row in totals.iterrows():
+            code = str(row.get("movement_code") or "").strip()
+            if code:
+                lookup[code] = row.to_dict()
+
+    rows = []
+    for code in APPROACH_MOVEMENT_CODES:
+        parsed = parse_approach_movement_code(code)
+        source = lookup.get(code, {})
+        rows.append(
+            {
+                "movement_code_scheme": MOVEMENT_SCHEME_V2,
+                "movement_code": code,
+                "approach_direction": parsed.approach_direction,
+                "movement_type": parsed.movement_type,
+                "display_label": approach_movement_display_label(code),
+                "count": source.get("count", 0),
+                "pcu": source.get("pcu", 0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _v2_peak_summary_frame(peaks: pd.DataFrame) -> pd.DataFrame:
+    if peaks.empty:
+        return pd.DataFrame(
+            columns=[
+                "period",
+                "peak_start",
+                "peak_end",
+                "hourly_pcu",
+                "phf",
+                "peak_mode",
+                "peak_selection_source",
+                "movement_code_scheme",
+            ]
+        )
+    frame = peaks.copy()
+    if "movement_code_scheme" not in frame.columns:
+        frame["movement_code_scheme"] = MOVEMENT_SCHEME_V2
+    if "period" in frame.columns:
+        order = {"AM": 0, "PM": 1}
+        frame["_period_order"] = frame["period"].astype(str).str.upper().map(order).fillna(99)
+        frame = frame.sort_values("_period_order").drop(columns=["_period_order"])
+    return frame
+
+
+def _v2_hourly_movement_frame(hourly_movement: pd.DataFrame) -> pd.DataFrame:
+    frame = hourly_movement.copy()
+    time_columns = [column for column in frame.columns if column not in [*APPROACH_MOVEMENT_CODES, "Total"]]
+    first_column = time_columns[:1] or (list(frame.columns[:1]) if len(frame.columns) else [])
+    ordered = [*first_column, *APPROACH_MOVEMENT_CODES]
+    if "Total" in frame.columns:
+        ordered.append("Total")
+    for code in APPROACH_MOVEMENT_CODES:
+        if code not in frame.columns:
+            frame[code] = 0
+    return frame[[column for column in ordered if column in frame.columns]]
 
 
 def _report_text(normalized: pd.DataFrame, peaks: pd.DataFrame, vehicle: pd.DataFrame) -> pd.DataFrame:
@@ -919,9 +1131,10 @@ def _export_workbook_from_template(
     template_map_path: str | None,
     create_excel_tables: bool,
 ) -> bytes:
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V1)
     resources = load_report_template_resources(
-        template_path or DEFAULT_TEMPLATE_PATH,
-        template_map_path or DEFAULT_TEMPLATE_MAP_PATH,
+        template_path or default_template_path,
+        template_map_path or default_template_map_path,
     )
     workbook = load_workbook(resources.template_path)
     adapter = _WorkbookAdapter(workbook)
@@ -1003,12 +1216,17 @@ def _export_workbook_with_excel_com(
     hourly_movement: pd.DataFrame,
     template_path: str | None,
     template_map_path: str | None,
+    *,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+    diagram_movement_codes: tuple[str, ...] = MOVEMENT_CODES,
+    diagram_data_sheet_name: str = DIAGRAM_DATA_SHEET_NAME,
 ) -> bytes:
     from .excel_com_export import export_with_excel_com
 
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(movement_code_scheme)
     resources = load_report_template_resources(
-        template_path or DEFAULT_TEMPLATE_PATH,
-        template_map_path or DEFAULT_TEMPLATE_MAP_PATH,
+        template_path or default_template_path,
+        template_map_path or default_template_map_path,
     )
     chart_source_data = _native_chart_source_data(hourly_movement, sheets["Vehicle_Composition_Report"])
     report_data = {
@@ -1016,6 +1234,8 @@ def _export_workbook_with_excel_com(
         "hourly_movement_pcu": hourly_movement,
         "hourly_vehicle_class": sheets["Hourly_Vehicle_Class"],
         "vehicle_composition_report": sheets["Vehicle_Composition_Report"],
+        "diagram_movement_codes": diagram_movement_codes,
+        "diagram_data_sheet_name": diagram_data_sheet_name,
     }
     with TemporaryDirectory() as temporary_directory:
         output_path = Path(temporary_directory) / "tmc_report_excel_com.xlsx"
@@ -1028,6 +1248,285 @@ def _export_workbook_with_excel_com(
             chart_source_data=chart_source_data,
         )
         return output_path.read_bytes()
+
+
+def export_v2_generated_workbook(
+    result: Any,
+    setup: dict[str, Any] | None = None,
+    mapping: pd.DataFrame | None = None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
+) -> bytes:
+    """Export approach_movement v2 dry-run results as a generated-only workbook."""
+
+    if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
+        raise ValueError("export_v2_generated_workbook requires an approach_movement v2 dry-run result.")
+
+    setup = setup_with_metadata({**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2})
+    mapping_frame = clean_mapping(mapping) if mapping is not None else pd.DataFrame()
+    normalized = _v2_normalized_frame(getattr(result, "normalized"))
+    qc = getattr(result, "qc")
+    hourly = getattr(result, "hourly")
+    hourly_movement = _v2_hourly_movement_frame(getattr(result, "hourly_movement_pcu"))
+    movement = _v2_movement_summary_frame(getattr(result, "movement"), normalized)
+    vehicle = getattr(result, "vehicle")
+    peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
+    pce_factors = getattr(result, "pce_factors", None)
+    movement_diagram = build_v2_movement_diagram_data(
+        movement_summary=movement,
+        hourly_movement_pcu=hourly_movement,
+        peaks=peaks,
+    )
+
+    sheets: dict[str, pd.DataFrame] = {
+        "Export_Metadata": _v2_export_metadata_frame(
+            setup,
+            export_mode=export_mode or V2_GENERATED_EXPORT_MODE,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
+        ),
+        "PCE_Factors": pce_factor_traceability_frame(pce_factors),
+        "Normalized_Data": normalized,
+        "Hourly_Totals": hourly,
+        "Hourly_Movement_PCU": hourly_movement,
+        "Movement_Summary": movement,
+        V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME: movement_diagram,
+        "Vehicle_Composition": vehicle,
+        "Peak_Summary": peaks,
+        "QC_Check": qc,
+        "Movement_Code_Reference": _v2_movement_code_reference_frame(),
+        "Mapping_Scheme_Info": _v2_mapping_scheme_info_frame(mapping_frame),
+    }
+    if mapping is not None:
+        sheets["Mapping"] = mapping_frame
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        writer.book.calculation.calcMode = "auto"
+        writer.book.calculation.fullCalcOnLoad = True
+        writer.book.calculation.forceFullCalc = True
+        for sheet_name, dataframe in sheets.items():
+            dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+            _format_worksheet(
+                writer.sheets[sheet_name],
+                sheet_name,
+                create_excel_tables=create_excel_tables,
+            )
+    return buffer.getvalue()
+
+
+def _v2_template_export_sheets(
+    result: Any,
+    setup: dict[str, Any],
+    mapping: pd.DataFrame | None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    excel_template_mode_supported: bool = False,
+    native_template_export_supported: bool = False,
+    limitation_notes: str = V2_TEMPLATE_EXPORT_LIMITATION_NOTES,
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    mapping_frame = clean_mapping(mapping) if mapping is not None else pd.DataFrame()
+    normalized = _v2_normalized_frame(getattr(result, "normalized"))
+    qc = getattr(result, "qc")
+    hourly = getattr(result, "hourly")
+    hourly_movement = _v2_hourly_movement_frame(getattr(result, "hourly_movement_pcu"))
+    movement = _v2_movement_summary_frame(getattr(result, "movement"), normalized)
+    vehicle = getattr(result, "vehicle")
+    peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
+    vehicle_composition_for_report = vehicle_composition_report(normalized)
+    sheets = {
+        "Export_Metadata": _v2_export_metadata_frame(
+            setup,
+            export_mode=export_mode or V2_TEMPLATE_EXPORT_MODE,
+            source_file_name=source_file_name,
+            generated_at=generated_at,
+            template_version=V2_TEMPLATE_EXPORT_TEMPLATE,
+            export_template=V2_TEMPLATE_EXPORT_TEMPLATE,
+            excel_template_mode_supported=excel_template_mode_supported,
+            native_template_export_supported=native_template_export_supported,
+            limitation_notes=limitation_notes,
+        ),
+        "Setup": _setup_frame(setup),
+        "PCE_Factors": pce_factor_traceability_frame(getattr(result, "pce_factors", None)),
+        "Mapping": mapping_frame,
+        "Movement_Aggregation_Audit": movement_aggregation_audit(normalized, mapping_frame),
+        "Normalized_Data": normalized,
+        "QC_Check": qc,
+        "Hourly_Summary": hourly,
+        "Movement_Summary": movement,
+        "Vehicle_Composition": vehicle,
+        "Hourly_Movement_PCU": hourly_movement,
+        "Hourly_Vehicle_Class": hourly_vehicle_class(normalized, hourly),
+        "Vehicle_Composition_Report": vehicle_composition_for_report,
+        "Vehicle_Group_PCE": vehicle_group_pce(normalized),
+        "PHF_15min": phf_15min(normalized),
+        "Peak_PHF": _peak_report_frame(setup, peaks),
+        "Report_Text": _report_text(normalized, peaks, vehicle),
+    }
+    return sheets, hourly_movement, vehicle_composition_for_report, peaks
+
+
+def _insert_v2_movement_diagram_data_sheet(workbook, movement_diagram: pd.DataFrame, create_excel_tables: bool) -> None:
+    _write_dataframe_sheet(
+        workbook,
+        V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME,
+        movement_diagram,
+        create_excel_tables=create_excel_tables,
+    )
+
+
+def export_v2_template_workbook_com(
+    result: Any,
+    setup: dict[str, Any] | None = None,
+    mapping: pd.DataFrame | None = None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    template_path: str | None = None,
+    template_map_path: str | None = None,
+) -> bytes:
+    """Export a v2 visual template workbook through native Excel COM only."""
+
+    if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
+        raise ValueError("export_v2_template_workbook_com requires an approach_movement v2 dry-run result.")
+
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V2)
+    resolved_template_path = Path(template_path) if template_path else default_template_path
+    resolved_template_map_path = Path(template_map_path) if template_map_path else default_template_map_path
+    if resolved_template_path.name == DEFAULT_TEMPLATE_PATH.name or resolved_template_map_path.name == DEFAULT_TEMPLATE_MAP_PATH.name:
+        raise ValueError("approach_movement v2 COM template export must not use v1 template files.")
+
+    setup = setup_with_metadata({**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2})
+    sheets, hourly_movement, _vehicle_composition_for_report, peaks = _v2_template_export_sheets(
+        result,
+        setup,
+        mapping,
+        export_mode=export_mode or V2_TEMPLATE_EXPORT_MODE,
+        source_file_name=source_file_name,
+        generated_at=generated_at,
+        excel_template_mode_supported=True,
+        native_template_export_supported=True,
+        limitation_notes=V2_TEMPLATE_COM_EXPORT_NOTES,
+    )
+    movement_diagram = build_v2_movement_diagram_data(
+        movement_summary=sheets["Movement_Summary"],
+        hourly_movement_pcu=hourly_movement,
+        peaks=peaks,
+    )
+    sheets[V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME] = movement_diagram
+
+    resources = load_report_template_resources(resolved_template_path, resolved_template_map_path)
+    if resources.mapping.get("movement_code_scheme") != MOVEMENT_SCHEME_V2:
+        raise ValueError("approach_movement v2 COM template export requires a v2 template map.")
+    if resources.mapping.get("template_version") != V2_TEMPLATE_EXPORT_TEMPLATE:
+        raise ValueError("approach_movement v2 COM template export requires the validated v2 template map.")
+    if list(resources.mapping.get("movement_code_order") or []) != list(APPROACH_MOVEMENT_CODES):
+        raise ValueError("approach_movement v2 COM template export requires the canonical v2 movement order.")
+
+    return _export_workbook_with_excel_com(
+        setup=setup,
+        sheets=sheets,
+        hourly_movement=hourly_movement,
+        template_path=str(resources.template_path),
+        template_map_path=str(resources.map_path),
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+        diagram_movement_codes=APPROACH_MOVEMENT_CODES,
+    )
+
+
+def export_v2_template_workbook(
+    result: Any,
+    setup: dict[str, Any] | None = None,
+    mapping: pd.DataFrame | None = None,
+    *,
+    export_mode: str | None = None,
+    source_file_name: str | None = None,
+    generated_at: datetime | str | None = None,
+    include_charts: bool = True,
+    use_excel_com_native_charts: bool = False,
+    template_path: str | None = None,
+    template_map_path: str | None = None,
+    create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
+) -> bytes:
+    """Export a limited v2 structural workbook through openpyxl.
+
+    This helper is for internal validation only. It is not native-template-preserving
+    and must not be routed from the UI as Excel Template Mode.
+    """
+
+    if normalize_movement_code_scheme(getattr(result, "movement_code_scheme", MOVEMENT_SCHEME_V2)) != MOVEMENT_SCHEME_V2:
+        raise ValueError("export_v2_template_workbook requires an approach_movement v2 dry-run result.")
+    if use_excel_com_native_charts:
+        raise ValueError("approach_movement v2 Excel COM/native template export remains unsupported.")
+
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V2)
+    resolved_template_path = Path(template_path) if template_path else default_template_path
+    resolved_template_map_path = Path(template_map_path) if template_map_path else default_template_map_path
+    if resolved_template_path.name == DEFAULT_TEMPLATE_PATH.name or resolved_template_map_path.name == DEFAULT_TEMPLATE_MAP_PATH.name:
+        raise ValueError("approach_movement v2 template export must not use v1 template files.")
+
+    setup = setup_with_metadata({**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2})
+    sheets, hourly_movement, vehicle_composition_for_report, peaks = _v2_template_export_sheets(
+        result,
+        setup,
+        mapping,
+        export_mode=export_mode or V2_TEMPLATE_EXPORT_MODE,
+        source_file_name=source_file_name,
+        generated_at=generated_at,
+    )
+    chart_pngs = dict(report_chart_pngs(hourly_movement, vehicle_composition_for_report, setup=setup)) if include_charts else {}
+    resources = load_report_template_resources(resolved_template_path, resolved_template_map_path)
+    if resources.mapping.get("movement_code_scheme") != MOVEMENT_SCHEME_V2:
+        raise ValueError("approach_movement v2 template export requires a v2 template map.")
+    if resources.mapping.get("template_version") != V2_TEMPLATE_EXPORT_TEMPLATE:
+        raise ValueError("approach_movement v2 template export requires the validated v2 template map.")
+
+    workbook = load_workbook(resources.template_path)
+    adapter = _WorkbookAdapter(workbook)
+    workbook.calculation.calcMode = "auto"
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+
+    for sheet_name in EXPORT_SHEETS:
+        _write_dataframe_sheet(
+            workbook,
+            sheet_name,
+            sheets[sheet_name],
+            create_excel_tables=create_excel_tables,
+        )
+    adapter.sheets = {worksheet.title: worksheet for worksheet in workbook.worksheets}
+    _apply_formula_summaries(adapter)
+    movement_diagram = build_v2_movement_diagram_data(
+        movement_summary=sheets["Movement_Summary"],
+        hourly_movement_pcu=hourly_movement,
+        peaks=peaks,
+    )
+    _insert_v2_movement_diagram_data_sheet(workbook, movement_diagram, create_excel_tables)
+    adapter.sheets = {worksheet.title: worksheet for worksheet in workbook.worksheets}
+
+    populate_template_report_sheet(
+        workbook=workbook,
+        mapping=resources.mapping,
+        setup=setup,
+        hourly_movement_pcu=hourly_movement,
+        hourly_vehicle_class=sheets["Hourly_Vehicle_Class"],
+        vehicle_composition_report=sheets["Vehicle_Composition_Report"],
+        chart_pngs=chart_pngs if include_charts else {},
+        report_sheet_name="Summary",
+        use_native_template_charts=False,
+    )
+    if include_charts:
+        _insert_charts_sheet(adapter, chart_pngs)
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
 
 
 def export_workbook(
@@ -1053,6 +1552,10 @@ def export_workbook(
     template_version: str = TEMPLATE_VERSION,
 ) -> bytes:
     setup = setup_with_metadata(setup)
+    if normalize_movement_code_scheme(setup.get("movement_code_scheme")) == MOVEMENT_SCHEME_V2:
+        raise ValueError(
+            "approach_movement v2 export/report generation is not supported yet; use the v2 dry-run path for summaries only."
+        )
     mapping = clean_mapping(mapping)
     peaks = _resolved_peaks_for_export(setup, normalized, peaks)
     buffer = BytesIO()

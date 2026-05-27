@@ -9,14 +9,19 @@ import re
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from openpyxl import load_workbook
 import pandas as pd
 
+from .diagram import render_v2_movement_diagram_png
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, get_app_version
+from .movement_scheme import MOVEMENT_SCHEME_V2
 from .pcu import pce_factor_traceability_frame
 
 
 PACKAGE_MIME = "application/zip"
+V2_GENERATED_TEMPLATE_VERSION = "generated_approach_movement_v2"
+V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME = "Movement_Diagram_Data"
 
 
 def app_version() -> str:
@@ -192,4 +197,80 @@ def create_export_package_zip(
                 archive.writestr(f"charts/{_safe_member_name(name, 'chart')}.png", bytes(png_bytes))
         if diagram_png:
             archive.writestr("charts/tmc_movement_diagram.png", bytes(diagram_png))
+    return output.getvalue()
+
+
+def _workbook_sheet_csv_bytes(workbook_bytes: bytes, sheet_name: str) -> bytes | None:
+    frame = _workbook_sheet_dataframe(workbook_bytes, sheet_name)
+    if frame is None:
+        return None
+    return frame.to_csv(index=False).encode("utf-8")
+
+
+def _workbook_sheet_dataframe(workbook_bytes: bytes, sheet_name: str) -> pd.DataFrame | None:
+    try:
+        workbook = load_workbook(BytesIO(workbook_bytes), read_only=True, data_only=True)
+    except Exception:
+        return None
+    try:
+        if sheet_name not in workbook.sheetnames:
+            return None
+        rows = list(workbook[sheet_name].iter_rows(values_only=True))
+        if not rows:
+            return None
+        return pd.DataFrame(rows[1:], columns=list(rows[0]))
+    finally:
+        workbook.close()
+
+
+def create_v2_generated_export_package_zip(
+    *,
+    workbook_bytes: bytes,
+    workbook_filename: str = "approach_movement_v2_generated_workbook.xlsx",
+    setup: dict[str, Any] | None = None,
+    peaks: pd.DataFrame | None = None,
+    mapping: pd.DataFrame | None = None,
+    qc: pd.DataFrame | None = None,
+    mapping_preset_bytes: bytes | None = None,
+    mapping_preset_filename: str | None = None,
+    source_file_name: str | None = None,
+    export_mode: str = "Safe PNG Export Mode",
+    generated_at: datetime | str | None = None,
+) -> bytes:
+    """Package a v2 generated workbook and traceability text without raw input files."""
+
+    package_setup = {**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2}
+    summary = build_export_summary_text(
+        setup=package_setup,
+        source_file_name=source_file_name,
+        export_mode=export_mode,
+        peaks=peaks,
+        mapping=mapping,
+        qc=qc,
+        workbook_filename=workbook_filename,
+        export_settings={
+            "movement_code_scheme": MOVEMENT_SCHEME_V2,
+            "template_version": V2_GENERATED_TEMPLATE_VERSION,
+            "v2_export_scope": "generated workbook with table-based movement diagram data and package PNG; template/native export unsupported",
+        },
+        template_version=V2_GENERATED_TEMPLATE_VERSION,
+        generated_at=generated_at,
+    )
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(_safe_member_name(workbook_filename, "tmc_report.xlsx"), bytes(workbook_bytes))
+        archive.writestr("export_summary.txt", summary.encode("utf-8"))
+        if mapping_preset_bytes:
+            archive.writestr(
+                _safe_member_name(mapping_preset_filename, "mapping_preset.mapping.json"),
+                bytes(mapping_preset_bytes),
+            )
+        if mapping is not None and not mapping.empty:
+            archive.writestr("mapping_table.xlsx", mapping_to_excel_bytes(mapping))
+        diagram_data = _workbook_sheet_dataframe(workbook_bytes, V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME)
+        if diagram_data is not None:
+            archive.writestr("diagram/movement_diagram_data.csv", diagram_data.to_csv(index=False).encode("utf-8"))
+            diagram_png = render_v2_movement_diagram_png(diagram_data)
+            if diagram_png:
+                archive.writestr("diagram/movement_diagram.png", diagram_png)
     return output.getvalue()

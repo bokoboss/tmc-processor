@@ -16,6 +16,14 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Polygon, Rectangle
 import pandas as pd
 
+from .movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
+    approach_direction_label,
+    approach_movement_display_label,
+    movement_type_label,
+    parse_approach_movement_code,
+)
+
 
 MOVEMENT_CODES = [
     "NE",
@@ -42,6 +50,9 @@ APPROACH_TABLES = {
     "W": ["WN", "WE", "WS"],
     "E": ["EN", "EW", "ES"],
 }
+# V1 from-to diagram table groups: the first character is the source/from leg
+# and the second character is the destination/to leg. This is intentionally
+# separate from v2 notation, where the first character is travel direction.
 
 
 @dataclass(frozen=True)
@@ -159,6 +170,217 @@ def movement_diagram_values(hourly_movement_pcu: pd.DataFrame, peaks: pd.DataFra
         }
         for movement in MOVEMENT_CODES
     }
+
+
+def _numeric_value(value: Any) -> float:
+    return float(pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0])
+
+
+def _movement_total_lookup(movement_summary: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    if movement_summary is None or movement_summary.empty or "movement_code" not in movement_summary.columns:
+        return {}
+    frame = movement_summary.copy()
+    frame["movement_code"] = frame["movement_code"].fillna("").astype(str).str.strip()
+    aggregations = {}
+    if "count" in frame.columns:
+        aggregations["count"] = ("count", "sum")
+    if "pcu" in frame.columns:
+        aggregations["pcu"] = ("pcu", "sum")
+    if aggregations:
+        frame = frame.groupby("movement_code", dropna=False, as_index=False).agg(**aggregations)
+    lookup: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        code = str(row.get("movement_code") or "").strip()
+        if code:
+            lookup[code] = row.to_dict()
+    return lookup
+
+
+def build_v2_movement_diagram_data(
+    movement_summary: pd.DataFrame | None = None,
+    hourly_movement_pcu: pd.DataFrame | None = None,
+    peaks: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return table-based v2 movement visualization data.
+
+    V2 approach-movement codes use the first letter as travel direction:
+    ``NL`` means northbound left, not "from north leg to left". Phase H keeps
+    the visualization table-based so it does not borrow v1 from-to arrows or
+    physical-approach assumptions.
+    """
+
+    total_lookup = _movement_total_lookup(movement_summary)
+    hourly = hourly_movement_pcu if hourly_movement_pcu is not None else pd.DataFrame()
+    peak_frame = peaks if peaks is not None else pd.DataFrame()
+    am_row = _hour_row(hourly, _peak_start(peak_frame, "AM"))
+    pm_row = _hour_row(hourly, _peak_start(peak_frame, "PM"))
+
+    rows = []
+    for order, code in enumerate(APPROACH_MOVEMENT_CODES, start=1):
+        parsed = parse_approach_movement_code(code)
+        totals = total_lookup.get(code, {})
+        rows.append(
+            {
+                "movement_code": code,
+                "approach_direction": parsed.approach_direction,
+                "approach_direction_label": approach_direction_label(parsed.approach_direction),
+                "movement_type": parsed.movement_type,
+                "movement_type_label": movement_type_label(parsed.movement_type),
+                "display_label": approach_movement_display_label(code),
+                "diagram_group": approach_direction_label(parsed.approach_direction),
+                "position_order": order,
+                "total_count": _numeric_value(totals.get("count", 0)),
+                "total_pcu": _numeric_value(totals.get("pcu", 0)),
+                "am_peak_count": None,
+                "am_peak_pcu": _numeric_value(am_row[code]) if am_row is not None and code in am_row else 0,
+                "pm_peak_count": None,
+                "pm_peak_pcu": _numeric_value(pm_row[code]) if pm_row is not None and code in pm_row else 0,
+                "diagram_order": order,
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "movement_code",
+            "approach_direction",
+            "approach_direction_label",
+            "movement_type",
+            "movement_type_label",
+            "display_label",
+            "diagram_group",
+            "position_order",
+            "total_count",
+            "total_pcu",
+            "am_peak_count",
+            "am_peak_pcu",
+            "pm_peak_count",
+            "pm_peak_pcu",
+            "diagram_order",
+        ],
+    )
+
+
+def _v2_diagram_frame(diagram_data: pd.DataFrame) -> pd.DataFrame:
+    frame = diagram_data.copy() if diagram_data is not None else pd.DataFrame()
+    if "movement_code" not in frame.columns:
+        frame["movement_code"] = []
+    frame["movement_code"] = frame["movement_code"].fillna("").astype(str).str.strip()
+    rows = []
+    by_code = {str(row.get("movement_code") or "").strip(): row for _, row in frame.iterrows()}
+    for order, code in enumerate(APPROACH_MOVEMENT_CODES, start=1):
+        source = by_code.get(code, {})
+        parsed = parse_approach_movement_code(code)
+        rows.append(
+            {
+                "movement_code": code,
+                "approach_direction_label": source.get(
+                    "approach_direction_label",
+                    approach_direction_label(parsed.approach_direction),
+                ),
+                "movement_type_label": source.get("movement_type_label", movement_type_label(parsed.movement_type)),
+                "total_count": _numeric_value(source.get("total_count", 0)),
+                "total_pcu": _numeric_value(source.get("total_pcu", 0)),
+                "diagram_order": order,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _format_v2_metric(value: Any) -> str:
+    numeric = _numeric_value(value)
+    return f"{numeric:,.0f}"
+
+
+def render_v2_movement_diagram_png(diagram_data: pd.DataFrame) -> bytes:
+    """Render a deterministic table-style PNG for v2 approach-movement data.
+
+    The visual groups movements by travel direction and movement type only. It
+    intentionally avoids v1-style turn arrows because v2 codes are not from-to
+    geometry and left/right placement needs a separately tested coordinate model.
+    """
+
+    _configure_fonts()
+    frame = _v2_diagram_frame(diagram_data)
+    lookup = {row.movement_code: row for row in frame.itertuples(index=False)}
+    groups = [
+        ("Northbound", ["NL", "NT", "NR", "NU"]),
+        ("Southbound", ["SL", "ST", "SR", "SU"]),
+        ("Eastbound", ["EL", "ET", "ER", "EU"]),
+        ("Westbound", ["WL", "WT", "WR", "WU"]),
+    ]
+    movement_short = {
+        "Left turn": "Left",
+        "Through": "Through",
+        "Right turn": "Right",
+        "U-turn": "U-turn",
+    }
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.patch.set_facecolor("white")
+    for ax, (title, codes) in zip(axes.flat, groups):
+        ax.set_xlim(0, 4)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        ax.set_title(title, fontsize=15, fontweight="bold", color="#1F4E78", pad=12)
+        for index, code in enumerate(codes):
+            row = lookup[code]
+            x = index + 0.05
+            width = 0.9
+            ax.add_patch(
+                Rectangle(
+                    (x, 0.08),
+                    width,
+                    0.78,
+                    facecolor="#F8FAFC",
+                    edgecolor="#8EAADB",
+                    linewidth=1.2,
+                )
+            )
+            ax.add_patch(
+                Rectangle(
+                    (x, 0.70),
+                    width,
+                    0.16,
+                    facecolor="#D9EAF7",
+                    edgecolor="#8EAADB",
+                    linewidth=1.0,
+                )
+            )
+            label = movement_short.get(str(row.movement_type_label), str(row.movement_type_label))
+            ax.text(x + width / 2, 0.78, code, ha="center", va="center", fontsize=13, fontweight="bold", color="#1F4E78")
+            ax.text(x + width / 2, 0.58, label, ha="center", va="center", fontsize=10, color="#333333")
+            ax.text(
+                x + width / 2,
+                0.40,
+                f"PCU {_format_v2_metric(row.total_pcu)}",
+                ha="center",
+                va="center",
+                fontsize=10,
+                fontweight="bold",
+                color="#111827",
+            )
+            ax.text(
+                x + width / 2,
+                0.24,
+                f"Count {_format_v2_metric(row.total_count)}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#4B5563",
+            )
+
+    fig.suptitle("Approach-Movement Diagram Data", fontsize=18, fontweight="bold", color="#111827", y=0.98)
+    fig.text(
+        0.5,
+        0.025,
+        "V2 semantics: N/S/E/W are travel directions. This visual does not use v1 from-to arrows.",
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="#4B5563",
+    )
+    fig.tight_layout(rect=(0.02, 0.05, 0.98, 0.94), h_pad=2.0, w_pad=1.2)
+    return _write_png(fig)
 
 
 def _summary_values(hourly_movement_pcu: pd.DataFrame, peaks: pd.DataFrame) -> dict[str, int]:

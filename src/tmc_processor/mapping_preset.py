@@ -13,8 +13,15 @@ import pandas as pd
 
 from .constants import MAPPING_COLUMNS
 from .importer import extract_raw_direction
-from .mapping import clean_mapping, default_mapping_for_sheets
+from .mapping import (
+    OPTIONAL_MAPPING_METADATA_COLUMNS,
+    clean_mapping,
+    default_mapping_for_sheets,
+    normalize_approach_movement_mapping,
+    validate_mapping_scheme,
+)
 from .metadata import APP_VERSION
+from .movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 
 
 CURRENT_MAPPING_PRESET_SCHEMA_VERSION = 1
@@ -37,6 +44,8 @@ MAPPING_PRESET_ROW_FIELDS = [
     "include_in_peak",
     "note",
     "remark",
+    "approach_direction",
+    "movement_type",
 ]
 
 
@@ -58,6 +67,13 @@ class MappingPresetApplyResult:
     extra_preset_row_count: int
     missing_detected_sheets: tuple[str, ...] = ()
     extra_preset_sheets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MappingPresetMetadata:
+    movement_code_scheme: str
+    template_version: str = ""
+    intersection_type: str = "four_leg"
 
 
 def _utc_now_text() -> str:
@@ -83,7 +99,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _preset_rows(mapping: Any) -> list[dict[str, Any]]:
+def _preset_rows(mapping: Any, *, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[dict[str, Any]]:
     if mapping is None:
         return []
     frame = mapping if isinstance(mapping, pd.DataFrame) else pd.DataFrame(mapping)
@@ -92,7 +108,7 @@ def _preset_rows(mapping: Any) -> list[dict[str, Any]]:
 
     note_values = {
         column: frame[column].fillna("").astype(str).tolist()
-        for column in ("note", "remark")
+        for column in (*OPTIONAL_MAPPING_METADATA_COLUMNS, "note", "remark")
         if column in frame.columns
     }
     cleaned = clean_mapping(frame)
@@ -124,23 +140,26 @@ def build_mapping_preset(
     *,
     preset_name: str | None = None,
     notes: str | None = None,
-    movement_code_scheme: str = "from_to",
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
     intersection_type: str = "four_leg",
+    template_version: str | None = None,
     created_at: str | None = None,
     app_version: str | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable preset that contains mapping rows only."""
 
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     return {
         "schema_version": CURRENT_MAPPING_PRESET_SCHEMA_VERSION,
         "preset_type": MAPPING_PRESET_TYPE,
         "preset_name": str(preset_name or "TMC Mapping Preset"),
         "created_at": created_at or _utc_now_text(),
         "app_version": app_version if app_version is not None else APP_VERSION,
-        "movement_code_scheme": movement_code_scheme,
+        "movement_code_scheme": scheme,
+        **({"template_version": str(template_version)} if template_version is not None else {}),
         "intersection_type": intersection_type,
         "notes": str(notes or ""),
-        "mapping_rows": _preset_rows(mapping),
+        "mapping_rows": _preset_rows(mapping, movement_code_scheme=scheme),
     }
 
 
@@ -175,6 +194,7 @@ def load_mapping_preset(data: str | bytes | bytearray) -> MappingPresetLoadResul
         rows = []
         warnings.append("Mapping preset mapping_rows was not a list and was ignored.")
 
+    scheme = normalize_movement_code_scheme(raw.get("movement_code_scheme") or MOVEMENT_SCHEME_V1)
     normalized_rows = []
     for item in rows:
         if not isinstance(item, dict):
@@ -182,7 +202,34 @@ def load_mapping_preset(data: str | bytes | bytearray) -> MappingPresetLoadResul
         row = {field: _json_safe(item.get(field, "")) for field in MAPPING_PRESET_ROW_FIELDS if field in item}
         if "output_movement_code" not in row and "movement_code" in item:
             row["output_movement_code"] = _json_safe(item.get("movement_code", ""))
+        for key, value in item.items():
+            if key not in row and key not in {"movement_code"}:
+                row[str(key)] = _json_safe(value)
         normalized_rows.append(row)
+
+    validation_issues = validate_mapping_preset_scheme(
+        {"movement_code_scheme": scheme, "mapping_rows": normalized_rows}
+    )
+    if validation_issues:
+        raise MappingPresetError("; ".join(validation_issues))
+
+    known_top_level_fields = {
+        "schema_version",
+        "preset_type",
+        "preset_name",
+        "created_at",
+        "app_version",
+        "movement_code_scheme",
+        "template_version",
+        "intersection_type",
+        "notes",
+        "mapping_rows",
+    }
+    extra_metadata = {
+        str(key): _json_safe(value)
+        for key, value in raw.items()
+        if key not in known_top_level_fields
+    }
 
     preset = {
         "schema_version": raw.get("schema_version", CURRENT_MAPPING_PRESET_SCHEMA_VERSION),
@@ -190,15 +237,49 @@ def load_mapping_preset(data: str | bytes | bytearray) -> MappingPresetLoadResul
         "preset_name": str(raw.get("preset_name") or ""),
         "created_at": str(raw.get("created_at") or ""),
         "app_version": str(raw.get("app_version") or ""),
-        "movement_code_scheme": str(raw.get("movement_code_scheme") or "from_to"),
+        "movement_code_scheme": scheme,
+        "template_version": str(raw.get("template_version") or ""),
         "intersection_type": str(raw.get("intersection_type") or "four_leg"),
         "notes": str(raw.get("notes") or ""),
         "mapping_rows": normalized_rows,
     }
+    preset.update(extra_metadata)
     return MappingPresetLoadResult(preset=preset, warnings=tuple(warnings))
 
 
-def _rows_to_mapping_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
+def detect_mapping_preset_scheme(preset: dict[str, Any] | MappingPresetLoadResult) -> str:
+    preset_dict = preset.preset if isinstance(preset, MappingPresetLoadResult) else preset
+    if not isinstance(preset_dict, dict):
+        return MOVEMENT_SCHEME_V1
+    return normalize_movement_code_scheme(preset_dict.get("movement_code_scheme") or MOVEMENT_SCHEME_V1)
+
+
+def mapping_preset_metadata(preset: dict[str, Any] | MappingPresetLoadResult) -> MappingPresetMetadata:
+    preset_dict = preset.preset if isinstance(preset, MappingPresetLoadResult) else preset
+    source = preset_dict if isinstance(preset_dict, dict) else {}
+    return MappingPresetMetadata(
+        movement_code_scheme=normalize_movement_code_scheme(source.get("movement_code_scheme") or MOVEMENT_SCHEME_V1),
+        template_version=str(source.get("template_version") or ""),
+        intersection_type=str(source.get("intersection_type") or "four_leg"),
+    )
+
+
+def validate_mapping_preset_scheme(preset: dict[str, Any] | MappingPresetLoadResult) -> list[str]:
+    preset_dict = preset.preset if isinstance(preset, MappingPresetLoadResult) else preset
+    if not isinstance(preset_dict, dict):
+        return []
+    scheme = detect_mapping_preset_scheme(preset_dict)
+    rows = preset_dict.get("mapping_rows", [])
+    frame = _rows_to_mapping_frame(rows if isinstance(rows, list) else [], movement_code_scheme=scheme)
+    return validate_mapping_scheme(frame, scheme)
+
+
+def _rows_to_mapping_frame(
+    rows: list[dict[str, Any]],
+    *,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     mapping_rows = []
     for row in rows:
         mapping_row = {
@@ -215,8 +296,11 @@ def _rows_to_mapping_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
             "include_in_report": row.get("include_in_report", True),
             "aggregation_method": row.get("aggregation_method", ""),
         }
+        for column in OPTIONAL_MAPPING_METADATA_COLUMNS:
+            if column in row:
+                mapping_row[column] = row.get(column, "")
         code = str(mapping_row["movement_code"] or "")
-        if len(code) >= 2:
+        if scheme != MOVEMENT_SCHEME_V2 and len(code) >= 2:
             mapping_row["from_leg"] = mapping_row["from_leg"] or code[:1]
             mapping_row["to_leg"] = mapping_row["to_leg"] or code[1:2]
         for column in ("note", "remark"):
@@ -225,7 +309,8 @@ def _rows_to_mapping_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
         mapping_rows.append(mapping_row)
     if not mapping_rows:
         return pd.DataFrame(columns=MAPPING_COLUMNS)
-    cleaned = clean_mapping(pd.DataFrame(mapping_rows))
+    raw_frame = pd.DataFrame(mapping_rows)
+    cleaned = normalize_approach_movement_mapping(raw_frame) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(raw_frame)
     for column in ("note", "remark"):
         if any(column in row for row in mapping_rows):
             cleaned[column] = [str(row.get(column, "") or "") for row in mapping_rows]
@@ -240,7 +325,8 @@ def apply_mapping_preset_to_detected_sheets(
 
     preset_dict = preset.preset if isinstance(preset, MappingPresetLoadResult) else preset
     rows = preset_dict.get("mapping_rows", []) if isinstance(preset_dict, dict) else []
-    preset_frame = _rows_to_mapping_frame(rows if isinstance(rows, list) else [])
+    scheme = detect_mapping_preset_scheme(preset_dict) if isinstance(preset_dict, dict) else MOVEMENT_SCHEME_V1
+    preset_frame = _rows_to_mapping_frame(rows if isinstance(rows, list) else [], movement_code_scheme=scheme)
     detected = [str(sheet) for sheet in detected_raw_sheets]
     detected_set = set(detected)
 
@@ -271,7 +357,7 @@ def apply_mapping_preset_to_detected_sheets(
     if active.empty:
         active = default_mapping_for_sheets(detected)
     else:
-        cleaned = clean_mapping(active)
+        cleaned = normalize_approach_movement_mapping(active) if scheme == MOVEMENT_SCHEME_V2 else clean_mapping(active)
         for column in ("note", "remark"):
             if column in active.columns:
                 cleaned[column] = active[column].fillna("").astype(str).tolist()

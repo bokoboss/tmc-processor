@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from .constants import VEHICLE_CLASSES
+from .movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 from .time_utils import time_to_minutes, minutes_to_time
 
 
@@ -64,14 +65,16 @@ def _hourly_frame(normalized: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _movement_columns(mapping: pd.DataFrame) -> list[str]:
+def _movement_columns(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    standard_order = APPROACH_MOVEMENT_CODES if scheme == MOVEMENT_SCHEME_V2 else STANDARD_MOVEMENT_ORDER
     present = []
     if "movement_code" in mapping:
         present = [str(value).strip() for value in mapping["movement_code"].dropna() if str(value).strip()]
     elif "output_movement_code" in mapping:
         present = [str(value).strip() for value in mapping["output_movement_code"].dropna() if str(value).strip()]
-    extras = sorted(code for code in set(present) if code not in STANDARD_MOVEMENT_ORDER)
-    return STANDARD_MOVEMENT_ORDER + extras
+    extras = sorted(code for code in set(present) if code not in standard_order)
+    return standard_order + extras
 
 
 def _with_report_movement_code(normalized: pd.DataFrame) -> pd.DataFrame:
@@ -124,8 +127,12 @@ def vehicle_composition(normalized: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def hourly_movement_pcu(normalized: pd.DataFrame, mapping: pd.DataFrame) -> pd.DataFrame:
-    movement_columns = _movement_columns(mapping)
+def hourly_movement_pcu(
+    normalized: pd.DataFrame,
+    mapping: pd.DataFrame,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
+    movement_columns = _movement_columns(mapping, movement_code_scheme=movement_code_scheme)
     columns = ["เวลา", *movement_columns, "Total"]
     df = _hourly_frame(normalized)
     if df.empty:

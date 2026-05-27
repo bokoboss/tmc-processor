@@ -1,0 +1,637 @@
+{
+  "schema_version": 2,
+  "template_workbook": "four_leg_tmc_report_template_approach_v2.xlsx",
+  "template_sheet": "Summary",
+  "writable_ranges": [
+    "E4:S4",
+    "E5:E5",
+    "K5:M5",
+    "Q5:R5",
+    "E6:E6",
+    "K6:M6",
+    "K11:K11",
+    "G12:H12",
+    "Q17:R17",
+    "R19:R19",
+    "D24:D24",
+    "D26:D26",
+    "O32:O32",
+    "K32:K32",
+    "E35:R36",
+    "V9:AM21",
+    "V22:V22",
+    "V27:AJ39",
+    "V40:V40",
+    "AP39:BA39"
+  ],
+  "protected_formula_ranges": [
+    "B2:B2",
+    "C8:C9",
+    "J14:M16",
+    "E19:G22",
+    "O21:Q24",
+    "J27:M29",
+    "F30:F32",
+    "W22:AM22",
+    "W28:AJ40",
+    "AP38:BA38",
+    "AP40:BA40"
+  ],
+  "formula_overwrite_ranges": [
+    "B2:B2"
+  ],
+  "summary_formula_write_mode": "preserve_template",
+  "workbook_structure": {
+    "structural_check": {
+      "zip_package_valid": true,
+      "workbook_xml_parsed": true,
+      "worksheet_xml_parsed": true
+    },
+    "sheets": [
+      "Summary"
+    ],
+    "used_range": "A1:BG218",
+    "merged_ranges": [
+      "D33:E33",
+      "E35:R36",
+      "B61:U62",
+      "V26:V27",
+      "W26:AJ26",
+      "D30:E30",
+      "D31:E31",
+      "D32:E32",
+      "W23:Y23",
+      "Z23:AB23",
+      "AC23:AE23",
+      "AF23:AH23",
+      "W24:Y24",
+      "Z24:AB24",
+      "AC24:AE24",
+      "AF24:AH24",
+      "C6:D6",
+      "K6:M6",
+      "C8:H8",
+      "R8:S8",
+      "V8:V9",
+      "W8:AM8",
+      "C9:H9",
+      "B2:AN2",
+      "C4:D4",
+      "E4:S4",
+      "C5:D5",
+      "K5:M5",
+      "O5:P5",
+      "Q5:R5"
+    ],
+    "audit": {
+      "formula_ref_issues": [],
+      "external_workbook_reference_issues": [],
+      "missing_sheet_reference_issues": [],
+      "broken_chart_source_references": []
+    },
+    "notes": [
+      "Map regenerated from read-only XML inspection of the manually rebuilt template.",
+      "Do not clean or save this workbook programmatically. Keep the Excel-authored template as the source layout file.",
+      "Template-driven export should write only mapped cells and native chart source ranges; it should not edit native chart objects."
+    ]
+  },
+  "metadata_cells": {
+    "report_title": {
+      "cell": "B2",
+      "merged_range": "B2:AN2"
+    },
+    "project": {
+      "label_cell": "C4",
+      "label_range": "C4:D4",
+      "value_cell": "E4",
+      "value_range": "E4:S4"
+    },
+    "survey_point": {
+      "label_cell": "C5",
+      "label_range": "C5:D5",
+      "value_cell": "E5"
+    },
+    "survey_date": {
+      "label_cell": "J5",
+      "value_cell": "K5",
+      "value_range": "K5:M5"
+    },
+    "weather": {
+      "label_cell": "O5",
+      "label_range": "O5:P5",
+      "value_cell": "Q5",
+      "value_range": "Q5:R5"
+    },
+    "responsible_party": {
+      "label_cell": "C6",
+      "label_range": "C6:D6",
+      "value_cell": "E6"
+    },
+    "survey_period": {
+      "label_cell": "J6",
+      "value_cell": "K6",
+      "value_range": "K6:M6"
+    }
+  },
+  "movement_diagram_cells": {
+    "formula_write_mode": "preserve_template",
+    "diagram_title": {
+      "cell": "C8",
+      "merged_range": "C8:H8"
+    },
+    "diagram_date": {
+      "cell": "C9",
+      "merged_range": "C9:H9"
+    },
+    "direction_labels": {
+      "north_label": {
+        "cell": "G12"
+      },
+      "south_label": {
+        "cell": "O32"
+      },
+      "east_label": {
+        "cell": "Q17"
+      },
+      "west_label": {
+        "cell": "D26"
+      }
+    },
+    "road_labels": {
+      "north_road": {
+        "cell": "K11"
+      },
+      "south_road": {
+        "cell": "K32"
+      },
+      "east_road": {
+        "cell": "R19"
+      },
+      "west_road": {
+        "cell": "D24"
+      }
+    },
+    "movement_value_rows": {
+      "total_12_hour": {
+        "helper_row": 22
+      },
+      "pm_peak_hour": {
+        "helper_row": 20
+      },
+      "am_peak_hour": {
+        "helper_row": 11
+      }
+    },
+    "diagram_movements": {
+      "NL": {
+        "approach": "north",
+        "header_cell": "J30",
+        "total_12_hour_cell": "J29",
+        "pm_peak_hour_cell": "J28",
+        "am_peak_hour_cell": "J27",
+        "approach_direction": "N",
+        "movement_type": "L"
+      },
+      "NT": {
+        "approach": "north",
+        "header_cell": "K30",
+        "total_12_hour_cell": "K29",
+        "pm_peak_hour_cell": "K28",
+        "am_peak_hour_cell": "K27",
+        "approach_direction": "N",
+        "movement_type": "T"
+      },
+      "NR": {
+        "approach": "north",
+        "header_cell": "L30",
+        "total_12_hour_cell": "L29",
+        "pm_peak_hour_cell": "L28",
+        "am_peak_hour_cell": "L27",
+        "approach_direction": "N",
+        "movement_type": "R"
+      },
+      "NU": {
+        "approach": "north",
+        "header_cell": "M30",
+        "total_12_hour_cell": "M29",
+        "pm_peak_hour_cell": "M28",
+        "am_peak_hour_cell": "M27",
+        "approach_direction": "N",
+        "movement_type": "U"
+      },
+      "SL": {
+        "approach": "south",
+        "header_cell": "M13",
+        "total_12_hour_cell": "M14",
+        "pm_peak_hour_cell": "M15",
+        "am_peak_hour_cell": "M16",
+        "approach_direction": "S",
+        "movement_type": "L"
+      },
+      "ST": {
+        "approach": "south",
+        "header_cell": "L13",
+        "total_12_hour_cell": "L14",
+        "pm_peak_hour_cell": "L15",
+        "am_peak_hour_cell": "L16",
+        "approach_direction": "S",
+        "movement_type": "T"
+      },
+      "SR": {
+        "approach": "south",
+        "header_cell": "K13",
+        "total_12_hour_cell": "K14",
+        "pm_peak_hour_cell": "K15",
+        "am_peak_hour_cell": "K16",
+        "approach_direction": "S",
+        "movement_type": "R"
+      },
+      "SU": {
+        "approach": "south",
+        "header_cell": "J13",
+        "total_12_hour_cell": "J14",
+        "pm_peak_hour_cell": "J15",
+        "am_peak_hour_cell": "J16",
+        "approach_direction": "S",
+        "movement_type": "U"
+      },
+      "EL": {
+        "approach": "east",
+        "header_cell": "D19",
+        "total_12_hour_cell": "E19",
+        "pm_peak_hour_cell": "F19",
+        "am_peak_hour_cell": "G19",
+        "approach_direction": "E",
+        "movement_type": "L"
+      },
+      "ET": {
+        "approach": "east",
+        "header_cell": "D20",
+        "total_12_hour_cell": "E20",
+        "pm_peak_hour_cell": "F20",
+        "am_peak_hour_cell": "G20",
+        "approach_direction": "E",
+        "movement_type": "T"
+      },
+      "ER": {
+        "approach": "east",
+        "header_cell": "D21",
+        "total_12_hour_cell": "E21",
+        "pm_peak_hour_cell": "F21",
+        "am_peak_hour_cell": "G21",
+        "approach_direction": "E",
+        "movement_type": "R"
+      },
+      "EU": {
+        "approach": "east",
+        "header_cell": "D22",
+        "total_12_hour_cell": "E22",
+        "pm_peak_hour_cell": "F22",
+        "am_peak_hour_cell": "G22",
+        "approach_direction": "E",
+        "movement_type": "U"
+      },
+      "WL": {
+        "approach": "west",
+        "header_cell": "R24",
+        "total_12_hour_cell": "Q24",
+        "pm_peak_hour_cell": "P24",
+        "am_peak_hour_cell": "O24",
+        "approach_direction": "W",
+        "movement_type": "L"
+      },
+      "WT": {
+        "approach": "west",
+        "header_cell": "R23",
+        "total_12_hour_cell": "Q23",
+        "pm_peak_hour_cell": "P23",
+        "am_peak_hour_cell": "O23",
+        "approach_direction": "W",
+        "movement_type": "T"
+      },
+      "WR": {
+        "approach": "west",
+        "header_cell": "R22",
+        "total_12_hour_cell": "Q22",
+        "pm_peak_hour_cell": "P22",
+        "am_peak_hour_cell": "O22",
+        "approach_direction": "W",
+        "movement_type": "R"
+      },
+      "WU": {
+        "approach": "west",
+        "header_cell": "R21",
+        "total_12_hour_cell": "Q21",
+        "pm_peak_hour_cell": "P21",
+        "am_peak_hour_cell": "O21",
+        "approach_direction": "W",
+        "movement_type": "U"
+      }
+    },
+    "approach_tables": {
+      "north": {
+        "movement_codes": [
+          "NL",
+          "NT",
+          "NR",
+          "NU"
+        ],
+        "header_cells": {
+          "NL": "J30",
+          "NT": "K30",
+          "NR": "L30",
+          "NU": "M30"
+        },
+        "total_12_hour_cells": {
+          "NL": "J29",
+          "NT": "K29",
+          "NR": "L29",
+          "NU": "M29"
+        },
+        "pm_peak_hour_cells": {
+          "NL": "J28",
+          "NT": "K28",
+          "NR": "L28",
+          "NU": "M28"
+        },
+        "am_peak_hour_cells": {
+          "NL": "J27",
+          "NT": "K27",
+          "NR": "L27",
+          "NU": "M27"
+        }
+      },
+      "south": {
+        "movement_codes": [
+          "SL",
+          "ST",
+          "SR",
+          "SU"
+        ],
+        "header_cells": {
+          "SL": "M13",
+          "ST": "L13",
+          "SR": "K13",
+          "SU": "J13"
+        },
+        "total_12_hour_cells": {
+          "SL": "M14",
+          "ST": "L14",
+          "SR": "K14",
+          "SU": "J14"
+        },
+        "pm_peak_hour_cells": {
+          "SL": "M15",
+          "ST": "L15",
+          "SR": "K15",
+          "SU": "J15"
+        },
+        "am_peak_hour_cells": {
+          "SL": "M16",
+          "ST": "L16",
+          "SR": "K16",
+          "SU": "J16"
+        }
+      },
+      "east": {
+        "movement_codes": [
+          "EL",
+          "ET",
+          "ER",
+          "EU"
+        ],
+        "header_cells": {
+          "EL": "D19",
+          "ET": "D20",
+          "ER": "D21",
+          "EU": "D22"
+        },
+        "total_12_hour_cells": {
+          "EL": "E19",
+          "ET": "E20",
+          "ER": "E21",
+          "EU": "E22"
+        },
+        "pm_peak_hour_cells": {
+          "EL": "F19",
+          "ET": "F20",
+          "ER": "F21",
+          "EU": "F22"
+        },
+        "am_peak_hour_cells": {
+          "EL": "G19",
+          "ET": "G20",
+          "ER": "G21",
+          "EU": "G22"
+        }
+      },
+      "west": {
+        "movement_codes": [
+          "WL",
+          "WT",
+          "WR",
+          "WU"
+        ],
+        "header_cells": {
+          "WL": "R24",
+          "WT": "R23",
+          "WR": "R22",
+          "WU": "R21"
+        },
+        "total_12_hour_cells": {
+          "WL": "Q24",
+          "WT": "Q23",
+          "WR": "Q22",
+          "WU": "Q21"
+        },
+        "pm_peak_hour_cells": {
+          "WL": "P24",
+          "WT": "P23",
+          "WR": "P22",
+          "WU": "P21"
+        },
+        "am_peak_hour_cells": {
+          "WL": "O24",
+          "WT": "O23",
+          "WR": "O22",
+          "WU": "O21"
+        }
+      }
+    },
+    "caption": {
+      "cell": "E35",
+      "merged_range": "E35:R36"
+    },
+    "missing_standard_movement_codes": [],
+    "movement_code_scheme": "approach_movement"
+  },
+  "summary_box_cells": {
+    "am_peak_total_pcu": {
+      "label_cell": "D30",
+      "label_range": "D30:E30",
+      "value_cell": "F30"
+    },
+    "pm_peak_total_pcu": {
+      "label_cell": "D31",
+      "label_range": "D31:E31",
+      "value_cell": "F31"
+    },
+    "total_12_hour_pcu": {
+      "label_cell": "D32",
+      "label_range": "D32:E32",
+      "value_cell": "F32"
+    },
+    "direction_summary_label": {
+      "cell": "D33",
+      "merged_range": "D33:E33"
+    }
+  },
+  "hourly_movement_table": {
+    "anchor": "V8",
+    "title_range": "W8:AM8",
+    "header_row": 9,
+    "time_column": "V",
+    "first_data_row": 10,
+    "last_data_row": 21,
+    "total_row": 22,
+    "range": "V8:AM22",
+    "columns": {
+      "time": "V",
+      "NL": "W",
+      "NT": "X",
+      "NR": "Y",
+      "NU": "Z",
+      "SL": "AA",
+      "ST": "AB",
+      "SR": "AC",
+      "SU": "AD",
+      "EL": "AE",
+      "ET": "AF",
+      "ER": "AG",
+      "EU": "AH",
+      "WL": "AI",
+      "WT": "AJ",
+      "WR": "AK",
+      "WU": "AL",
+      "Total": "AM"
+    },
+    "movement_code_scheme": "approach_movement",
+    "movement_code_order": [
+      "NL",
+      "NT",
+      "NR",
+      "NU",
+      "SL",
+      "ST",
+      "SR",
+      "SU",
+      "EL",
+      "ET",
+      "ER",
+      "EU",
+      "WL",
+      "WT",
+      "WR",
+      "WU"
+    ]
+  },
+  "hourly_vehicle_class_table": {
+    "anchor": "V26",
+    "title_range": "W26:AJ26",
+    "header_row": 27,
+    "time_column": "V",
+    "first_data_row": 28,
+    "last_data_row": 39,
+    "total_row": 40,
+    "range": "V26:AJ40",
+    "columns": {
+      "time": "V",
+      "total_pcu": "W",
+      "total_vehicles": "X",
+      "Bicy": "Y",
+      "MC": "Z",
+      "PC<7": "AA",
+      "PC>7": "AB",
+      "LB": "AC",
+      "MB": "AD",
+      "HB": "AE",
+      "LT": "AF",
+      "MT": "AG",
+      "HT": "AH",
+      "TR": "AI",
+      "STR": "AJ"
+    }
+  },
+  "chart_anchors": {
+    "hourly_pcu_line_chart": {
+      "chart_xml": "xl/charts/chart1.xml",
+      "drawing_relationship_id": "rId1",
+      "drawing_name": "Chart 2",
+      "top_left_cell": "B37",
+      "bottom_right_cell": "U61",
+      "source_ranges": {
+        "categories": "Summary!$V$10:$V$21",
+        "values": "Summary!$AM$10:$AM$21"
+      }
+    },
+    "vehicle_composition_bar_chart": {
+      "chart_xml": "xl/charts/chart2.xml",
+      "drawing_relationship_id": "rId2",
+      "drawing_name": "Chart 18",
+      "top_left_cell": "U41",
+      "bottom_right_cell": "AG61",
+      "source_ranges": {
+        "categories": "Summary!$AP$39:$BA$39",
+        "values": "Summary!$AP$40:$BA$40"
+      }
+    },
+    "native_hourly_chart_source": {
+      "categories": "V10:V21",
+      "values": "AM10:AM21"
+    },
+    "native_vehicle_composition_chart_source": {
+      "categories": "AP39:BA39",
+      "values": "AP40:BA40"
+    },
+    "hourly_pcu_png_anchor": {
+      "cell": "B37",
+      "range": "B37:U61",
+      "note": "Generated PNG fallback placement if native chart mode is unsafe. Existing native chart object should not be edited."
+    },
+    "vehicle_composition_png_anchor": {
+      "cell": "U41",
+      "range": "U41:AG61",
+      "note": "Generated PNG fallback placement if native chart mode is unsafe. Existing native chart object should not be edited."
+    },
+    "chart_section_title": {
+      "cell": "B61",
+      "merged_range": "B61:U62"
+    }
+  },
+  "review_required": [
+    "Do not edit native chart objects during automated export; use generated PNG chart anchors instead.",
+    "Review mapped cell addresses after any manual layout edit in Excel.",
+    "Draft v2 approach-movement map; v2 XLSX template migration is deferred until the Excel-authored layout can be safely reviewed.",
+    "Do not use this map with the v1 from_to workbook in production exports."
+  ],
+  "template_version": "four_leg_approach_movement_v2",
+  "movement_code_scheme": "approach_movement",
+  "movement_code_order": [
+    "NL",
+    "NT",
+    "NR",
+    "NU",
+    "SL",
+    "ST",
+    "SR",
+    "SU",
+    "EL",
+    "ET",
+    "ER",
+    "EU",
+    "WL",
+    "WT",
+    "WR",
+    "WU"
+  ]
+}
