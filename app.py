@@ -717,27 +717,28 @@ def _mapping_editor_changed(before: pd.DataFrame, after: pd.DataFrame) -> bool:
 
 
 def _mapping_editor_labels(movement_code_scheme: str) -> dict[str, str]:
-    if _is_v2_scheme(movement_code_scheme):
-        return {
-            "raw_sheet": "Sheet ต้นทาง",
-            "raw_direction": "ทิศ/stream ต้นทาง",
-            "source_stream": "source_stream",
-            "approach_direction": "ทิศทางการเดินทาง",
-            "movement_type": "ประเภท movement",
-            "movement_code": "รหัส movement",
-            "raw_movement_label": "ป้ายแสดงผล",
-            "include_in_report": "แสดงในรายงาน",
-            "include_in_peak": "ใช้คำนวณ Peak",
-        }
-    return {
+    common_labels = {
         "raw_sheet": "Sheet ต้นทาง",
-        "raw_direction": "ทิศทางต้นทาง",
+        "raw_direction": "ทิศ/stream ต้นทาง",
         "source_stream": "source_stream",
-        "movement_code": "รหัส movement แบบขาเข้า-ขาออก",
-        "raw_movement_label": "ป้าย movement ต้นทาง",
+        "movement_code": "รหัส movement",
+        "raw_movement_label": "ป้ายแสดงผล",
         "include_in_report": "แสดงในรายงาน",
         "include_in_peak": "ใช้คำนวณ Peak",
     }
+    if _is_v2_scheme(movement_code_scheme):
+        return {
+            **common_labels,
+            "approach_direction": "ทิศทางการเดินทาง",
+            "movement_type": "ประเภท movement",
+        }
+    return common_labels
+
+
+def _movement_code_help_text(movement_code_scheme: str) -> str:
+    if _is_v2_scheme(movement_code_scheme):
+        return "รหัสแบบทิศทางการเดินทาง–รูปแบบการเคลื่อนที่ เช่น NT, WT, ET"
+    return "รหัสแบบขาเข้า–ขาออก เช่น NS, WE, EW"
 
 
 def _mapping_readiness_status(mapping: pd.DataFrame, movement_code_scheme: str, blocking_issue_count: int) -> str:
@@ -2819,26 +2820,15 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_s
                 ordered[column] = ""
     if view_mode != "Basic":
         return ordered
-    if _is_v2_scheme(movement_code_scheme):
-        basic_columns = [
-            "raw_sheet",
-            "raw_direction",
-            "source_stream",
-            "movement_code",
-            "raw_movement_label",
-            "include_in_report",
-            "include_in_peak",
-        ]
-    else:
-        basic_columns = [
-            "raw_sheet",
-            "raw_direction",
-            "source_stream",
-            "raw_movement_label",
-            "movement_code",
-            "include_in_report",
-            "include_in_peak",
-        ]
+    basic_columns = [
+        "raw_sheet",
+        "raw_direction",
+        "source_stream",
+        "movement_code",
+        "raw_movement_label",
+        "include_in_report",
+        "include_in_peak",
+    ]
     visible = [column for column in basic_columns if column in ordered.columns]
     return ordered[visible].copy()
 
@@ -2859,6 +2849,7 @@ def _mapping_editor_column_config(movement_code_scheme: str, movement_code_optio
             editor_labels["movement_code"],
             options=movement_code_options,
             required=True,
+            help=_movement_code_help_text(movement_code_scheme),
         ),
         "approach_direction": st.column_config.SelectboxColumn(
             editor_labels.get("approach_direction", "approach_direction"),

@@ -21,6 +21,17 @@ from tmc_processor.report_template import (
 from tmc_processor.session import build_project_session, session_from_json, session_to_json
 
 
+BASIC_MAPPING_COLUMNS = [
+    "raw_sheet",
+    "raw_direction",
+    "source_stream",
+    "movement_code",
+    "raw_movement_label",
+    "include_in_report",
+    "include_in_peak",
+]
+
+
 def _mapping(codes: list[str]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -63,26 +74,31 @@ def test_mapping_editor_basic_columns_are_scheme_aware() -> None:
     v1 = app._mapping_editor_frame(frame, "Basic", MOVEMENT_SCHEME_V1)
     v2 = app._mapping_editor_frame(frame, "Basic", MOVEMENT_SCHEME_V2)
 
-    assert "raw_movement_label" in v1.columns
+    assert v1.columns.tolist() == BASIC_MAPPING_COLUMNS
+    assert v2.columns.tolist() == BASIC_MAPPING_COLUMNS
     assert "approach_direction" not in v1.columns
     assert "approach_direction" not in v2.columns
     assert "movement_type" not in v2.columns
-    assert "movement_code" in v2.columns
-    assert app._mapping_editor_labels(MOVEMENT_SCHEME_V2)["movement_code"] in {"รหัส movement", "movement_code"}
 
 
 def test_from_to_basic_columns_remain_unchanged() -> None:
     basic = app._mapping_editor_frame(_mapping(["NE"]), "Basic", MOVEMENT_SCHEME_V1)
 
-    assert basic.columns.tolist() == [
-        "raw_sheet",
-        "raw_direction",
-        "source_stream",
-        "raw_movement_label",
-        "movement_code",
-        "include_in_report",
-        "include_in_peak",
-    ]
+    assert basic.columns.tolist() == BASIC_MAPPING_COLUMNS
+
+
+def test_mapping_editor_basic_labels_match_across_schemes() -> None:
+    v1_labels = app._mapping_editor_labels(MOVEMENT_SCHEME_V1)
+    v2_labels = app._mapping_editor_labels(MOVEMENT_SCHEME_V2)
+
+    for labels in (v1_labels, v2_labels):
+        assert labels["raw_sheet"] == "Sheet ต้นทาง"
+        assert labels["raw_direction"] == "ทิศ/stream ต้นทาง"
+        assert labels["source_stream"] == "source_stream"
+        assert labels["movement_code"] == "รหัส movement"
+        assert labels["raw_movement_label"] == "ป้ายแสดงผล"
+        assert labels["include_in_report"] == "แสดงในรายงาน"
+        assert labels["include_in_peak"] == "ใช้คำนวณ Peak"
 
 
 def test_default_preview_mapping_rows_do_not_lock_scheme_selector() -> None:
@@ -180,6 +196,14 @@ def test_approach_movement_editor_options_are_strict_v2_codes() -> None:
 
     assert options == ["", *APPROACH_MOVEMENT_CODES]
     assert {"NE", "NS", "WE", "EN"}.isdisjoint(options)
+
+
+def test_from_to_editor_options_are_from_to_compatible() -> None:
+    options = app._movement_code_options_for_scheme(pd.DataFrame({"movement_code": [""]}), MOVEMENT_SCHEME_V1)
+
+    assert options == ["", *app.MOVEMENT_CODE_OPTIONS]
+    assert {"NS", "WE", "EW"}.issubset(options)
+    assert set(APPROACH_MOVEMENT_CODES) != set(options) - {""}
 
 
 def test_approach_movement_valid_and_invalid_codes_are_scheme_specific() -> None:
