@@ -104,7 +104,16 @@ from tmc_processor.pcu import (
 )
 from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED
 from tmc_processor.pipeline import process_tmc, process_tmc_dry_run_v2
-from tmc_processor.movement_scheme import APPROACH_MOVEMENT_CODES, MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
+from tmc_processor.movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
+    MOVEMENT_SCHEME_V1,
+    MOVEMENT_SCHEME_V2,
+    MOVEMENT_SCHEMES,
+    movement_scheme_description,
+    movement_scheme_display_label,
+    movement_scheme_status_label,
+    normalize_movement_code_scheme,
+)
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
 from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook_com
 from tmc_processor.session import (
@@ -599,6 +608,14 @@ def _movement_scheme(value: str | None) -> str:
     return normalize_movement_code_scheme(value or MOVEMENT_SCHEME_V1)
 
 
+def _scheme_select_label(scheme: str) -> str:
+    return movement_scheme_display_label(scheme)
+
+
+def _scheme_status(scheme: str, status: str) -> str:
+    return movement_scheme_status_label(scheme, status)
+
+
 def _is_v2_scheme(value: str | None) -> bool:
     return _movement_scheme(value) == MOVEMENT_SCHEME_V2
 
@@ -619,6 +636,44 @@ def _single_file_mapping_issues(
     if _is_v2_scheme(movement_code_scheme):
         return pd.DataFrame(columns=["raw_sheet", "field", "message"])
     return validate_mapping_for_processing(detected_sheet_names, mapping)
+
+
+def _movement_code_options_for_scheme(mapping: pd.DataFrame, movement_code_scheme: str) -> list[str]:
+    base_options = APPROACH_MOVEMENT_CODES if _is_v2_scheme(movement_code_scheme) else MOVEMENT_CODE_OPTIONS
+    values = mapping["movement_code"] if "movement_code" in mapping else None
+    return selectbox_options_with_existing_values(["", *base_options], values)
+
+
+def _mapping_editor_labels(movement_code_scheme: str) -> dict[str, str]:
+    if _is_v2_scheme(movement_code_scheme):
+        return {
+            "raw_sheet": "Sheet ต้นทาง",
+            "raw_direction": "ทิศ/stream ต้นทาง",
+            "source_stream": "source_stream",
+            "approach_direction": "ทิศทางการเดินทาง",
+            "movement_type": "ประเภท movement",
+            "movement_code": "รหัส movement",
+            "raw_movement_label": "ป้ายแสดงผล",
+            "include_in_report": "แสดงในรายงาน",
+            "include_in_peak": "ใช้คำนวณ Peak",
+        }
+    return {
+        "raw_sheet": "Sheet ต้นทาง",
+        "raw_direction": "ทิศทางต้นทาง",
+        "source_stream": "source_stream",
+        "movement_code": "รหัส movement แบบขาเข้า-ขาออก",
+        "raw_movement_label": "ป้าย movement ต้นทาง",
+        "include_in_report": "แสดงในรายงาน",
+        "include_in_peak": "ใช้คำนวณ Peak",
+    }
+
+
+def _mapping_readiness_status(mapping: pd.DataFrame, movement_code_scheme: str, blocking_issue_count: int) -> str:
+    if mapping.empty:
+        return _scheme_status(movement_code_scheme, "รอกำหนดทิศทาง")
+    if blocking_issue_count:
+        return _scheme_status(movement_code_scheme, "ตรวจพบรหัสไม่ถูกต้อง")
+    return _scheme_status(movement_code_scheme, "พร้อมใช้งาน")
 
 
 def _process_single_file_for_ui(
@@ -2165,6 +2220,9 @@ def _single_effective_peak_state(result: object | None = None) -> dict[str, obje
 
 def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
     mapping_rows = len(st.session_state.get("mapping_table") or [])
+    mapping_frame = pd.DataFrame(st.session_state.get("mapping_table") or [])
+    mapping_scheme = _current_mapping_scheme()
+    scheme_issue_count = len(validate_mapping_scheme(mapping_frame, mapping_scheme)) if mapping_rows else 0
     processed = _processed_result_from_state() is not None
     output_ready = st.session_state.get("tmc_output") is not None
     peak_state = _single_effective_peak_state()
@@ -2177,9 +2235,9 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     if uploaded_name:
         steps[0] = "completed"
         steps[1] = "completed"
-    if mapping_rows and not mapping_needs_review:
+    if mapping_rows and not mapping_needs_review and not scheme_issue_count:
         steps[2] = "completed"
-    elif mapping_needs_review:
+    elif mapping_needs_review or scheme_issue_count:
         steps[2] = "warning"
     if processed:
         steps[3] = "completed"
@@ -2653,6 +2711,8 @@ def _ordered_mapping_frame(mapping: pd.DataFrame) -> pd.DataFrame:
         "raw_direction",
         "source_stream",
         "raw_movement_label",
+        "approach_direction",
+        "movement_type",
         "movement_code",
         "from_leg",
         "to_leg",
@@ -2669,19 +2729,36 @@ def _ordered_mapping_frame(mapping: pd.DataFrame) -> pd.DataFrame:
     return mapping[ordered].copy()
 
 
-def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str) -> pd.DataFrame:
+def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> pd.DataFrame:
     ordered = _ordered_mapping_frame(mapping)
+    if _is_v2_scheme(movement_code_scheme):
+        for column in ("approach_direction", "movement_type"):
+            if column not in ordered.columns:
+                ordered[column] = ""
     if view_mode != "Basic":
         return ordered
-    basic_columns = [
-        "raw_sheet",
-        "raw_direction",
-        "source_stream",
-        "raw_movement_label",
-        "movement_code",
-        "include_in_report",
-        "include_in_peak",
-    ]
+    if _is_v2_scheme(movement_code_scheme):
+        basic_columns = [
+            "raw_sheet",
+            "raw_direction",
+            "source_stream",
+            "approach_direction",
+            "movement_type",
+            "movement_code",
+            "raw_movement_label",
+            "include_in_report",
+            "include_in_peak",
+        ]
+    else:
+        basic_columns = [
+            "raw_sheet",
+            "raw_direction",
+            "source_stream",
+            "raw_movement_label",
+            "movement_code",
+            "include_in_report",
+            "include_in_peak",
+        ]
     visible = [column for column in basic_columns if column in ordered.columns]
     return ordered[visible].copy()
 
@@ -3411,17 +3488,18 @@ def _mapping_preset_rows_frame(preset: dict[str, object] | None) -> pd.DataFrame
 
 
 def _current_mapping_scheme() -> str:
-    return str(st.session_state.get("tmc_mapping_code_scheme") or MOVEMENT_SCHEME_V1)
+    return _movement_scheme(str(st.session_state.get("tmc_mapping_code_scheme") or MOVEMENT_SCHEME_V1))
 
 
 def _set_current_mapping_scheme(scheme: str) -> None:
-    st.session_state["tmc_mapping_code_scheme"] = str(scheme or MOVEMENT_SCHEME_V1)
+    st.session_state["tmc_mapping_code_scheme"] = _movement_scheme(str(scheme or MOVEMENT_SCHEME_V1))
 
 
 def _render_mapping_scheme_status(scheme: str) -> None:
+    _render_alert(f"movement_code_scheme: {scheme} / {movement_scheme_description(scheme)}", "info")
     if _is_v2_scheme(scheme):
         _render_alert(f"movement_code_scheme: {scheme} / supported for single-file workflow", "success")
-        _render_alert("Batch สำหรับ approach_movement ยังไม่รองรับ", "warning")
+        _render_alert("Batch approach_movement รองรับ Safe PNG/generated mode; Excel Template Mode ยังถูกบล็อก", "info")
     elif mapping_is_process_compatible(scheme):
         _render_alert(f"movement_code_scheme: {scheme} / compatible", "success")
     else:
@@ -3549,6 +3627,7 @@ def _run_streamlit_app() -> None:
     _hydrate_setup_widgets_from_state()
 
     st.session_state.setdefault("mapping_editor_version", 0)
+    st.session_state.setdefault("mapping_editor_view_mode", "Basic")
     st.session_state.setdefault("tmc_mapping_code_scheme", MOVEMENT_SCHEME_V1)
     st.session_state.setdefault("tmc_batch_file_metadata_table", [])
     st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
@@ -3838,6 +3917,25 @@ def _run_streamlit_app() -> None:
                 if st.session_state.get("mapping_table") is not None:
                     default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
                 mapping_scheme = _current_mapping_scheme()
+                mapping_rows_exist = bool(st.session_state.get("mapping_table"))
+                selected_scheme = st.selectbox(
+                    "ระบบรหัส Movement",
+                    options=MOVEMENT_SCHEMES,
+                    index=MOVEMENT_SCHEMES.index(mapping_scheme),
+                    format_func=_scheme_select_label,
+                    disabled=mapping_rows_exist,
+                    key="movement_code_scheme_selector",
+                    help="เลือกได้ก่อนโหลดหรือกรอก Mapping; ถ้ามี Mapping แล้วให้ล้างหรือโหลด Mapping ใหม่เพื่อไม่ตีความรหัสเดิมผิด",
+                )
+                if selected_scheme != mapping_scheme and not mapping_rows_exist:
+                    _set_current_mapping_scheme(selected_scheme)
+                    mapping_scheme = selected_scheme
+                    st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
+                if mapping_rows_exist:
+                    st.caption(f"Detected movement_code_scheme: {mapping_scheme}")
+                    st.warning("มี Mapping rows อยู่แล้ว ระบบจะไม่เปลี่ยน scheme ให้เองเพื่อป้องกันการตีความรหัสเดิมผิด กรุณาโหลด Mapping/Preset ใหม่หากต้องการเปลี่ยน scheme")
+                else:
+                    st.caption(f"Selected movement_code_scheme: {mapping_scheme}")
                 preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
                 preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
                 preset_bytes = serialize_mapping_preset(
@@ -3890,6 +3988,7 @@ def _run_streamlit_app() -> None:
                             loaded_excel = read_mapping_excel_with_metadata(BytesIO(mapping_upload_bytes))
                             default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, loaded_excel.mapping)
                             _set_current_mapping_scheme(loaded_excel.movement_code_scheme)
+                            st.session_state["tmc_loaded_mapping_code_scheme"] = loaded_excel.movement_code_scheme
                             st.session_state["mapping_table"] = default_mapping.to_dict("records")
                             st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
                             st.session_state["tmc_mapping_table_from_session"] = False
@@ -3909,7 +4008,9 @@ def _run_streamlit_app() -> None:
                             loaded_preset = load_mapping_preset(preset_upload_bytes)
                             apply_result = apply_mapping_preset_to_detected_sheets(loaded_preset, detected_sheet_names)
                             default_mapping = apply_result.mapping
-                            _set_current_mapping_scheme(detect_mapping_preset_scheme(loaded_preset))
+                            detected_scheme = detect_mapping_preset_scheme(loaded_preset)
+                            _set_current_mapping_scheme(detected_scheme)
+                            st.session_state["tmc_loaded_mapping_code_scheme"] = detected_scheme
                             st.session_state["mapping_table"] = default_mapping.to_dict("records")
                             st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
                             st.session_state["tmc_mapping_table_from_session"] = False
@@ -3918,7 +4019,7 @@ def _run_streamlit_app() -> None:
                                 "matched": apply_result.matched_sheet_count,
                                 "missing": apply_result.missing_detected_sheet_count,
                                 "extra": apply_result.extra_preset_row_count,
-                                "scheme": detect_mapping_preset_scheme(loaded_preset),
+                                "scheme": detected_scheme,
                             }
                             st.session_state["tmc_mapping_preset_warnings"] = list(loaded_preset.warnings)
                     except (MappingPresetError, ValueError) as exc:
@@ -3967,12 +4068,9 @@ def _run_streamlit_app() -> None:
                         _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
                 mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
-                for warning_message in mapping_control_warnings(default_mapping):
+                for warning_message in mapping_control_warnings(default_mapping, mapping_scheme):
                     _render_alert(_thai_mapping_control_warning(warning_message), "warning")
-                movement_code_options = selectbox_options_with_existing_values(
-                    ["", *MOVEMENT_CODE_OPTIONS],
-                    default_mapping["movement_code"] if "movement_code" in default_mapping else None,
-                )
+                movement_code_options = _movement_code_options_for_scheme(default_mapping, mapping_scheme)
                 with st.expander("Sheet ทิศทางที่ตรวจพบ", expanded=False):
                     st.dataframe(preview_summary, width="stretch")
                 _render_section_header("ตาราง Mapping", "ตารางนี้เป็นข้อมูลหลักสำหรับการจับคู่ movement")
@@ -3983,8 +4081,9 @@ def _run_streamlit_app() -> None:
                     key="mapping_editor_view_mode",
                     help="Basic แสดงคอลัมน์ที่ใช้บ่อย ส่วน Advanced แสดงคอลัมน์เสริมและเชิงเทคนิค",
                 )
+                editor_labels = _mapping_editor_labels(mapping_scheme)
                 mapping = st.data_editor(
-                    _mapping_editor_frame(default_mapping, mapping_view),
+                    _mapping_editor_frame(default_mapping, mapping_view, mapping_scheme),
                     width="stretch",
                     num_rows="dynamic",
                     column_config={
@@ -4013,6 +4112,32 @@ def _run_streamlit_app() -> None:
                         "raw_movement_label": st.column_config.TextColumn("ป้าย movement ต้นทาง", required=False),
                         "include_in_peak": st.column_config.CheckboxColumn("ใช้คำนวณ Peak", default=True),
                         "include_in_report": st.column_config.CheckboxColumn("แสดงในรายงาน", default=True),
+                        "raw_sheet": st.column_config.TextColumn(editor_labels["raw_sheet"], disabled=True),
+                        "raw_direction": st.column_config.TextColumn(editor_labels["raw_direction"], disabled=True),
+                        "movement_code": st.column_config.SelectboxColumn(
+                            editor_labels["movement_code"],
+                            options=movement_code_options,
+                            required=True,
+                        ),
+                        "approach_direction": st.column_config.SelectboxColumn(
+                            editor_labels.get("approach_direction", "approach_direction"),
+                            options=["", "N", "S", "E", "W"],
+                            required=False,
+                        ),
+                        "movement_type": st.column_config.SelectboxColumn(
+                            editor_labels.get("movement_type", "movement_type"),
+                            options=["", "L", "T", "R", "U"],
+                            required=False,
+                        ),
+                        "source_stream": st.column_config.SelectboxColumn(
+                            editor_labels["source_stream"],
+                            options=SOURCE_STREAM_OPTIONS,
+                            required=False,
+                            default="mainline",
+                        ),
+                        "raw_movement_label": st.column_config.TextColumn(editor_labels["raw_movement_label"], required=False),
+                        "include_in_peak": st.column_config.CheckboxColumn(editor_labels["include_in_peak"], default=True),
+                        "include_in_report": st.column_config.CheckboxColumn(editor_labels["include_in_report"], default=True),
                         "aggregation_method": st.column_config.SelectboxColumn(
                             "aggregation_method",
                             options=AGGREGATION_METHOD_OPTIONS,
@@ -4041,7 +4166,7 @@ def _run_streamlit_app() -> None:
                 mapping_issues = _single_file_mapping_issues(detected_sheet_names, mapping, mapping_scheme)
                 if process_block_reason:
                     _render_alert(process_block_reason, "warning")
-                elif _is_v2_scheme(mapping_scheme):
+                elif _is_v2_scheme(mapping_scheme) and not scheme_validation_issues:
                     _render_alert("Mapping approach_movement พร้อมใช้งานสำหรับ single-file workflow", "success")
                 elif mapping_issues.empty and not scheme_validation_issues:
                     _render_alert("Mapping พร้อมใช้งาน", "success")

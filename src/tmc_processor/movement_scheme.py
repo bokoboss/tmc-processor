@@ -9,6 +9,16 @@ MOVEMENT_SCHEME_V1 = "from_to"
 MOVEMENT_SCHEME_V2 = "approach_movement"
 MOVEMENT_SCHEMES = [MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2]
 
+MOVEMENT_SCHEME_OPTION_LABELS = {
+    MOVEMENT_SCHEME_V1: "from_to - รหัสแบบขาเข้า-ขาออก",
+    MOVEMENT_SCHEME_V2: "approach_movement - รหัสแบบทิศทางการเดินทาง-รูปแบบการเคลื่อนที่",
+}
+
+MOVEMENT_SCHEME_DESCRIPTIONS = {
+    MOVEMENT_SCHEME_V1: "Movement coding based on inbound/outbound leg relationship.",
+    MOVEMENT_SCHEME_V2: "Movement coding based on travel direction and movement type.",
+}
+
 APPROACH_DIRECTIONS = ["N", "S", "E", "W"]
 MOVEMENT_TYPES = ["L", "T", "R", "U"]
 
@@ -78,6 +88,40 @@ def normalize_movement_code_scheme(value: object, *, default: str = MOVEMENT_SCH
     if scheme not in MOVEMENT_SCHEMES:
         raise ValueError(f"Unsupported movement_code_scheme: {value!r}.")
     return scheme
+
+
+def is_from_to_scheme(value: object) -> bool:
+    """Return whether value resolves to the from_to movement-code scheme."""
+
+    return normalize_movement_code_scheme(value) == MOVEMENT_SCHEME_V1
+
+
+def is_approach_movement_scheme(value: object) -> bool:
+    """Return whether value resolves to the approach_movement movement-code scheme."""
+
+    return normalize_movement_code_scheme(value) == MOVEMENT_SCHEME_V2
+
+
+def movement_scheme_display_label(value: object) -> str:
+    """Return a concise user-facing scheme label."""
+
+    scheme = normalize_movement_code_scheme(value)
+    return MOVEMENT_SCHEME_OPTION_LABELS[scheme]
+
+
+def movement_scheme_description(value: object) -> str:
+    """Return the semantic description for a movement-code scheme."""
+
+    scheme = normalize_movement_code_scheme(value)
+    return MOVEMENT_SCHEME_DESCRIPTIONS[scheme]
+
+
+def movement_scheme_status_label(value: object, status: str | None = None) -> str:
+    """Return a workflow status label prefixed with the movement-code scheme."""
+
+    scheme = normalize_movement_code_scheme(value)
+    text = str(status or "").strip()
+    return f"{scheme} - {text}" if text else scheme
 
 
 def validate_approach_movement_code(code: object) -> str:

@@ -4,6 +4,26 @@
 
 This is the Phase E design for eventual `approach_movement` v2 processing. It does not enable v2 processing. The active processing guard must remain in place until the later phases described here are complete and tested.
 
+## Phase L0 Dual-Scheme Consistency Rule
+
+`movement_code_scheme` is the source of truth for mapping validation, UI labels, processing path selection, and export routing.
+
+- `from_to` remains the compatibility scheme for existing mapping presets, Mapping Excel files, project sessions, v1 processing, and v1 report exports. Old mapping files that do not declare `movement_code_scheme` load as `from_to`.
+- `approach_movement` uses travel direction plus movement type. For example, `NT` means Northbound Through / มุ่งเหนือ-ตรง, not a north-leg-to-target-leg relationship.
+- `approach_movement` mappings may only use `NL`, `NT`, `NR`, `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, and `WU`.
+- Codes such as `NE`, `NS`, `WE`, and `EN` can remain valid under `from_to`, but are invalid under `approach_movement`.
+- The app must never silently convert one scheme into the other.
+
+Routing by scheme:
+
+- `from_to` uses the v1 processing/export/template path with `templates/four_leg_tmc_report_template.xlsx` and `templates/four_leg_tmc_report_template_map.json`.
+- `approach_movement` uses the v2 processing/export/template paths with `templates/four_leg_tmc_report_template_approach_v2.xlsx` and `templates/four_leg_tmc_report_template_approach_v2_map.json`.
+- `approach_movement` Safe PNG/generated mode uses the v2 generated workbook/package path.
+- `approach_movement` single-file Excel Template Mode is native Excel COM-only.
+- `approach_movement` Batch Excel Template Mode remains blocked until explicit support is added.
+
+The Mapping workspace exposes a `ระบบรหัส Movement` selector before mapping rows are created. Once rows exist, changing scheme is blocked by workflow behavior rather than reinterpreting the existing rows. Loading a Mapping Preset or Mapping Excel with declared scheme metadata updates the active scheme from that file. Files without scheme metadata default to `from_to`.
+
 ## Phase F Implementation Note
 
 Phase F adds a dedicated internal dry-run entry point, `process_tmc_dry_run_v2()`, for `approach_movement` normalization and summaries only. The normal `process_tmc()` application/report path remains guarded for v2 and still raises before processing.

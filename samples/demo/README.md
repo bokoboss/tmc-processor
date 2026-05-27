@@ -69,12 +69,15 @@ carrying full project setup or raw workbook content.
 
 ## Movement-Code Schemes
 
-The original demo artifacts use the v1 `from_to` movement-code scheme, with
-codes such as `NS`, `WE`, and `EW`.
+The original v1 demo artifacts use the `from_to` movement-code scheme, with
+codes such as `NS`, `WE`, and `EW`. Existing mapping files remain supported as
+`from_to` when they do not include `movement_code_scheme` metadata.
 
 The `*_approach_v2*` demo artifacts use the v2 `approach_movement` scheme, with
 codes such as `NT`, `WT`, and `ET` from the standard v2 set `NL`, `NT`, `NR`,
 `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, `WU`.
+In this scheme `NT` means Northbound Through / มุ่งเหนือ-ตรง: `N` is travel
+direction and `T` is movement type.
 They are now supported for v2 single-file generated/Safe PNG export and v2 Batch
 generated/Safe PNG export. v2 Batch Excel Template Mode remains blocked until a
 safe per-file COM template export path is implemented.

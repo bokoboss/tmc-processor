@@ -18,6 +18,7 @@ from .constants import (
 )
 from .importer import extract_raw_direction
 from .movement_scheme import (
+    APPROACH_MOVEMENT_CODES,
     MOVEMENT_SCHEME_V1,
     MOVEMENT_SCHEME_V2,
     is_approach_movement_code,
@@ -109,9 +110,10 @@ def _unknown_values(series: pd.Series, aliases: dict[str, str], options: list[st
     return sorted(set(unknown))
 
 
-def mapping_control_warnings(mapping: pd.DataFrame) -> list[str]:
+def mapping_control_warnings(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
     """Return non-blocking warnings for legacy values outside editor dropdowns."""
 
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     warnings: list[str] = []
     checks = {
         "source_stream": (_SOURCE_STREAM_ALIASES, SOURCE_STREAM_OPTIONS, "other"),
@@ -130,11 +132,12 @@ def mapping_control_warnings(mapping: pd.DataFrame) -> list[str]:
 
     movement_column = "movement_code" if "movement_code" in mapping.columns else "output_movement_code"
     if movement_column in mapping.columns:
+        movement_options = APPROACH_MOVEMENT_CODES if scheme == MOVEMENT_SCHEME_V2 else MOVEMENT_CODE_OPTIONS
         values = sorted(
             {
                 text
                 for text in mapping[movement_column].dropna().astype(str).str.strip()
-                if text and text.upper() not in MOVEMENT_CODE_OPTIONS
+                if text and text.upper() not in movement_options
             }
         )
         if values:
@@ -310,8 +313,8 @@ def _mixed_movement_code_issues(cleaned: pd.DataFrame) -> list[str]:
         for code in cleaned.loc[cleaned["include_in_report"], "movement_code"].dropna()
         if str(code).strip()
     }
-    has_v1 = any(code in MOVEMENT_CODE_OPTIONS for code in codes)
-    has_v2 = any(is_approach_movement_code(code) for code in codes)
+    has_v1 = any(code in MOVEMENT_CODE_OPTIONS and not is_approach_movement_code(code) for code in codes)
+    has_v2 = any(is_approach_movement_code(code) and code not in MOVEMENT_CODE_OPTIONS for code in codes)
     if has_v1 and has_v2:
         return ["Mapping contains mixed from_to and approach_movement movement codes."]
     return []
