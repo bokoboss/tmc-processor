@@ -2,14 +2,22 @@
 
 ## Scope
 
-This is the Phase E design for eventual `approach_movement` v2 processing. It does not enable v2 processing. The active processing guard must remain in place until the later phases described here are complete and tested.
+This document records the design path and release-current behavior for dual-scheme processing. Earlier phase sections are historical notes; the release-current source of truth is:
+
+- `from_to` and `approach_movement` are both supported movement-code schemes.
+- `movement_code_scheme` is the source of truth for validation, UI labels, processing path selection, and export routing.
+- Existing mapping files without `movement_code_scheme` metadata default to `from_to`.
+- `approach_movement` single-file processing supports Excel Template Mode through the Excel COM/native path when COM is available, and Safe PNG/generated export.
+- `approach_movement` Batch supports Safe PNG/generated ZIP export.
+- `approach_movement` Batch Excel Template Mode remains intentionally unsupported/blocked in this version.
+- Single-file workflow is recommended for report generation and template-output review because it gives the most complete mapping, peak, layout, and export review loop.
 
 ## Phase L0 Dual-Scheme Consistency Rule
 
 `movement_code_scheme` is the source of truth for mapping validation, UI labels, processing path selection, and export routing.
 
 - `from_to` remains the compatibility scheme for existing mapping presets, Mapping Excel files, project sessions, v1 processing, and v1 report exports. Old mapping files that do not declare `movement_code_scheme` load as `from_to`.
-- `approach_movement` uses travel direction plus movement type. For example, `NT` means Northbound Through / มุ่งเหนือ-ตรง, not a north-leg-to-target-leg relationship.
+- `approach_movement` uses travel direction plus movement type. `N`, `S`, `E`, and `W` mean travel direction; `L`, `T`, `R`, and `U` mean movement type. For example, `NT` means Northbound Through / มุ่งเหนือ-ตรง, not a north-leg-to-target-leg relationship.
 - `approach_movement` mappings may only use `NL`, `NT`, `NR`, `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, and `WU`.
 - Codes such as `NE`, `NS`, `WE`, and `EN` can remain valid under `from_to`, but are invalid under `approach_movement`.
 - The app must never silently convert one scheme into the other.
@@ -20,6 +28,7 @@ Routing by scheme:
 - `approach_movement` uses the v2 processing/export/template paths with `templates/four_leg_tmc_report_template_approach_v2.xlsx` and `templates/four_leg_tmc_report_template_approach_v2_map.json`.
 - `approach_movement` Safe PNG/generated mode uses the v2 generated workbook/package path.
 - `approach_movement` single-file Excel Template Mode is native Excel COM-only.
+- `approach_movement` Batch Safe PNG/generated ZIP export is supported.
 - `approach_movement` Batch Excel Template Mode remains blocked until explicit support is added.
 
 The Mapping workspace exposes a `ระบบรหัส Movement` selector before mapping rows are created. Once rows exist, changing scheme is blocked by workflow behavior rather than reinterpreting the existing rows. Loading a Mapping Preset or Mapping Excel with declared scheme metadata updates the active scheme from that file. Files without scheme metadata default to `from_to`.
@@ -71,7 +80,7 @@ Still unsupported after Phase G:
 - Normal `process_tmc()` v2 processing/export remains blocked.
 - `export_workbook()` still rejects `approach_movement` v2 input and therefore keeps Excel Template Mode and Excel COM/native template export blocked for v2.
 - v2 diagram export remains unsupported/omitted.
-- UI enablement remains deferred to Phase J so the application does not expose a broad new v2 export workflow before the unsupported modes are clearly handled.
+- UI enablement remains deferred to Phase J so the application does not expose a broad additional v2 export workflow before the unsupported modes are clearly handled.
 - Batch v2 processing/export remains blocked.
 
 Remaining blockers before UI enablement/full release:
@@ -98,9 +107,9 @@ Recommendation: use both `movement_code` and `output_movement_code`, with a clea
 - For v1 rows, both fields should normally contain v1 codes such as `NS`, `WE`, and `EN`.
 - For v2 rows, both fields should normally contain v2 codes such as `NL`, `NT`, and `NR`.
 - Consumers that need to group, pivot, detect peaks, or produce summaries should use `movement_code`.
-- Loaders may continue accepting old files that only have `output_movement_code`, but should copy it into `movement_code` during cleaning.
+- Loaders may continue accepting existing files that only have `output_movement_code`, but should copy it into `movement_code` during cleaning.
 
-This fits the current code better than creating a third canonical field. `normalizer.py` already emits both fields, and `summaries.py` already prefers `movement_code` after compatibility handling. Keeping `output_movement_code` as an alias avoids breaking old exports, project sessions, mapping presets, and tests.
+This fits the current code better than creating a third canonical field. `normalizer.py` already emits both fields, and `summaries.py` already prefers `movement_code` after compatibility handling. Keeping `output_movement_code` as an alias avoids breaking existing exports, project sessions, mapping presets, and tests.
 
 ### 2. Pipeline model
 
@@ -134,7 +143,7 @@ v2 uses `APPROACH_MOVEMENT_CODES`:
 
 `NL`, `NT`, `NR`, `NU`, `SL`, `ST`, `SR`, `SU`, `EL`, `ET`, `ER`, `EU`, `WL`, `WT`, `WR`, `WU`
 
-Future summary/export code should choose the movement order from `movement_code_scheme`. Unknown legacy extras may still be appended after the standard list for v1 compatibility, but v2 should reject invalid approach-movement codes before processing.
+Future summary/export code should choose the movement order from `movement_code_scheme`. Unknown compatibility extras may still be appended after the standard list for v1 compatibility, but v2 should reject invalid approach-movement codes before processing.
 
 ## Summary Table Behavior Under v2
 
@@ -176,7 +185,7 @@ Semantic assumptions:
 - `NL` is labeled "Northbound Left turn" and is not interpreted as "from north leg".
 - No v2 diagram code converts or aliases v2 codes to v1 `from_to` codes.
 
-Phase H2 implementation: generated v2 export packages also include `diagram/movement_diagram.png`. The PNG is rendered from `Movement_Diagram_Data` with a deterministic 2x2 table-style visual: Northbound, Southbound, Eastbound, and Westbound groups, each with L/T/R/U tiles showing movement code, movement label, total PCU, and count. It uses `matplotlib` with the headless `Agg` backend and adds no new dependency.
+Phase H2 implementation: generated v2 export packages also include `diagram/movement_diagram.png`. The PNG is rendered from `Movement_Diagram_Data` with a deterministic 2x2 table-style visual: Northbound, Southbound, Eastbound, and Westbound groups, each with L/T/R/U tiles showing movement code, movement label, total PCU, and count. It uses `matplotlib` with the headless `Agg` backend and adds no additional dependency.
 
 Current limitation: Phase H/H2 does not add a v2 PNG arrow diagram or enable the v1 `Diagram_Data` / `Diagram` sheet path for v2. The existing v1 PNG and generated/template diagram behavior remains unchanged. A visual arrow diagram should only be added after a tested coordinate model verifies left/right/U-turn placement for every travel direction.
 
@@ -283,13 +292,13 @@ Mapping presets:
 
 ### `src/tmc_processor/mapping_preset.py`
 
-- Current: preserves `movement_code_scheme`, v2 optional fields, and defaults old presets to `from_to`.
+- Current: preserves `movement_code_scheme`, v2 optional fields, and defaults existing presets without scheme metadata to `from_to`.
 - Future: preserve v2 fields through apply/build paths and avoid v1 field inference for v2 rows.
 - Add tests for mixed/invalid scheme rows before enabling processing.
 
 ### `src/tmc_processor/session.py`
 
-- Current: stores `movement_code_scheme` in session mapping and defaults old sessions to `from_to`.
+- Current: stores `movement_code_scheme` in session mapping and defaults existing sessions without scheme metadata to `from_to`.
 - Future: ensure v2 sessions restore UI state safely, including blocked export modes and v2 mapping metadata.
 
 ### `src/tmc_processor/batch.py`

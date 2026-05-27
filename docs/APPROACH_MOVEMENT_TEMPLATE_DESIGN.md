@@ -2,7 +2,16 @@
 
 ## Goal
 
-Phase I1 prepares the `approach_movement` v2 Excel template design and integrity checks without enabling Excel Template Mode. The template must report v2 movement codes directly:
+This document records the `approach_movement` v2 Excel template design and release-current export behavior. Earlier phase sections are historical notes; the release-current behavior is:
+
+- Single-file `approach_movement` Excel Template Mode uses the native Microsoft Excel COM path when COM is available.
+- The native path writes to a temporary output copy and preserves Excel-authored charts, drawings, shapes, arrows, formulas, styles, and page layout through Excel save.
+- If Excel COM is unavailable, Single-file `approach_movement` Excel Template Mode remains blocked with the Thai UI message and users can use Safe PNG/generated export.
+- Batch `approach_movement` supports Safe PNG/generated ZIP export.
+- Batch `approach_movement` Excel Template Mode remains unsupported/blocked in this version.
+- Single-file workflow is the recommended path when template report output needs careful review.
+
+The template must report v2 movement codes directly:
 
 - `N` = northbound / มุ่งเหนือ
 - `S` = southbound / มุ่งใต้
