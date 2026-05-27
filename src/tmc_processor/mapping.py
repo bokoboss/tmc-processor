@@ -369,14 +369,19 @@ def read_mapping_excel(excel_file: str | BinaryIO | BytesIO) -> pd.DataFrame:
     return read_mapping_excel_with_metadata(excel_file).mapping
 
 
-def mapping_to_excel_bytes(mapping: pd.DataFrame) -> bytes:
+def mapping_to_excel_bytes(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> bytes:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         cleaned = clean_mapping(mapping)
+        if scheme == MOVEMENT_SCHEME_V2:
+            for column in OPTIONAL_MAPPING_METADATA_COLUMNS:
+                if column not in cleaned.columns:
+                    cleaned[column] = ""
         cleaned.to_excel(writer, sheet_name="Mapping", index=False)
         pd.DataFrame(
             [
-                {"field": "movement_code_scheme", "value": MOVEMENT_SCHEME_V1},
+                {"field": "movement_code_scheme", "value": scheme},
             ]
         ).to_excel(writer, sheet_name="Metadata", index=False)
         worksheet = writer.sheets["Mapping"]

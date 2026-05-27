@@ -343,6 +343,7 @@ def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, A
         updates["mapping_table"] = rows
         updates["mapping_editor_version"] = int(state.get("mapping_editor_version", 0) or 0) + 1
         updates["tmc_mapping_table_from_session"] = True
+        updates["tmc_mapping_source"] = "project_session"
         updates["tmc_mapping_code_scheme"] = normalize_movement_code_scheme(
             session.get("mapping", {}).get("movement_code_scheme") or MOVEMENT_SCHEME_V1
         )
