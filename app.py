@@ -2834,6 +2834,46 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_s
     return ordered[visible].copy()
 
 
+_MOVEMENT_LABELS_TH = {
+    "L": "ซ้าย",
+    "T": "ตรง",
+    "R": "ขวา",
+    "U": "กลับรถ",
+}
+
+
+def _movement_label_th(turn_type: object) -> str:
+    return _MOVEMENT_LABELS_TH.get(str(turn_type or "").strip(), "")
+
+
+def _basic_mapping_derived_summary(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> pd.DataFrame:
+    normalized = normalize_mapping_for_scheme(mapping, movement_code_scheme)
+    valid_codes = set(APPROACH_MOVEMENT_CODES if _is_v2_scheme(movement_code_scheme) else MOVEMENT_CODE_OPTIONS)
+    rows = []
+    for _, row in normalized.iterrows():
+        code = str(row.get("movement_code") or "").strip()
+        from_leg = str(row.get("from_leg") or "").strip()
+        to_leg = str(row.get("to_leg") or "").strip()
+        turn_type = str(row.get("movement_type" if _is_v2_scheme(movement_code_scheme) else "turn_type") or "").strip()
+        if not code:
+            status = "Missing movement_code"
+        elif code not in valid_codes:
+            status = "รหัสทิศทางไม่ถูกต้อง: ใช้รูปแบบเช่น NE, NS, NW, NU"
+        else:
+            status = "Valid"
+        rows.append(
+            {
+                "Sheet": row.get("raw_sheet", ""),
+                "Code": code,
+                "Derived movement": f"{from_leg} → {to_leg}" if from_leg and to_leg else "",
+                "Type": turn_type,
+                "Thai label": _movement_label_th(turn_type),
+                "Status": status,
+            }
+        )
+    return pd.DataFrame(rows, columns=["Sheet", "Code", "Derived movement", "Type", "Thai label", "Status"])
+
+
 def _mapping_editor_column_config(movement_code_scheme: str, movement_code_options: list[str]) -> dict[str, object]:
     editor_labels = _mapping_editor_labels(movement_code_scheme)
     derived_v2 = _is_v2_scheme(movement_code_scheme)
@@ -4429,6 +4469,14 @@ def _run_streamlit_app() -> None:
                     edited_frame = _apply_mapping_editor_widget_state(edited_frame, st.session_state.get(editor_key))
                 editor_changed = _mapping_editor_changed(editor_frame, edited_frame)
                 mapping = _merge_mapping_editor_result(default_mapping, edited_frame, mapping_scheme)
+                if mapping_view == "Basic":
+                    basic_summary = _basic_mapping_derived_summary(mapping, mapping_scheme)
+                    st.table(basic_summary)
+                    invalid_basic_rows = basic_summary[
+                        basic_summary["Status"].astype(str).str.startswith("รหัสทิศทางไม่ถูกต้อง")
+                    ]
+                    if not invalid_basic_rows.empty:
+                        _render_alert("รหัสทิศทางไม่ถูกต้อง ใช้รูปแบบเช่น NE, NS, NW, NU", "warning")
                 if _mapping_rows_are_committed() or editor_changed:
                     st.session_state["mapping_table"] = mapping.to_dict("records")
                     st.session_state["tmc_mapping_table_from_session"] = False
