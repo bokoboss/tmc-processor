@@ -11,6 +11,7 @@ from tmc_processor.exporter import template_paths_for_movement_scheme
 from tmc_processor.mapping import (
     mapping_to_excel_bytes,
     normalize_approach_movement_mapping,
+    normalize_from_to_movement_mapping,
     validate_mapping_for_processing,
     validate_mapping_for_processing_by_scheme,
     validate_mapping_scheme,
@@ -56,6 +57,23 @@ def _mapping(codes: list[str]) -> pd.DataFrame:
                 "aggregation_method": "sum",
             }
             for index, code in enumerate(codes, start=1)
+        ]
+    )
+
+
+def _movement_code_only_mapping() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"raw_sheet": "ทิศ 1", "movement_code": "NE", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 2", "movement_code": "NS", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 3", "movement_code": "NW", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 4", "movement_code": "SW", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 5", "movement_code": "SN", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 6", "movement_code": "SE", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 7", "movement_code": "WN", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 8", "movement_code": "WE", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 9", "movement_code": "WS", "from_leg": None, "to_leg": None, "turn_type": None},
+            {"raw_sheet": "ทิศ 10", "movement_code": "WU", "from_leg": None, "to_leg": None, "turn_type": None},
         ]
     )
 
@@ -183,18 +201,105 @@ def test_approach_movement_mapping_derives_components_from_movement_code() -> No
 
     assert normalized.loc[0, "approach_direction"] == "E"
     assert normalized.loc[0, "movement_type"] == "U"
+    assert normalized.loc[0, "from_leg"] == "E"
+    assert normalized.loc[0, "to_leg"] == "E"
 
 
 def test_approach_movement_mapping_overwrites_conflicting_component_values() -> None:
     frame = _mapping(["NT"])
     frame["approach_direction"] = "S"
     frame["movement_type"] = "R"
+    frame["from_leg"] = "W"
+    frame["to_leg"] = "N"
 
     normalized = normalize_approach_movement_mapping(frame)
 
     assert normalized.loc[0, "approach_direction"] == "N"
     assert normalized.loc[0, "movement_type"] == "T"
+    assert normalized.loc[0, "from_leg"] == "N"
+    assert normalized.loc[0, "to_leg"] == "S"
     assert validate_mapping_scheme(frame, MOVEMENT_SCHEME_V2) == []
+
+
+def test_approach_movement_advanced_display_reflects_derived_processor_mapping() -> None:
+    frame = _mapping(["EL"])
+    frame["from_leg"] = ""
+    frame["to_leg"] = ""
+
+    advanced = app._mapping_editor_frame(frame, "Advanced", MOVEMENT_SCHEME_V2)
+
+    assert advanced.loc[0, "approach_direction"] == "E"
+    assert advanced.loc[0, "movement_type"] == "L"
+    assert advanced.loc[0, "from_leg"] == "E"
+    assert advanced.loc[0, "to_leg"] == "S"
+
+
+def test_approach_movement_single_click_merge_derives_state_immediately() -> None:
+    base = _mapping([""])
+    edited = app._mapping_editor_frame(base, "Basic", MOVEMENT_SCHEME_V2)
+    edited.loc[0, "movement_code"] = "SR"
+
+    merged = app._merge_mapping_editor_result(base, edited, MOVEMENT_SCHEME_V2)
+
+    assert merged.loc[0, "movement_code"] == "SR"
+    assert merged.loc[0, "approach_direction"] == "S"
+    assert merged.loc[0, "movement_type"] == "R"
+    assert merged.loc[0, "from_leg"] == "S"
+    assert merged.loc[0, "to_leg"] == "E"
+
+
+def test_approach_movement_data_editor_delta_updates_canonical_mapping_state() -> None:
+    base = _mapping([""])
+    base["from_leg"] = ""
+    base["to_leg"] = ""
+    state = {"mapping_editor_basic_7": {"edited_rows": {0: {"movement_code": "NT"}}}}
+
+    mapping = app._mapping_from_editor_widget_state(base, "Basic", MOVEMENT_SCHEME_V2, "mapping_editor_basic_7", state)
+
+    assert mapping.loc[0, "movement_code"] == "NT"
+    assert mapping.loc[0, "approach_direction"] == "N"
+    assert mapping.loc[0, "movement_type"] == "T"
+    assert mapping.loc[0, "from_leg"] == "N"
+    assert mapping.loc[0, "to_leg"] == "S"
+    assert validate_mapping_for_processing_by_scheme(["Sheet 1"], mapping, MOVEMENT_SCHEME_V2).empty
+
+
+def test_approach_movement_empty_editor_delta_does_not_overwrite_user_selection() -> None:
+    committed = normalize_approach_movement_mapping(_mapping(["WL"]))
+    state = {"mapping_editor_basic_7": {"edited_rows": {}}}
+
+    mapping = app._mapping_from_editor_widget_state(committed, "Basic", MOVEMENT_SCHEME_V2, "mapping_editor_basic_7", state)
+
+    assert mapping.loc[0, "movement_code"] == "WL"
+    assert mapping.loc[0, "from_leg"] == "W"
+    assert mapping.loc[0, "to_leg"] == "N"
+
+
+def test_basic_mapping_widget_state_is_process_canonical_source() -> None:
+    base = _mapping([""])
+    base["from_leg"] = ""
+    base["to_leg"] = ""
+    state = {app._basic_mapping_widget_key("movement_code", 3, 0): "WT"}
+
+    mapping = app._mapping_from_editor_widget_state(base, "Basic", MOVEMENT_SCHEME_V2, "mapping_editor_basic_3", state)
+
+    assert mapping.loc[0, "movement_code"] == "WT"
+    assert mapping.loc[0, "from_leg"] == "W"
+    assert mapping.loc[0, "to_leg"] == "E"
+    assert validate_mapping_for_processing_by_scheme(["Sheet 1"], mapping, MOVEMENT_SCHEME_V2).empty
+
+
+def test_advanced_view_reads_canonical_basic_widget_selection() -> None:
+    base = _mapping([""])
+    state = {app._basic_mapping_widget_key("movement_code", 3, 0): "ST"}
+
+    mapping = app._mapping_from_editor_widget_state(base, "Advanced", MOVEMENT_SCHEME_V2, "mapping_editor_advanced_3", state)
+
+    assert mapping.loc[0, "movement_code"] == "ST"
+    assert mapping.loc[0, "approach_direction"] == "S"
+    assert mapping.loc[0, "movement_type"] == "T"
+    assert mapping.loc[0, "from_leg"] == "S"
+    assert mapping.loc[0, "to_leg"] == "N"
 
 
 def test_approach_movement_editor_options_are_strict_v2_codes() -> None:
@@ -275,6 +380,44 @@ def test_project_session_utc_timestamp_is_python_310_safe() -> None:
 
     assert session["created_at"].endswith("Z")
     assert session["updated_at"].endswith("Z")
+
+
+def test_from_to_movement_code_only_rows_normalize_processor_fields() -> None:
+    normalized = normalize_from_to_movement_mapping(_movement_code_only_mapping())
+
+    assert normalized[["movement_code", "from_leg", "to_leg", "turn_type"]].to_dict("records") == [
+        {"movement_code": "NE", "from_leg": "N", "to_leg": "E", "turn_type": "L"},
+        {"movement_code": "NS", "from_leg": "N", "to_leg": "S", "turn_type": "T"},
+        {"movement_code": "NW", "from_leg": "N", "to_leg": "W", "turn_type": "R"},
+        {"movement_code": "SW", "from_leg": "S", "to_leg": "W", "turn_type": "L"},
+        {"movement_code": "SN", "from_leg": "S", "to_leg": "N", "turn_type": "T"},
+        {"movement_code": "SE", "from_leg": "S", "to_leg": "E", "turn_type": "R"},
+        {"movement_code": "WN", "from_leg": "W", "to_leg": "N", "turn_type": "L"},
+        {"movement_code": "WE", "from_leg": "W", "to_leg": "E", "turn_type": "T"},
+        {"movement_code": "WS", "from_leg": "W", "to_leg": "S", "turn_type": "R"},
+        {"movement_code": "WU", "from_leg": "W", "to_leg": "W", "turn_type": "U"},
+    ]
+
+
+def test_from_to_validation_uses_derived_processor_fields() -> None:
+    issues = validate_mapping_for_processing_by_scheme(
+        [f"ทิศ {index}" for index in range(1, 11)],
+        _movement_code_only_mapping(),
+        MOVEMENT_SCHEME_V1,
+    )
+
+    assert issues.empty
+
+
+def test_from_to_advanced_display_uses_normalized_values() -> None:
+    advanced = app._mapping_editor_frame(_movement_code_only_mapping(), "Advanced", MOVEMENT_SCHEME_V1)
+
+    assert advanced[["from_leg", "to_leg", "turn_type"]].isna().sum().sum() == 0
+    assert advanced.loc[0, ["from_leg", "to_leg", "turn_type"]].to_dict() == {
+        "from_leg": "N",
+        "to_leg": "E",
+        "turn_type": "L",
+    }
 
 
 def test_single_file_export_default_is_template_when_excel_com_available() -> None:

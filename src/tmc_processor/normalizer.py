@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from .constants import BASE_INTERVAL_MINUTES, NORMALIZED_COLUMNS, VEHICLE_CLASSES
-from .mapping import clean_mapping
+from .mapping import normalize_mapping_for_scheme
 from .movement_scheme import MOVEMENT_SCHEME_V2, parse_approach_movement_code
 from .pcu import add_pcu
 from .time_utils import add_minutes, parse_interval, parse_time
@@ -112,7 +112,7 @@ def normalize(
     pce_factors: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     setup = setup or {}
-    mapping = clean_mapping(mapping)
+    mapping = normalize_mapping_for_scheme(mapping, str(setup.get("movement_code_scheme") or ""))
     mapped = mapping[mapping["include_in_report"]].copy()
     rows: list[dict[str, Any]] = []
 

@@ -10,6 +10,7 @@ import pandas as pd
 from .exporter import export_workbook
 from .mapping import (
     mapping_processing_block_reason,
+    normalize_mapping_for_scheme,
     validate_mapping_for_processing,
     validate_mapping_for_processing_by_scheme,
     validate_mapping_scheme,
@@ -83,8 +84,9 @@ def process_tmc(
     block_reason = mapping_processing_block_reason(movement_code_scheme)
     if block_reason:
         raise ValueError(block_reason)
+    mapping = normalize_mapping_for_scheme(mapping, movement_code_scheme)
     _raise_mapping_scheme_issues(mapping, movement_code_scheme)
-    mapping_issues = validate_mapping_for_processing(detected_sheets, mapping)
+    mapping_issues = validate_mapping_for_processing_by_scheme(detected_sheets, mapping, movement_code_scheme)
     if not mapping_issues.empty:
         issue_text = "; ".join(
             f"{row.raw_sheet}: {row.field}" for row in mapping_issues.itertuples(index=False)

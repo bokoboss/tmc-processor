@@ -66,6 +66,34 @@ class ApproachMovement:
     movement_type: str
 
 
+@dataclass(frozen=True)
+class MovementLegMapping:
+    """Processor from/to leg mapping for a v2 movement."""
+
+    from_leg: str
+    to_leg: str
+
+
+_LEFT_HAND_TO_LEG = {
+    ("N", "L"): "E",
+    ("N", "T"): "S",
+    ("N", "R"): "W",
+    ("N", "U"): "N",
+    ("E", "L"): "S",
+    ("E", "T"): "W",
+    ("E", "R"): "N",
+    ("E", "U"): "E",
+    ("S", "L"): "W",
+    ("S", "T"): "N",
+    ("S", "R"): "E",
+    ("S", "U"): "S",
+    ("W", "L"): "N",
+    ("W", "T"): "E",
+    ("W", "R"): "S",
+    ("W", "U"): "W",
+}
+
+
 def _normalize_token(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string.")
@@ -141,6 +169,25 @@ def parse_approach_movement_code(code: object) -> ApproachMovement:
         approach_direction=normalized_code[0],
         movement_type=normalized_code[1],
     )
+
+
+def derive_movement_leg_mapping(approach_direction: object, movement_type: object) -> MovementLegMapping:
+    """Derive processor legs for Thailand/left-hand approach movements."""
+
+    normalized_direction = _normalize_token(approach_direction, "approach direction")
+    normalized_movement_type = _normalize_token(movement_type, "movement type")
+    build_approach_movement_code(normalized_direction, normalized_movement_type)
+    return MovementLegMapping(
+        from_leg=normalized_direction,
+        to_leg=_LEFT_HAND_TO_LEG[(normalized_direction, normalized_movement_type)],
+    )
+
+
+def derive_movement_leg_mapping_from_code(code: object) -> MovementLegMapping:
+    """Derive processor legs from a v2 approach-movement code."""
+
+    movement = parse_approach_movement_code(code)
+    return derive_movement_leg_mapping(movement.approach_direction, movement.movement_type)
 
 
 def build_approach_movement_code(approach_direction: object, movement_type: object) -> str:

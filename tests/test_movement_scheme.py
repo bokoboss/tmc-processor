@@ -11,6 +11,7 @@ from tmc_processor.movement_scheme import (
     approach_direction_label,
     approach_movement_display_label,
     build_approach_movement_code,
+    derive_movement_leg_mapping_from_code,
     is_approach_movement_code,
     movement_type_label,
     parse_approach_movement_code,
@@ -64,6 +65,31 @@ def test_parse_approach_movement_code() -> None:
 def test_build_approach_movement_code() -> None:
     assert build_approach_movement_code("N", "L") == "NL"
     assert build_approach_movement_code(" N ", " L ") == "NL"
+
+
+def test_derive_movement_leg_mapping_uses_left_hand_traffic_for_all_v2_codes() -> None:
+    expected = {
+        "NL": ("N", "E"),
+        "NT": ("N", "S"),
+        "NR": ("N", "W"),
+        "NU": ("N", "N"),
+        "EL": ("E", "S"),
+        "ET": ("E", "W"),
+        "ER": ("E", "N"),
+        "EU": ("E", "E"),
+        "SL": ("S", "W"),
+        "ST": ("S", "N"),
+        "SR": ("S", "E"),
+        "SU": ("S", "S"),
+        "WL": ("W", "N"),
+        "WT": ("W", "E"),
+        "WR": ("W", "S"),
+        "WU": ("W", "W"),
+    }
+
+    for code, (from_leg, to_leg) in expected.items():
+        derived = derive_movement_leg_mapping_from_code(code)
+        assert (derived.from_leg, derived.to_leg) == (from_leg, to_leg)
 
 
 @pytest.mark.parametrize("code", ["N", "NLL", "NS", "WE", "EN", "XX", "", None])

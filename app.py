@@ -69,6 +69,7 @@ from tmc_processor.mapping import (
     mapping_control_warnings,
     mapping_is_process_compatible,
     mapping_processing_block_reason,
+    normalize_mapping_for_scheme,
     normalize_approach_movement_mapping,
     movement_aggregation_messages,
     read_mapping_excel_with_metadata,
@@ -759,6 +760,7 @@ def _process_single_file_for_ui(
 ) -> object:
     scheme = _movement_scheme(str(setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1))
     if scheme == MOVEMENT_SCHEME_V2:
+        mapping = normalize_mapping_for_scheme(mapping, MOVEMENT_SCHEME_V2)
         return process_tmc_dry_run_v2(
             raw_sheets=raw_sheets,
             mapping=mapping,
@@ -768,6 +770,7 @@ def _process_single_file_for_ui(
             peak_windows=peak_windows,
             pce_factors=pce_factors,
         )
+    mapping = normalize_mapping_for_scheme(mapping, MOVEMENT_SCHEME_V1)
     return process_tmc(
         raw_sheets=raw_sheets,
         mapping=mapping,
@@ -2811,7 +2814,7 @@ def _ordered_mapping_frame(mapping: pd.DataFrame) -> pd.DataFrame:
 
 
 def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> pd.DataFrame:
-    ordered = _ordered_mapping_frame(mapping)
+    ordered = _ordered_mapping_frame(normalize_mapping_for_scheme(mapping, movement_code_scheme))
     if _is_v2_scheme(movement_code_scheme):
         for column in ("approach_direction", "movement_type"):
             if column not in ordered.columns:
@@ -2833,6 +2836,8 @@ def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_s
 
 def _mapping_editor_column_config(movement_code_scheme: str, movement_code_options: list[str]) -> dict[str, object]:
     editor_labels = _mapping_editor_labels(movement_code_scheme)
+    derived_v2 = _is_v2_scheme(movement_code_scheme)
+    derived_fields = True
     return {
         "raw_sheet": st.column_config.TextColumn(editor_labels["raw_sheet"], disabled=True),
         "raw_direction": st.column_config.TextColumn(editor_labels["raw_direction"], disabled=True),
@@ -2853,15 +2858,32 @@ def _mapping_editor_column_config(movement_code_scheme: str, movement_code_optio
             editor_labels.get("approach_direction", "approach_direction"),
             options=["", "N", "S", "E", "W"],
             required=False,
+            disabled=derived_v2,
         ),
         "movement_type": st.column_config.SelectboxColumn(
             editor_labels.get("movement_type", "movement_type"),
             options=["", "L", "T", "R", "U"],
             required=False,
+            disabled=derived_v2,
         ),
-        "from_leg": st.column_config.SelectboxColumn("from_leg", options=["", *LEG_OPTIONS], required=True),
-        "to_leg": st.column_config.SelectboxColumn("to_leg", options=["", *LEG_OPTIONS], required=True),
-        "turn_type": st.column_config.SelectboxColumn("turn_type", options=["", *TURN_TYPE_OPTIONS], required=True),
+        "from_leg": st.column_config.SelectboxColumn(
+            "from_leg",
+            options=["", *LEG_OPTIONS],
+            required=not derived_fields,
+            disabled=derived_fields,
+        ),
+        "to_leg": st.column_config.SelectboxColumn(
+            "to_leg",
+            options=["", *LEG_OPTIONS],
+            required=not derived_fields,
+            disabled=derived_fields,
+        ),
+        "turn_type": st.column_config.SelectboxColumn(
+            "turn_type",
+            options=["", *TURN_TYPE_OPTIONS, "L", "T", "R", "U"],
+            required=False,
+            disabled=derived_fields,
+        ),
         "facility_type": st.column_config.SelectboxColumn(
             "facility_type",
             options=["", *FACILITY_TYPE_OPTIONS],
@@ -2879,7 +2901,153 @@ def _mapping_editor_column_config(movement_code_scheme: str, movement_code_optio
     }
 
 
-def _merge_mapping_editor_result(base_mapping: pd.DataFrame, edited_visible: pd.DataFrame) -> pd.DataFrame:
+def _mapping_editor_key(view_mode: str, version: int) -> str:
+    return f"mapping_editor_{view_mode.lower()}_{version}"
+
+
+def _basic_mapping_widget_key(column: str, version: int, row_index: int) -> str:
+    return f"mapping_basic_{column}_{version}_{row_index}"
+
+
+def _option_index(options: list[str], value: object) -> int:
+    text = str(value or "").strip()
+    return options.index(text) if text in options else 0
+
+
+def _apply_basic_mapping_widget_state(
+    editor_frame: pd.DataFrame,
+    version: int,
+    state: MutableMapping[str, object] | None = None,
+) -> pd.DataFrame:
+    source_state = st.session_state if state is None else state
+    edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
+    for row_index in range(len(edited)):
+        for column in ("source_stream", "movement_code", "raw_movement_label", "include_in_report", "include_in_peak"):
+            key = _basic_mapping_widget_key(column, version, row_index)
+            if key in source_state and column in edited.columns:
+                edited.at[row_index, column] = source_state[key]
+    return edited
+
+
+def _basic_mapping_widget_state_exists(version: int, state: MutableMapping[str, object]) -> bool:
+    prefix = f"mapping_basic_"
+    suffix = f"_{version}_"
+    return any(str(key).startswith(prefix) and suffix in str(key) for key in state)
+
+
+def _apply_mapping_editor_widget_state(editor_frame: pd.DataFrame, editor_state: object) -> pd.DataFrame:
+    edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
+    if not isinstance(editor_state, dict):
+        return edited
+
+    for row_index in sorted((int(row) for row in editor_state.get("deleted_rows", []) if str(row).isdigit()), reverse=True):
+        if 0 <= row_index < len(edited):
+            edited = edited.drop(index=row_index).reset_index(drop=True)
+
+    for row in editor_state.get("added_rows", []):
+        if isinstance(row, dict):
+            edited = pd.concat([edited, pd.DataFrame([row])], ignore_index=True)
+
+    for row_key, changes in (editor_state.get("edited_rows") or {}).items():
+        if not str(row_key).isdigit() or not isinstance(changes, dict):
+            continue
+        row_index = int(row_key)
+        if 0 <= row_index < len(edited):
+            for column, value in changes.items():
+                if column in edited.columns:
+                    edited.at[row_index, column] = value
+
+    for cell_key, value in (editor_state.get("edited_cells") or {}).items():
+        row_text, _, column = str(cell_key).partition(":")
+        if row_text.isdigit() and column in edited.columns:
+            row_index = int(row_text)
+            if 0 <= row_index < len(edited):
+                edited.at[row_index, column] = value
+
+    return edited
+
+
+def _render_basic_mapping_editor(
+    editor_frame: pd.DataFrame,
+    movement_code_options: list[str],
+    version: int,
+) -> pd.DataFrame:
+    edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
+    headers = st.columns([1.2, 1.2, 1.1, 1.2, 1.2, 0.8, 0.8])
+    for column, label in zip(
+        headers,
+        ["Sheet", "Raw", "Source", "Movement", "Label", "Report", "Peak"],
+        strict=True,
+    ):
+        column.caption(label)
+
+    for row_index, row in edited.iterrows():
+        cols = st.columns([1.2, 1.2, 1.1, 1.2, 1.2, 0.8, 0.8])
+        cols[0].write(str(row.get("raw_sheet", "")))
+        cols[1].write(str(row.get("raw_direction", "")))
+        edited.at[row_index, "source_stream"] = cols[2].selectbox(
+            "source_stream",
+            options=SOURCE_STREAM_OPTIONS,
+            index=_option_index(SOURCE_STREAM_OPTIONS, row.get("source_stream")),
+            key=_basic_mapping_widget_key("source_stream", version, row_index),
+            label_visibility="collapsed",
+        )
+        edited.at[row_index, "movement_code"] = cols[3].selectbox(
+            "movement_code",
+            options=movement_code_options,
+            index=_option_index(movement_code_options, row.get("movement_code")),
+            key=_basic_mapping_widget_key("movement_code", version, row_index),
+            label_visibility="collapsed",
+        )
+        edited.at[row_index, "raw_movement_label"] = cols[4].text_input(
+            "raw_movement_label",
+            value=str(row.get("raw_movement_label", "")),
+            key=_basic_mapping_widget_key("raw_movement_label", version, row_index),
+            label_visibility="collapsed",
+        )
+        edited.at[row_index, "include_in_report"] = cols[5].checkbox(
+            "include_in_report",
+            value=bool(row.get("include_in_report", True)),
+            key=_basic_mapping_widget_key("include_in_report", version, row_index),
+            label_visibility="collapsed",
+        )
+        edited.at[row_index, "include_in_peak"] = cols[6].checkbox(
+            "include_in_peak",
+            value=bool(row.get("include_in_peak", True)),
+            key=_basic_mapping_widget_key("include_in_peak", version, row_index),
+            label_visibility="collapsed",
+        )
+    return edited
+
+
+def _mapping_from_editor_widget_state(
+    base_mapping: pd.DataFrame,
+    view_mode: str,
+    movement_code_scheme: str,
+    editor_key: str,
+    state: MutableMapping[str, object] | None = None,
+    apply_basic_widgets: bool = True,
+) -> pd.DataFrame:
+    source_state = st.session_state if state is None else state
+    version = int(editor_key.rsplit("_", 1)[-1] or 0)
+    if apply_basic_widgets and _basic_mapping_widget_state_exists(version, source_state):
+        basic_visible = _mapping_editor_frame(base_mapping, "Basic", movement_code_scheme)
+        basic_edited = _apply_basic_mapping_widget_state(basic_visible, version, source_state)
+        base_mapping = _merge_mapping_editor_result(base_mapping, basic_edited, movement_code_scheme)
+
+    editor_state = source_state.get(editor_key)
+    if not isinstance(editor_state, dict):
+        return base_mapping
+    visible = _mapping_editor_frame(base_mapping, view_mode, movement_code_scheme)
+    edited_visible = _apply_mapping_editor_widget_state(visible, editor_state)
+    return _merge_mapping_editor_result(base_mapping, edited_visible, movement_code_scheme)
+
+
+def _merge_mapping_editor_result(
+    base_mapping: pd.DataFrame,
+    edited_visible: pd.DataFrame,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
     edited = pd.DataFrame(edited_visible)
     base = _ordered_mapping_frame(base_mapping).reset_index(drop=True)
     if edited.empty and len(edited.columns) == 0:
@@ -2897,9 +3065,7 @@ def _merge_mapping_editor_result(base_mapping: pd.DataFrame, edited_visible: pd.
     for column, default in defaults.items():
         if column in merged.columns:
             merged[column] = merged[column].fillna(default)
-    if _is_v2_scheme(_current_mapping_scheme()):
-        merged = normalize_approach_movement_mapping(merged)
-    return _ordered_mapping_frame(merged)
+    return _ordered_mapping_frame(normalize_mapping_for_scheme(merged, movement_code_scheme))
 
 
 def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
@@ -4174,6 +4340,28 @@ def _run_streamlit_app() -> None:
                     _render_alert(warning_message, "warning")
 
                 mapping_scheme = _current_mapping_scheme()
+                mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
+                mapping_view = str(st.session_state.get("mapping_editor_view_mode") or "Basic")
+                editor_key = _mapping_editor_key(mapping_view, mapping_editor_version)
+                basic_widget_source = _mapping_source() in {MAPPING_SOURCE_DEFAULT_PREVIEW, MAPPING_SOURCE_USER_EDITOR}
+                if basic_widget_source or mapping_view != "Basic":
+                    default_mapping = _mapping_from_editor_widget_state(
+                        default_mapping,
+                        mapping_view,
+                        mapping_scheme,
+                        editor_key,
+                        apply_basic_widgets=basic_widget_source,
+                    )
+                if _is_v2_scheme(mapping_scheme):
+                    default_mapping = normalize_approach_movement_mapping(default_mapping)
+                if basic_widget_source and _basic_mapping_widget_state_exists(
+                    mapping_editor_version,
+                    st.session_state,
+                ):
+                    st.session_state["mapping_table"] = default_mapping.to_dict("records")
+                    st.session_state["tmc_mapping_table_from_session"] = False
+                    if _mapping_source() == MAPPING_SOURCE_DEFAULT_PREVIEW:
+                        _set_mapping_source(MAPPING_SOURCE_USER_EDITOR)
                 scheme_validation_issues = validate_mapping_scheme(default_mapping, mapping_scheme)
                 process_block_reason = _single_file_processing_block_reason(mapping_scheme)
                 mapping_issues = _single_file_mapping_issues(detected_sheet_names, default_mapping, mapping_scheme)
@@ -4208,7 +4396,6 @@ def _run_streamlit_app() -> None:
                     else:
                         _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
-                mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
                 for warning_message in mapping_control_warnings(default_mapping, mapping_scheme):
                     _render_alert(_thai_mapping_control_warning(warning_message), "warning")
                 movement_code_options = _movement_code_options_for_scheme(default_mapping, mapping_scheme)
@@ -4222,17 +4409,26 @@ def _run_streamlit_app() -> None:
                     key="mapping_editor_view_mode",
                     help="Basic แสดงคอลัมน์ที่ใช้บ่อย ส่วน Advanced แสดงคอลัมน์เสริมและเชิงเทคนิค",
                 )
+                editor_key = _mapping_editor_key(mapping_view, mapping_editor_version)
                 editor_frame = _mapping_editor_frame(default_mapping, mapping_view, mapping_scheme)
-                mapping = st.data_editor(
-                    editor_frame,
-                    width="stretch",
-                    num_rows="dynamic",
-                    column_config=_mapping_editor_column_config(mapping_scheme, movement_code_options),
-                    key=f"mapping_editor_{mapping_view.lower()}_{mapping_editor_version}",
-                )
-                edited_frame = pd.DataFrame(mapping)
+                use_basic_controls = mapping_view == "Basic" and _mapping_source() in {
+                    MAPPING_SOURCE_DEFAULT_PREVIEW,
+                    MAPPING_SOURCE_USER_EDITOR,
+                }
+                if use_basic_controls:
+                    edited_frame = _render_basic_mapping_editor(editor_frame, movement_code_options, mapping_editor_version)
+                else:
+                    mapping = st.data_editor(
+                        editor_frame,
+                        width="stretch",
+                        num_rows="dynamic",
+                        column_config=_mapping_editor_column_config(mapping_scheme, movement_code_options),
+                        key=editor_key,
+                    )
+                    edited_frame = pd.DataFrame(mapping)
+                    edited_frame = _apply_mapping_editor_widget_state(edited_frame, st.session_state.get(editor_key))
                 editor_changed = _mapping_editor_changed(editor_frame, edited_frame)
-                mapping = _merge_mapping_editor_result(default_mapping, edited_frame)
+                mapping = _merge_mapping_editor_result(default_mapping, edited_frame, mapping_scheme)
                 if _mapping_rows_are_committed() or editor_changed:
                     st.session_state["mapping_table"] = mapping.to_dict("records")
                     st.session_state["tmc_mapping_table_from_session"] = False

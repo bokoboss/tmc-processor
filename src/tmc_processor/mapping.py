@@ -21,6 +21,7 @@ from .movement_scheme import (
     APPROACH_MOVEMENT_CODES,
     MOVEMENT_SCHEME_V1,
     MOVEMENT_SCHEME_V2,
+    derive_movement_leg_mapping_from_code,
     is_approach_movement_code,
     normalize_movement_code_scheme,
     parse_approach_movement_code,
@@ -48,6 +49,10 @@ _SOURCE_STREAM_ALIASES = {
 }
 _AGGREGATION_METHOD_ALIASES = {"sum": "sum"}
 _TURN_TYPE_ALIASES = {
+    "l": "L",
+    "t": "T",
+    "r": "R",
+    "u": "U",
     "through": "through",
     "left": "left",
     "right": "right",
@@ -56,6 +61,7 @@ _TURN_TYPE_ALIASES = {
     "combined": "other",
     "other": "other",
 }
+_TURN_TYPE_OPTIONS = [*TURN_TYPE_OPTIONS, "L", "T", "R", "U"]
 _FACILITY_TYPE_ALIASES = {
     "at_grade": "at_grade",
     "frontage": "frontage",
@@ -117,7 +123,7 @@ def mapping_control_warnings(mapping: pd.DataFrame, movement_code_scheme: str = 
     warnings: list[str] = []
     checks = {
         "source_stream": (_SOURCE_STREAM_ALIASES, SOURCE_STREAM_OPTIONS, "other"),
-        "turn_type": (_TURN_TYPE_ALIASES, TURN_TYPE_OPTIONS, "other"),
+        "turn_type": (_TURN_TYPE_ALIASES, _TURN_TYPE_OPTIONS, "other"),
         "facility_type": (_FACILITY_TYPE_ALIASES, FACILITY_TYPE_OPTIONS, "other"),
         "aggregation_method": (_AGGREGATION_METHOD_ALIASES, AGGREGATION_METHOD_OPTIONS, _AGGREGATION_METHOD_DEFAULT),
     }
@@ -233,7 +239,7 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
     )
     cleaned.loc[cleaned["raw_movement_label"].str.strip() == "", "raw_movement_label"] = cleaned["raw_direction"]
     cleaned["turn_type"] = cleaned["turn_type"].map(
-        lambda value: _canonical_choice(value, _TURN_TYPE_ALIASES, TURN_TYPE_OPTIONS)
+        lambda value: _canonical_choice(value, _TURN_TYPE_ALIASES, _TURN_TYPE_OPTIONS)
     )
     cleaned["facility_type"] = cleaned["facility_type"].map(
         lambda value: _canonical_choice(value, _FACILITY_TYPE_ALIASES, FACILITY_TYPE_OPTIONS, _FACILITY_TYPE_DEFAULT)
@@ -252,7 +258,7 @@ def clean_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_approach_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
-    """Return mapping with v2 component fields derived from movement_code."""
+    """Return mapping with v2 component and processor-leg fields derived from movement_code."""
 
     normalized = clean_mapping(mapping)
     if "approach_direction" not in normalized.columns:
@@ -263,9 +269,52 @@ def normalize_approach_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
         if not is_approach_movement_code(code):
             continue
         parsed = parse_approach_movement_code(code)
+        leg_mapping = derive_movement_leg_mapping_from_code(code)
         normalized.at[index, "approach_direction"] = parsed.approach_direction
         normalized.at[index, "movement_type"] = parsed.movement_type
+        normalized.at[index, "from_leg"] = leg_mapping.from_leg
+        normalized.at[index, "to_leg"] = leg_mapping.to_leg
     return normalized
+
+
+_FROM_TO_TURN_TYPE = {
+    ("N", "E"): "L",
+    ("N", "S"): "T",
+    ("N", "W"): "R",
+    ("N", "N"): "U",
+    ("E", "S"): "L",
+    ("E", "W"): "T",
+    ("E", "N"): "R",
+    ("E", "E"): "U",
+    ("S", "W"): "L",
+    ("S", "N"): "T",
+    ("S", "E"): "R",
+    ("S", "S"): "U",
+    ("W", "N"): "L",
+    ("W", "E"): "T",
+    ("W", "S"): "R",
+    ("W", "W"): "U",
+}
+
+
+def normalize_from_to_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
+    """Return mapping with processor fields derived from NE/NS/NW/NU-style movement_code."""
+
+    normalized = clean_mapping(mapping)
+    for index, code in normalized["movement_code"].fillna("").astype(str).str.strip().items():
+        if code not in MOVEMENT_CODE_OPTIONS:
+            continue
+        from_leg = code[0]
+        to_leg = from_leg if code[1] == "U" else code[1]
+        normalized.at[index, "from_leg"] = from_leg
+        normalized.at[index, "to_leg"] = to_leg
+        normalized.at[index, "turn_type"] = _FROM_TO_TURN_TYPE[(from_leg, to_leg)]
+    return normalized
+
+
+def normalize_mapping_for_scheme(mapping: pd.DataFrame, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> pd.DataFrame:
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    return normalize_approach_movement_mapping(mapping) if scheme == MOVEMENT_SCHEME_V2 else normalize_from_to_movement_mapping(mapping)
 
 
 REQUIRED_MAPPING_FIELDS = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type"]
@@ -408,7 +457,7 @@ def mapping_to_excel_bytes(mapping: pd.DataFrame, movement_code_scheme: str = MO
 
 
 def validate_mapping_for_processing(detected_sheets: list[str], mapping: pd.DataFrame) -> pd.DataFrame:
-    cleaned = clean_mapping(mapping)
+    cleaned = normalize_from_to_movement_mapping(mapping)
     issues = []
 
     for sheet in detected_sheets:
@@ -448,7 +497,7 @@ def validate_mapping_for_processing_by_scheme(
     if scheme == MOVEMENT_SCHEME_V1:
         return validate_mapping_for_processing(detected_sheets, mapping)
 
-    cleaned = normalize_approach_movement_mapping(mapping)
+    cleaned = normalize_mapping_for_scheme(mapping, scheme)
     issues = []
     for issue in validate_mapping_scheme(cleaned, scheme):
         issues.append({"raw_sheet": "", "field": "movement_code", "message": issue})

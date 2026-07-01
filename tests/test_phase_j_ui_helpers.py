@@ -75,6 +75,55 @@ def test_single_file_ui_helper_processes_v2_through_dry_run_path() -> None:
     assert set(result.normalized["movement_code_scheme"]) == {MOVEMENT_SCHEME_V2}
 
 
+def test_single_file_ui_helper_derives_v2_processor_legs_from_basic_mapping() -> None:
+    raw_sheets = {
+        "Sheet 1": pd.DataFrame(
+            [
+                {
+                    "raw_sheet": "Sheet 1",
+                    "raw_direction": "West",
+                    "time_start": "07:00",
+                    "time_end": "07:15",
+                    "vehicle_class": "PC<7",
+                    "count": 3,
+                }
+            ]
+        )
+    }
+    mapping = pd.DataFrame(
+        [
+            {
+                "raw_sheet": "Sheet 1",
+                "raw_direction": "West",
+                "movement_code": "WL",
+                "source_stream": "mainline",
+                "raw_movement_label": "West left",
+                "from_leg": "",
+                "to_leg": "",
+                "turn_type": "",
+                "facility_type": "at_grade",
+                "include_in_peak": True,
+                "include_in_report": True,
+                "aggregation_method": "sum",
+            }
+        ]
+    )
+
+    result = app._process_single_file_for_ui(
+        raw_sheets=raw_sheets,
+        mapping=mapping,
+        setup=_setup(MOVEMENT_SCHEME_V2),
+        detected_sheets=list(raw_sheets),
+        peak_mode=DEFAULT_PEAK_MODE,
+        peak_windows=_peak_windows(),
+        pce_factors={},
+    )
+
+    assert isinstance(result, V2DryRunResult)
+    assert result.normalized.loc[0, "from_leg"] == "W"
+    assert result.normalized.loc[0, "to_leg"] == "N"
+
+
 def test_v2_result_feeds_peak_review_hourly_data_helper() -> None:
     result, mapping = _v2_result()
 
@@ -177,6 +226,51 @@ def test_v1_single_file_ui_helper_still_uses_processing_result_path() -> None:
     assert isinstance(result, ProcessingResult)
     assert not isinstance(result, V2DryRunResult)
     assert not result.normalized.empty
+
+
+def test_v1_single_file_ui_helper_processes_movement_code_only_mapping() -> None:
+    raw_sheets = {
+        "ทิศ 1": pd.DataFrame(
+            [
+                {
+                    "raw_sheet": "ทิศ 1",
+                    "raw_direction": "North",
+                    "time_start": "07:00",
+                    "time_end": "07:15",
+                    "vehicle_class": "PC<7",
+                    "count": 3,
+                }
+            ]
+        )
+    }
+    mapping = pd.DataFrame(
+        [
+            {
+                "raw_sheet": "ทิศ 1",
+                "movement_code": "NE",
+                "from_leg": None,
+                "to_leg": None,
+                "turn_type": None,
+            }
+        ]
+    )
+
+    result = app._process_single_file_for_ui(
+        raw_sheets=raw_sheets,
+        mapping=mapping,
+        setup=_setup(MOVEMENT_SCHEME_V1),
+        detected_sheets=list(raw_sheets),
+        peak_mode=DEFAULT_PEAK_MODE,
+        peak_windows=_peak_windows(),
+        pce_factors={},
+    )
+
+    assert isinstance(result, ProcessingResult)
+    assert result.normalized.loc[0, ["from_leg", "to_leg", "turn_type"]].to_dict() == {
+        "from_leg": "N",
+        "to_leg": "E",
+        "turn_type": "L",
+    }
 
 
 def test_v1_batch_readiness_unchanged() -> None:
