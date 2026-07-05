@@ -34,7 +34,7 @@ from .movement_scheme import (
     parse_approach_movement_code,
 )
 from .pcu import pce_factor_traceability_frame
-from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf
+from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf, peak_periods_from_frame, resolve_effective_peak_periods
 from .report_template import (
     DEFAULT_TEMPLATE_MAP_PATH,
     DEFAULT_TEMPLATE_PATH,
@@ -135,6 +135,9 @@ def _export_metadata_frame(
         ("west_road", setup.get("west_road", "")),
         ("caption_text", setup.get("caption_text", "")),
         ("show_u_turn", setup.get("show_u_turn", "")),
+        ("effective_am_peak", _peak_label_from_setup(setup, "am_peak_start", "am_peak_end")),
+        ("effective_pm_peak", _peak_label_from_setup(setup, "pm_peak_start", "pm_peak_end")),
+        ("effective_peak_source", setup.get("peak_selection_source", "")),
     ]
     return pd.DataFrame(rows, columns=["field", "value"])
 
@@ -203,6 +206,12 @@ def _setup_frame(setup: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _peak_label_from_setup(setup: dict[str, Any], start_key: str, end_key: str) -> str:
+    start = _time_text(setup.get(start_key))
+    end = _time_text(setup.get(end_key))
+    return f"{start}-{end}" if start and end else ""
+
+
 def _time_text(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -230,15 +239,45 @@ def _peak_value(row: pd.Series | None, column: str) -> Any:
 
 
 def _resolved_peaks_for_export(setup: dict[str, Any], normalized: pd.DataFrame, peaks: pd.DataFrame) -> pd.DataFrame:
-    periods = confirmed_peak_periods_from_setup(setup)
-    if str(setup.get("peak_selection_source") or "").casefold() == PEAK_SELECTION_USER_CONFIRMED and periods:
+    setup_periods = confirmed_peak_periods_from_setup(setup)
+    selected_periods = (
+        setup_periods
+        if str(setup.get("peak_selection_source") or "").casefold() == PEAK_SELECTION_USER_CONFIRMED
+        else {}
+    )
+    periods, source = resolve_effective_peak_periods(
+        selected_peak_periods=selected_periods,
+        recommended_peak_periods=peak_periods_from_frame(peaks),
+        template_default_peak_periods=setup_periods,
+    )
+    if periods:
         return confirmed_peak_phf(
             normalized,
             peak_periods=periods,
             peak_mode=str(setup.get("peak_mode") or DEFAULT_PEAK_MODE),
-            peak_selection_source=PEAK_SELECTION_USER_CONFIRMED,
+            peak_selection_source=source,
         )
     return peaks
+
+
+def _setup_with_effective_peak_values(setup: dict[str, Any], peaks: pd.DataFrame) -> dict[str, Any]:
+    updated = dict(setup)
+    for period, prefix in (("AM", "am"), ("PM", "pm")):
+        row = _peak_row(peaks, period)
+        if row is None:
+            continue
+        updated[f"{prefix}_peak_start"] = _time_text(_peak_value(row, "peak_start"))
+        updated[f"{prefix}_peak_end"] = _time_text(_peak_value(row, "peak_end"))
+        if _peak_value(row, "peak_selection_source"):
+            updated["peak_selection_source"] = _peak_value(row, "peak_selection_source")
+    return updated
+
+
+def _effective_peak_report_text(setup: dict[str, Any]) -> str:
+    am = _peak_label_from_setup(setup, "am_peak_start", "am_peak_end") or "-"
+    pm = _peak_label_from_setup(setup, "pm_peak_start", "pm_peak_end") or "-"
+    source = str(setup.get("peak_selection_source") or "").strip() or "-"
+    return f"Peak used for export: AM {am}; PM {pm} ({source})"
 
 
 def _window_text(setup: dict[str, Any], start_key: str, end_key: str) -> str:
@@ -968,6 +1007,11 @@ def _insert_tmc_report_sheet(writer, setup: dict[str, Any], peaks: pd.DataFrame,
     worksheet["A2"].font = Font(bold=True, size=13, color="1F4E78")
     worksheet["A2"].alignment = Alignment(horizontal="center", vertical="center")
 
+    worksheet.merge_cells("A3:AH3")
+    worksheet["A3"] = _effective_peak_report_text(setup)
+    worksheet["A3"].font = Font(bold=True, size=10, color="C00000")
+    worksheet["A3"].alignment = Alignment(horizontal="center", vertical="center")
+
     metadata = [
         ("Project", _setup_first_lookup_formula("project_name", "project")),
         ("Survey point", _setup_survey_point_formula()),
@@ -1274,6 +1318,8 @@ def export_v2_generated_workbook(
     movement = _v2_movement_summary_frame(getattr(result, "movement"), normalized)
     vehicle = getattr(result, "vehicle")
     peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
+    peaks = _resolved_peaks_for_export(setup, normalized, peaks)
+    setup = _setup_with_effective_peak_values(setup, peaks)
     pce_factors = getattr(result, "pce_factors", None)
     movement_diagram = build_v2_movement_diagram_data(
         movement_summary=movement,
@@ -1338,6 +1384,8 @@ def _v2_template_export_sheets(
     movement = _v2_movement_summary_frame(getattr(result, "movement"), normalized)
     vehicle = getattr(result, "vehicle")
     peaks = _v2_peak_summary_frame(getattr(result, "peaks"))
+    peaks = _resolved_peaks_for_export(setup, normalized, peaks)
+    setup.update(_setup_with_effective_peak_values(setup, peaks))
     vehicle_composition_for_report = vehicle_composition_report(normalized)
     sheets = {
         "Export_Metadata": _v2_export_metadata_frame(
@@ -1558,6 +1606,7 @@ def export_workbook(
         )
     mapping = clean_mapping(mapping)
     peaks = _resolved_peaks_for_export(setup, normalized, peaks)
+    setup = _setup_with_effective_peak_values(setup, peaks)
     buffer = BytesIO()
     hourly_movement = hourly_movement_pcu(normalized, mapping)
     vehicle_composition_for_report = vehicle_composition_report(normalized)

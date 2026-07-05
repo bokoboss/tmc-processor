@@ -18,6 +18,7 @@ from .time_utils import minutes_to_time, time_to_minutes
 
 PEAK_SELECTION_AUTO = "auto_suggested"
 PEAK_SELECTION_USER_CONFIRMED = "user_confirmed"
+PEAK_SELECTION_TEMPLATE_DEFAULT = "template_default"
 
 PEAK_SETUP_KEYS = {
     "AM": ("am_peak_start", "am_peak_end"),
@@ -51,6 +52,36 @@ def confirmed_peak_periods_from_setup(setup: dict) -> dict[str, tuple[str, str]]
         if _present(start) and _present(end):
             periods[period] = (start, end)
     return periods
+
+
+def peak_periods_from_frame(peaks: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    periods = {}
+    if peaks.empty or not {"period", "peak_start", "peak_end"}.issubset(peaks.columns):
+        return periods
+    for _, row in peaks.iterrows():
+        period = str(row.get("period") or "").upper()
+        start = row.get("peak_start")
+        end = row.get("peak_end")
+        if period in PEAK_SETUP_KEYS and _present(start) and _present(end):
+            periods[period] = (start, end)
+    return periods
+
+
+def resolve_effective_peak_periods(
+    *,
+    selected_peak_periods: dict[str, tuple[str, str]] | None = None,
+    recommended_peak_periods: dict[str, tuple[str, str]] | None = None,
+    template_default_peak_periods: dict[str, tuple[str, str]] | None = None,
+) -> tuple[dict[str, tuple[str, str]], str]:
+    for periods, source in (
+        (selected_peak_periods, PEAK_SELECTION_USER_CONFIRMED),
+        (recommended_peak_periods, PEAK_SELECTION_AUTO),
+        (template_default_peak_periods, PEAK_SELECTION_TEMPLATE_DEFAULT),
+    ):
+        cleaned = {period: value for period, value in (periods or {}).items() if period in PEAK_SETUP_KEYS}
+        if cleaned:
+            return cleaned, source
+    return {}, ""
 
 
 def _candidate_starts(interval: pd.DataFrame, window_start: int, window_end: int, peak_mode: str) -> list[int]:

@@ -2271,8 +2271,7 @@ def _single_effective_peak_state(result: object | None = None) -> dict[str, obje
     suggested_pm = f"{suggested.get('pm_peak_start', '')}-{suggested.get('pm_peak_end', '')}".strip("-")
     effective_am = f"{values.get('am_peak_start', '')}-{values.get('am_peak_end', '')}".strip("-")
     effective_pm = f"{values.get('pm_peak_start', '')}-{values.get('pm_peak_end', '')}".strip("-")
-    selector_touched = "am_peak_period_select" in st.session_state or "pm_peak_period_select" in st.session_state
-    user_adjusted = selector_touched and (effective_am != suggested_am or effective_pm != suggested_pm)
+    user_adjusted = bool(confirmed) and (effective_am != suggested_am or effective_pm != suggested_pm)
     loaded_peaks = bool(st.session_state.get("tmc_loaded_confirmed_peaks"))
     if user_adjusted:
         source = PEAK_SELECTION_USER_CONFIRMED
@@ -2290,6 +2289,35 @@ def _single_effective_peak_state(result: object | None = None) -> dict[str, obje
         "summary_kind": "success",
         "values": values,
     }
+
+
+def _peak_range_label(values: dict[str, object], start_key: str, end_key: str) -> str:
+    start = str(values.get(start_key) or "")
+    end = str(values.get(end_key) or "")
+    return f"{start}-{end}" if start and end else "-"
+
+
+def _peak_source_label(source: object) -> str:
+    source_text = str(source or "")
+    if source_text == PEAK_SELECTION_USER_CONFIRMED:
+        return "เลือกโดยผู้ใช้"
+    if source_text == PEAK_SELECTION_AUTO:
+        return "ระบบแนะนำ"
+    return "ค่าเริ่มต้นของเทมเพลต"
+
+
+def _render_effective_peak_export_confirmation(result: object | None, peak_state: dict[str, object]) -> None:
+    suggested = _suggested_peaks_from_result(result)
+    effective = dict(peak_state.get("values") or {})
+    source_label = _peak_source_label(peak_state.get("source"))
+    st.info(
+        "\n".join(
+            [
+                f"Peak ที่ระบบแนะนำ: AM {_peak_range_label(suggested, 'am_peak_start', 'am_peak_end')} / PM {_peak_range_label(suggested, 'pm_peak_start', 'pm_peak_end')}",
+                f"Peak ที่จะใช้ส่งออก: AM {_peak_range_label(effective, 'am_peak_start', 'am_peak_end')} / PM {_peak_range_label(effective, 'pm_peak_start', 'pm_peak_end')} ({source_label})",
+            ]
+        )
+    )
 
 
 def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
@@ -5243,6 +5271,15 @@ def _run_streamlit_app() -> None:
                         pm_peak_label = st.selectbox("ช่วงที่กำหนด PM", option_labels, index=pm_index, key="pm_peak_period_select")
                     confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
                     confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
+                    previous_confirmed = (
+                        st.session_state.get("tmc_confirmed_am_peak_start"),
+                        st.session_state.get("tmc_confirmed_am_peak_end"),
+                        st.session_state.get("tmc_confirmed_pm_peak_start"),
+                        st.session_state.get("tmc_confirmed_pm_peak_end"),
+                    )
+                    current_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
+                    if previous_confirmed != current_confirmed:
+                        st.session_state.pop("tmc_output", None)
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
                     st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
                     st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
@@ -5306,6 +5343,7 @@ def _run_streamlit_app() -> None:
             if pce_results_stale:
                 _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
             _render_action_hint("สร้างรายงานหลังจากประมวลผลและมีช่วงเร่งด่วน AM/PM พร้อมใช้งานแล้ว")
+            _render_effective_peak_export_confirmation(result if result is not None else None, export_peak_state)
             export_run = st.button("สร้างรายงาน Excel", type="primary", disabled=not (result is not None and confirmed_ready and not pce_results_stale))
 
             export_status_col, readiness_col = st.columns([0.9, 1.1])
