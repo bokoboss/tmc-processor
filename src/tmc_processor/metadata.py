@@ -6,7 +6,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib import metadata as package_metadata
 from pathlib import Path
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 from typing import Any, Mapping
 
 import pandas as pd
