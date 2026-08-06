@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from importlib import metadata as package_metadata
 from pathlib import Path
 import tomllib
@@ -43,12 +43,12 @@ def generated_timestamp_text(generated_at: datetime | str | None = None) -> str:
     """Return an ISO 8601 UTC timestamp for exported artifacts."""
 
     if generated_at is None:
-        return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if isinstance(generated_at, datetime):
         value = generated_at
         if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return str(generated_at)
 
 
