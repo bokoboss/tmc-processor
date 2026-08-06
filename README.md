@@ -188,6 +188,20 @@ python -m pytest
 
 `scripts/smoke_demo.py` ใช้ไฟล์สังเคราะห์จาก `samples/demo/`
 
+## CI and testing
+
+Run the automated suite locally with:
+
+```powershell
+python -m pytest
+```
+
+GitHub Actions runs the suite on Windows for Python 3.10 and 3.12 on pushes to `main` and pull requests targeting `main`. CI uses committed synthetic/demo fixtures and does not require Microsoft Excel or files under `samples/raw/`.
+
+Real Excel COM smoke tests remain a local/manual release gate on a Windows machine with Microsoft Excel installed. Files under `samples/raw/` are local validation data and are not part of CI.
+
+Stable checkpoint validation: 256 tests passed with 11 warnings locally, and three real sample workbooks passed local Streamlit and Excel validation.
+
 ## License
 
 โครงการนี้เผยแพร่ภายใต้ MIT License ดูรายละเอียดได้ที่ [LICENSE](LICENSE)

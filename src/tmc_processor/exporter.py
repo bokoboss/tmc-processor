@@ -1210,6 +1210,7 @@ def _export_workbook_from_template(
         # Native chart preservation via OOXML package patching is disabled because it can corrupt worksheet XML.
         use_native_template_charts=False,
     )
+    workbook[TMC_REPORT_SHEET_NAME]["A3"] = _effective_peak_report_text(setup)
 
     if include_charts:
         _insert_charts_sheet(adapter, chart_pngs)

@@ -415,6 +415,17 @@ def _set_cell(
         cell.Value = value
 
 
+def _write_effective_peak_label(worksheet, metadata: dict[str, Any]) -> None:
+    def label(period: str) -> str:
+        prefix = period.lower()
+        start = _coerce_excel_value(metadata.get(f"{prefix}_peak_start"))
+        end = _coerce_excel_value(metadata.get(f"{prefix}_peak_end"))
+        return f"{start}-{end}" if start and end else "-"
+
+    source = str(metadata.get("peak_selection_source") or "").strip() or "-"
+    _set_cell(worksheet, "A3", f"Peak used for export: AM {label('AM')}; PM {label('PM')} ({source})")
+
+
 def _column_number(column: str) -> int:
     number = 0
     for char in column.upper():
@@ -803,6 +814,7 @@ def export_with_excel_com(
         summary = workbook.Worksheets(summary_name)
         guard = _FormulaWriteGuard(template_map, diagnostics)
         _write_metadata(summary, template_map, metadata, guard)
+        _write_effective_peak_label(summary, metadata)
         _write_movement_formulas(summary, template_map, guard)
         _write_summary_formulas(summary, template_map, guard)
         _write_table(summary, template_map.get("hourly_movement_table", {}), report_data.get("hourly_movement_pcu", pd.DataFrame()), guard)
