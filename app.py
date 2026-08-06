@@ -585,8 +585,12 @@ def apply_single_export_mode_change(selected_mode: str, previous_mode: str | Non
     if selected_mode == previous_mode:
         return False
     st.session_state["report_export_mode"] = selected_mode
-    st.session_state.pop("tmc_output", None)
+    _clear_single_export()
     return True
+
+
+def _clear_single_export() -> bool:
+    return st.session_state.pop("tmc_output", None) is not None
 
 
 def apply_batch_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
@@ -5278,12 +5282,13 @@ def _run_streamlit_app() -> None:
                         st.session_state.get("tmc_confirmed_pm_peak_end"),
                     )
                     current_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
-                    if previous_confirmed != current_confirmed:
-                        st.session_state.pop("tmc_output", None)
+                    export_invalidated = previous_confirmed != current_confirmed and _clear_single_export()
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
                     st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
                     st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
                     st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
+                    if export_invalidated:
+                        _flash_and_rerun("Peak เปลี่ยนแปลงแล้ว กรุณาสร้างรายงานใหม่")
                     confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
                     confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
                     _render_metric_strip(

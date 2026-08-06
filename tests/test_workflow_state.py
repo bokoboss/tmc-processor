@@ -128,6 +128,20 @@ def test_single_generated_report_marks_export_completed() -> None:
     assert ("ส่งออก", "สร้างแล้ว", "success") in state["summary"]
 
 
+def test_peak_change_clears_export_and_returns_workflow_to_export_ready() -> None:
+    _reset_state()
+    st.session_state["mapping_table"] = [{"raw_sheet": "North", "movement_code": "NB"}]
+    st.session_state["tmc_processed"] = {"result": _processed_result()}
+    st.session_state["tmc_output"] = {"workbook_bytes": b"old"}
+
+    assert app._clear_single_export() is True
+
+    state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
+
+    assert state["steps"][5] == "ready"
+    assert ("ส่งออก", "พร้อมสร้างรายงาน", "success") in state["summary"]
+
+
 def test_single_processed_result_peak_summary_uses_suggested_not_no_results() -> None:
     state = _single_ready_state()
 
