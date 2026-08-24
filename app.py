@@ -3662,6 +3662,34 @@ def _sync_batch_workflow_from_state(
     return _sync_workflow_contract(WORKFLOW_BATCH_MODE, revisions, readiness)
 
 
+def _sync_workflow_after_pce_editor(
+    *,
+    is_single_file_mode: bool,
+    export_mode: str | None,
+    source_bytes: bytes | None = None,
+    source_file_name: str | None = None,
+    batch_uploads: list[object] | tuple[object, ...] | None = None,
+    mapping_preset: dict[str, object] | None = None,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+    metadata_rows: list[dict[str, object]] | None = None,
+) -> WorkflowTransition:
+    """Re-sync authoritative readiness after the PCE editor mutates widget state."""
+
+    if is_single_file_mode:
+        return _sync_single_workflow_from_state(
+            source_bytes=source_bytes,
+            source_file_name=source_file_name,
+            export_mode=export_mode,
+        )
+    return _sync_batch_workflow_from_state(
+        batch_uploads=batch_uploads,
+        mapping_preset=mapping_preset,
+        movement_code_scheme=movement_code_scheme,
+        metadata_rows=metadata_rows or [],
+        export_mode=export_mode,
+    )
+
+
 def _mark_batch_export_stale_now() -> None:
     if st.session_state.get("tmc_batch_export_result") is not None:
         st.session_state["tmc_batch_export_stale"] = True
@@ -4578,6 +4606,12 @@ def _run_streamlit_app() -> None:
             with st.container(border=True):
                 _render_section_header("ค่า PCE", "แก้เฉพาะกรณีต้องใช้ค่าเทียบเท่ารถยนต์นั่งต่างจากค่าเริ่มต้น")
                 selected_pce_factors = _render_pce_factor_editor()
+                _sync_workflow_after_pce_editor(
+                    is_single_file_mode=True,
+                    source_bytes=file_bytes if uploaded_file is not None else None,
+                    source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                    export_mode=export_mode,
+                )
                 has_overrides, override_text = _pce_override_summary(selected_pce_factors)
                 _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
                 if has_overrides:
@@ -5050,6 +5084,14 @@ def _run_streamlit_app() -> None:
                 with st.container(border=True):
                     _render_section_header("ค่า PCE ร่วม", "ค่า PCE ชุดนี้จะใช้กับทุกไฟล์ใน Batch")
                     selected_pce_factors = _render_pce_factor_editor()
+                    _sync_workflow_after_pce_editor(
+                        is_single_file_mode=False,
+                        export_mode=str(st.session_state.get("tmc_batch_export_mode") or BATCH_SAFE_PNG_EXPORT_LABEL),
+                        batch_uploads=batch_uploads,
+                        mapping_preset=loaded_batch_preset,
+                        movement_code_scheme=batch_mapping_scheme,
+                        metadata_rows=batch_metadata_rows,
+                    )
                     has_overrides, override_text = _pce_override_summary(selected_pce_factors)
                     _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
                     if has_overrides:

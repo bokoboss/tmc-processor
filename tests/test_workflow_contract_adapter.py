@@ -85,6 +85,7 @@ def _seed_single_state(source_bytes: bytes = b"source-a") -> None:
     st.session_state["tmc_confirmed_am_peak_end"] = "09:00"
     st.session_state["tmc_confirmed_pm_peak_start"] = "17:00"
     st.session_state["tmc_confirmed_pm_peak_end"] = "18:00"
+    st.session_state["tmc_selected_pce_factors"] = app._current_pce_factors_from_state()
     app._sync_single_workflow_from_state(
         source_bytes=source_bytes,
         source_file_name="demo.xlsx",
@@ -121,6 +122,27 @@ def test_mapping_semantic_change_stales_single_analysis_and_export() -> None:
     assert transition.analysis_invalidated is True
     assert st.session_state["tmc_pce_results_stale"] is True
     assert "tmc_output" not in st.session_state
+
+
+def test_pce_editor_change_updates_stored_readiness_in_same_adapter_flow() -> None:
+    _seed_single_state()
+    changed_pce = dict(st.session_state["tmc_selected_pce_factors"])
+    changed_pce["MC"] = 0.5
+
+    app._store_selected_pce_factors(changed_pce)
+    app._sync_workflow_after_pce_editor(
+        is_single_file_mode=True,
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+
+    stored = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert stored is not None
+    assert st.session_state["tmc_pce_results_stale"] is True
+    assert stored.readiness.analysis is False
+    assert stored.readiness.review is False
+    assert stored.readiness.export is False
 
 
 def test_mapping_editor_and_view_only_changes_do_not_stale_single_state() -> None:
