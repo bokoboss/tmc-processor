@@ -136,6 +136,20 @@ from tmc_processor.time_utils import (
     hourly_interval_options as base_hourly_interval_options,
     hourly_interval_rows,
 )
+from tmc_processor.workflow_state import (
+    WorkflowReadiness,
+    WorkflowRevisions,
+    WorkflowState,
+    WorkflowTransition,
+    analysis_config_fingerprint,
+    analysis_result_fingerprint,
+    export_config_fingerprint,
+    mapping_fingerprint,
+    review_decision_fingerprint,
+    semantic_fingerprint,
+    source_fingerprint,
+    transition_workflow,
+)
 
 
 EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode — แนะนำ"
@@ -180,6 +194,30 @@ SETUP_TIME_FIELDS = {
     "pm_peak_window_start",
     "pm_peak_window_end",
 }
+
+WORKFLOW_STATE_KEY = "tmc_workflow_state"
+WORKFLOW_SINGLE_MODE = "single"
+WORKFLOW_BATCH_MODE = "batch"
+WORKFLOW_EXPORT_METADATA_FIELDS = (
+    "project_name",
+    "tmc_id",
+    "tmc_title",
+    "survey_point",
+    "survey_date_text",
+    "weather",
+    "responsible_party",
+    "survey_period",
+    "north_label",
+    "south_label",
+    "east_label",
+    "west_label",
+    "north_road",
+    "south_road",
+    "east_road",
+    "west_road",
+    "caption_text",
+    "show_u_turn",
+)
 
 CHART_PRIMARY_COLOR = "#0E4A2A"
 CHART_PM_COLOR = "#B57A22"
@@ -591,6 +629,218 @@ def apply_single_export_mode_change(selected_mode: str, previous_mode: str | Non
 
 def _clear_single_export() -> bool:
     return st.session_state.pop("tmc_output", None) is not None
+
+
+_WORKFLOW_SOURCE_UNSET = object()
+
+
+def _workflow_state_for_mode(mode: str) -> WorkflowState | None:
+    states = st.session_state.get(WORKFLOW_STATE_KEY)
+    if not isinstance(states, dict):
+        return None
+    state = states.get(mode)
+    return state if isinstance(state, WorkflowState) else None
+
+
+def _store_workflow_state(state: WorkflowState) -> None:
+    states = st.session_state.get(WORKFLOW_STATE_KEY)
+    states = dict(states) if isinstance(states, dict) else {}
+    states[state.mode] = state
+    st.session_state[WORKFLOW_STATE_KEY] = states
+
+
+def _workflow_export_payload(
+    setup: dict[str, object] | None,
+    *,
+    export_mode: str | None,
+    source_file_name: str | None = None,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    setup = setup or {}
+    payload: dict[str, object] = {
+        "metadata": {field: setup.get(field, "") for field in WORKFLOW_EXPORT_METADATA_FIELDS},
+        "export_mode": str(export_mode or ""),
+        "source_file_name": str(source_file_name or ""),
+        "template_version": TEMPLATE_VERSION,
+        "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
+        "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
+        "template_path": str(DEFAULT_TEMPLATE_PATH),
+        "template_map_path": str(DEFAULT_TEMPLATE_MAP_PATH),
+        "use_template_report_layout": _use_template_layout_for_export(export_mode),
+    }
+    if extra:
+        payload["extra"] = extra
+    return payload
+
+
+def _analysis_result_revision(revisions: WorkflowRevisions, marker: object) -> str | None:
+    if marker is None:
+        return None
+    return analysis_result_fingerprint(
+        {
+            "source": revisions.source,
+            "mapping": revisions.mapping,
+            "analysis_config": revisions.analysis_config,
+            "marker": marker,
+        }
+    )
+
+
+def _single_workflow_revisions(
+    *,
+    source_bytes: bytes | None = None,
+    source_revision: object = _WORKFLOW_SOURCE_UNSET,
+    source_file_name: str | None,
+    mapping: object,
+    pce_factors: dict[str, float],
+    peak_mode: str | None,
+    peak_windows: dict[str, tuple[object, object]],
+    movement_code_scheme: str,
+    setup: dict[str, object],
+    export_mode: str | None,
+    confirmed_peaks: dict[str, str] | None,
+    analysis_present: bool,
+) -> WorkflowRevisions:
+    source = (
+        source_fingerprint(source_bytes)
+        if source_revision is _WORKFLOW_SOURCE_UNSET
+        else (str(source_revision) if source_revision else None)
+    )
+    revisions = WorkflowRevisions(
+        source=source,
+        mapping=mapping_fingerprint(mapping),
+        analysis_config=analysis_config_fingerprint(
+            pce_factors=pce_factors,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
+            movement_code_scheme=movement_code_scheme,
+        ),
+        review_decision=review_decision_fingerprint(confirmed_peaks),
+        export_config=export_config_fingerprint(
+            _workflow_export_payload(
+                setup,
+                export_mode=export_mode,
+                source_file_name=source_file_name,
+            )
+        ),
+    )
+    if analysis_present:
+        revisions = revisions.with_updates(analysis_result=_analysis_result_revision(revisions, "single"))
+    return revisions
+
+
+def _batch_workflow_revisions(
+    *,
+    uploads: list[object] | tuple[object, ...] | None,
+    mapping_preset: dict[str, object] | None,
+    pce_factors: dict[str, float],
+    peak_mode: str | None,
+    peak_windows: dict[str, tuple[object, object]],
+    movement_code_scheme: str,
+    metadata_rows: list[dict[str, object]],
+    setup: dict[str, object],
+    export_mode: str | None,
+    confirmed_peaks: dict[str, dict[str, str]] | None,
+    analysis_present: bool,
+) -> WorkflowRevisions:
+    content_revisions = tuple(source_fingerprint(file.getvalue()) for file in uploads or [])
+    source = semantic_fingerprint(content_revisions) if content_revisions else None
+    mapping = semantic_fingerprint(
+        {
+            "movement_code_scheme": movement_code_scheme,
+            "mapping_rows": (mapping_preset or {}).get("mapping_rows", []),
+        }
+    )
+    revisions = WorkflowRevisions(
+        source=source,
+        mapping=mapping,
+        analysis_config=analysis_config_fingerprint(
+            pce_factors=pce_factors,
+            peak_mode=peak_mode,
+            peak_windows=peak_windows,
+            movement_code_scheme=movement_code_scheme,
+        ),
+        review_decision=review_decision_fingerprint(confirmed_peaks),
+        export_config=export_config_fingerprint(
+            _workflow_export_payload(
+                setup,
+                export_mode=export_mode,
+                extra={
+                    "metadata_rows": metadata_rows,
+                    "preset_name": str((mapping_preset or {}).get("preset_name", "")),
+                    "source_file_names": [str(getattr(file, "name", "")) for file in uploads or []],
+                },
+            )
+        ),
+    )
+    if analysis_present:
+        revisions = revisions.with_updates(analysis_result=_analysis_result_revision(revisions, "batch"))
+    return revisions
+
+
+def _clear_single_review_state() -> None:
+    for key in (
+        "am_peak_period_select",
+        "pm_peak_period_select",
+        "tmc_confirmed_am_peak_start",
+        "tmc_confirmed_am_peak_end",
+        "tmc_confirmed_pm_peak_start",
+        "tmc_confirmed_pm_peak_end",
+        "tmc_loaded_confirmed_peaks",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _apply_workflow_transition(mode: str, transition: WorkflowTransition) -> None:
+    """Apply pure transition decisions to legacy session-state adapters."""
+
+    if not transition.engineering_state_changed:
+        return
+
+    if mode == WORKFLOW_SINGLE_MODE:
+        if transition.analysis_invalidated:
+            if st.session_state.get("tmc_processed") is not None:
+                st.session_state["tmc_pce_results_stale"] = True
+            _clear_single_review_state()
+        elif transition.review_invalidated:
+            _clear_single_review_state()
+        if transition.export_invalidated:
+            _clear_single_export()
+        return
+
+    has_analysis = st.session_state.get("tmc_batch_analysis_result") is not None
+    has_export = st.session_state.get("tmc_batch_export_result") is not None
+    if transition.analysis_invalidated:
+        if has_analysis:
+            st.session_state["tmc_batch_stale"] = True
+        st.session_state["tmc_batch_confirmed_peaks"] = {}
+    elif transition.review_invalidated:
+        st.session_state["tmc_batch_confirmed_peaks"] = {}
+    if transition.analysis_invalidated or transition.review_invalidated or transition.export_invalidated:
+        if has_analysis or has_export:
+            st.session_state["tmc_batch_export_stale"] = True
+        st.session_state.pop("tmc_batch_export_result", None)
+
+
+def _sync_workflow_contract(
+    mode: str,
+    revisions: WorkflowRevisions,
+    readiness: WorkflowReadiness,
+) -> WorkflowTransition:
+    previous_state = _workflow_state_for_mode(mode)
+    transition = transition_workflow(
+        previous_state.revisions if previous_state is not None else None,
+        revisions,
+    )
+    _apply_workflow_transition(mode, transition)
+    if transition.analysis_invalidated:
+        revisions = revisions.with_updates(analysis_result=None)
+    _store_workflow_state(WorkflowState(mode=mode, revisions=revisions, readiness=readiness))
+    return transition
+
+
+def _record_workflow_state(mode: str, revisions: WorkflowRevisions, readiness: WorkflowReadiness) -> None:
+    _store_workflow_state(WorkflowState(mode=mode, revisions=revisions, readiness=readiness))
 
 
 def apply_batch_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
@@ -2690,6 +2940,52 @@ def _confirmed_peaks_from_state() -> dict[str, str]:
     return confirmed
 
 
+def _workflow_peak_windows_from_setup(setup: dict[str, object]) -> dict[str, tuple[object, object]]:
+    return {
+        "AM": (setup.get("am_peak_window_start", AM_WINDOW[0]), setup.get("am_peak_window_end", AM_WINDOW[1])),
+        "PM": (setup.get("pm_peak_window_start", PM_WINDOW[0]), setup.get("pm_peak_window_end", PM_WINDOW[1])),
+    }
+
+
+def _sync_single_workflow_from_state(
+    *,
+    source_bytes: bytes | None = None,
+    source_revision: object = _WORKFLOW_SOURCE_UNSET,
+    source_file_name: str | None = None,
+    export_mode: str | None,
+) -> WorkflowTransition:
+    setup = get_current_setup_from_state(source_file_name or "")
+    analysis_present = bool(st.session_state.get("tmc_processed")) and not bool(
+        st.session_state.get("tmc_pce_results_stale")
+    )
+    revisions = _single_workflow_revisions(
+        source_bytes=source_bytes,
+        source_revision=source_revision,
+        source_file_name=source_file_name,
+        mapping=st.session_state.get("mapping_table") or [],
+        pce_factors=_current_pce_factors_from_state(),
+        peak_mode=str(setup.get("peak_mode") or DEFAULT_PEAK_MODE),
+        peak_windows=_workflow_peak_windows_from_setup(setup),
+        movement_code_scheme=_current_mapping_scheme(),
+        setup=setup,
+        export_mode=export_mode,
+        confirmed_peaks=_confirmed_peaks_from_state(),
+        analysis_present=analysis_present,
+    )
+    readiness = WorkflowReadiness(
+        source=bool(
+            source_file_name
+            or source_bytes is not None
+            or (source_revision is not _WORKFLOW_SOURCE_UNSET and source_revision is not None)
+        ),
+        mapping=bool(st.session_state.get("mapping_table")),
+        analysis=analysis_present,
+        review=bool(_single_effective_peak_state().get("ready")),
+        export=st.session_state.get("tmc_output") is not None,
+    )
+    return _sync_workflow_contract(WORKFLOW_SINGLE_MODE, revisions, readiness)
+
+
 def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | None) -> dict[str, object]:
     setup = get_current_setup_from_state(uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""))
     peak_settings = {
@@ -2794,8 +3090,16 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
             changed = apply_session_to_state(loaded_session, st.session_state)
             update_setup_state_from_widgets()
             _hydrate_setup_widgets_from_state()
-            for stale_key in ["tmc_processed", "tmc_output", "tmc_pce_results_stale", "am_peak_period_select", "pm_peak_period_select"]:
-                st.session_state.pop(stale_key, None)
+            previous_workflow_state = _workflow_state_for_mode(WORKFLOW_SINGLE_MODE)
+            _sync_single_workflow_from_state(
+                source_revision=(
+                    previous_workflow_state.revisions.source
+                    if previous_workflow_state is not None
+                    else _WORKFLOW_SOURCE_UNSET
+                ),
+                source_file_name=uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""),
+                export_mode=str(st.session_state.get("report_export_mode") or SAFE_PNG_EXPORT_MODE),
+            )
             st.success(f"ใช้ค่า Session แล้ว อัปเดตค่าปัจจุบัน {len(changed)} รายการ")
             if changed and not compact:
                 st.info("ค่าตั้งค่างานปัจจุบันถูกแทนที่ด้วยข้อมูลจาก Project Session")
@@ -3310,6 +3614,45 @@ def _batch_export_signature(
             )
         ),
     )
+
+
+def _sync_batch_workflow_from_state(
+    *,
+    batch_uploads: list[object] | tuple[object, ...] | None,
+    mapping_preset: dict[str, object] | None,
+    movement_code_scheme: str,
+    metadata_rows: list[dict[str, object]],
+    export_mode: str | None,
+) -> WorkflowTransition:
+    setup = get_current_setup_from_state("")
+    batch_analysis = st.session_state.get("tmc_batch_analysis_result")
+    analysis_present = batch_analysis is not None and not bool(st.session_state.get("tmc_batch_stale"))
+    revisions = _batch_workflow_revisions(
+        uploads=batch_uploads,
+        mapping_preset=mapping_preset,
+        pce_factors=_current_pce_factors_from_state(),
+        peak_mode=str(setup.get("peak_mode") or DEFAULT_PEAK_MODE),
+        peak_windows=_workflow_peak_windows_from_setup(setup),
+        movement_code_scheme=movement_code_scheme,
+        metadata_rows=metadata_rows,
+        setup=setup,
+        export_mode=export_mode,
+        confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+        analysis_present=analysis_present,
+    )
+    successful_items = list(getattr(batch_analysis, "successful_items", []) or []) if batch_analysis else []
+    review_ready = bool(successful_items) and all(
+        item.confirmed_AM_peak and item.confirmed_PM_peak for item in successful_items
+    )
+    readiness = WorkflowReadiness(
+        source=bool(batch_uploads),
+        mapping=mapping_preset is not None,
+        analysis=analysis_present,
+        review=review_ready,
+        export=st.session_state.get("tmc_batch_export_result") is not None
+        and not bool(st.session_state.get("tmc_batch_export_stale")),
+    )
+    return _sync_workflow_contract(WORKFLOW_BATCH_MODE, revisions, readiness)
 
 
 def _mark_batch_export_stale_now() -> None:
@@ -3963,10 +4306,14 @@ def _run_streamlit_app() -> None:
 
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
+    uploaded_content_revision = source_fingerprint(file_bytes) if uploaded_file is not None else None
     uploaded_filename_default = _default_text_from_filename(uploaded_file.name if uploaded_file is not None else None)
     initialize_setup_state_once(uploaded_filename_default)
 
-    if uploaded_identity and st.session_state.get("tmc_uploaded_identity") != uploaded_identity:
+    if uploaded_identity and (
+        st.session_state.get("tmc_uploaded_identity") != uploaded_identity
+        or st.session_state.get("tmc_uploaded_source_fingerprint") != uploaded_content_revision
+    ):
         st.session_state.pop("tmc_output", None)
         st.session_state.pop("tmc_processed", None)
         st.session_state.pop("tmc_pce_results_stale", None)
@@ -3980,6 +4327,7 @@ def _run_streamlit_app() -> None:
         for key in ["am_peak_period_select", "pm_peak_period_select"]:
             st.session_state.pop(key, None)
         st.session_state["tmc_uploaded_identity"] = uploaded_identity
+        st.session_state["tmc_uploaded_source_fingerprint"] = uploaded_content_revision
         apply_uploaded_filename_defaults_to_setup_state(uploaded_filename_default)
     _hydrate_setup_widgets_from_state()
 
@@ -4009,6 +4357,13 @@ def _run_streamlit_app() -> None:
         batch_export_options,
         _default_batch_export_mode(excel_com_status),
     )
+
+    if is_single_file_mode:
+        _sync_single_workflow_from_state(
+            source_bytes=file_bytes if uploaded_file is not None else None,
+            source_file_name=uploaded_file.name if uploaded_file is not None else None,
+            export_mode=export_mode,
+        )
 
     with st.sidebar:
         if is_single_file_mode:
@@ -4052,6 +4407,12 @@ def _run_streamlit_app() -> None:
             loaded = load_mapping_preset(batch_preset_bytes)
             loaded_batch_preset = loaded.preset
             batch_mapping_scheme = detect_mapping_preset_scheme(loaded)
+            batch_preset_signature = semantic_fingerprint(
+                {
+                    "movement_code_scheme": batch_mapping_scheme,
+                    "mapping_rows": loaded_batch_preset.get("mapping_rows", []),
+                }
+            )
             st.session_state["tmc_batch_mapping_code_scheme"] = batch_mapping_scheme
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
             st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
@@ -4064,6 +4425,15 @@ def _run_streamlit_app() -> None:
                 st.sidebar.warning(warning_message)
         except (MappingPresetError, ValueError) as exc:
             st.sidebar.error(f"ไม่สามารถเปิด Mapping Preset ได้: {exc}")
+
+    if not is_single_file_mode:
+        _sync_batch_workflow_from_state(
+            batch_uploads=batch_uploads,
+            mapping_preset=loaded_batch_preset,
+            movement_code_scheme=batch_mapping_scheme,
+            metadata_rows=batch_metadata_rows,
+            export_mode=str(st.session_state.get("tmc_batch_export_mode") or BATCH_SAFE_PNG_EXPORT_LABEL),
+        )
 
     _render_app_header()
     shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
@@ -4578,6 +4948,30 @@ def _run_streamlit_app() -> None:
                         }
                         st.session_state.pop("tmc_output", None)
                         st.session_state.pop("tmc_pce_results_stale", None)
+                        processed_revisions = _single_workflow_revisions(
+                            source_bytes=file_bytes if uploaded_file is not None else None,
+                            source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                            mapping=mapping,
+                            pce_factors=selected_pce_factors,
+                            peak_mode=peak_mode,
+                            peak_windows=peak_windows,
+                            movement_code_scheme=_current_mapping_scheme(),
+                            setup=setup,
+                            export_mode=export_mode,
+                            confirmed_peaks=_confirmed_peaks_from_state(),
+                            analysis_present=True,
+                        )
+                        _record_workflow_state(
+                            WORKFLOW_SINGLE_MODE,
+                            processed_revisions,
+                            WorkflowReadiness(
+                                source=uploaded_file is not None,
+                                mapping=bool(mapping.to_dict("records")),
+                                analysis=True,
+                                review=bool(_single_effective_peak_state().get("ready")),
+                                export=False,
+                            ),
+                        )
                         set_active_tab("ตรวจ Peak")
                         _flash_and_rerun("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจ Peak”")
                 elif process_requested:
@@ -4846,6 +5240,34 @@ def _run_streamlit_app() -> None:
                     item.folder_name: {"AM": item.confirmed_AM_peak, "PM": item.confirmed_PM_peak}
                     for item in batch_analysis.successful_items
                 }
+                analyzed_batch_revisions = _batch_workflow_revisions(
+                    uploads=batch_uploads,
+                    mapping_preset=loaded_batch_preset,
+                    pce_factors=selected_pce_factors,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    movement_code_scheme=batch_mapping_scheme,
+                    metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                    setup=setup,
+                    export_mode=batch_export_mode,
+                    confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                    analysis_present=True,
+                )
+                _record_workflow_state(
+                    WORKFLOW_BATCH_MODE,
+                    analyzed_batch_revisions,
+                    WorkflowReadiness(
+                        source=bool(batch_uploads),
+                        mapping=loaded_batch_preset is not None,
+                        analysis=True,
+                        review=bool(batch_analysis.successful_items)
+                        and all(
+                            item.confirmed_AM_peak and item.confirmed_PM_peak
+                            for item in batch_analysis.successful_items
+                        ),
+                        export=False,
+                    ),
+                )
                 set_active_tab("ตรวจ Peak")
                 _flash_and_rerun("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
 
@@ -4943,11 +5365,19 @@ def _run_streamlit_app() -> None:
                             )
                             _render_status_chip("กำหนดแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
                             _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
-                        if stored.get("AM") != selected_am or stored.get("PM") != selected_pm:
-                            _mark_batch_export_stale_now()
+                        review_changed = stored.get("AM") != selected_am or stored.get("PM") != selected_pm
                         batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
                         selected_item.confirmed_AM_peak = selected_am
                         selected_item.confirmed_PM_peak = selected_pm
+                        review_transition = _sync_batch_workflow_from_state(
+                            batch_uploads=batch_uploads,
+                            mapping_preset=loaded_batch_preset,
+                            movement_code_scheme=batch_mapping_scheme,
+                            metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                            export_mode=batch_export_mode,
+                        )
+                        if review_changed and not review_transition.export_invalidated:
+                            _mark_batch_export_stale_now()
                     else:
                         _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak ของไฟล์นี้", "warning")
                 if batch_analysis.has_failures:
@@ -5282,11 +5712,18 @@ def _run_streamlit_app() -> None:
                         st.session_state.get("tmc_confirmed_pm_peak_end"),
                     )
                     current_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
-                    export_invalidated = previous_confirmed != current_confirmed and _clear_single_export()
                     st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
                     st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
                     st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
                     st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
+                    review_transition = _sync_single_workflow_from_state(
+                        source_bytes=file_bytes if uploaded_file is not None else None,
+                        source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                        export_mode=export_mode,
+                    )
+                    export_invalidated = review_transition.export_invalidated or (
+                        previous_confirmed != current_confirmed and _clear_single_export()
+                    )
                     if export_invalidated:
                         _flash_and_rerun("Peak เปลี่ยนแปลงแล้ว กรุณาสร้างรายงานใหม่")
                     confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
