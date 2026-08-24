@@ -2826,9 +2826,7 @@ def _ensure_pce_factor_state() -> None:
 
 
 def _current_pce_factor_input() -> object:
-    version = int(st.session_state.get("pce_editor_version", 0) or 0)
-    editor_key = f"pce_factors_editor_{version}"
-    return st.session_state.get(editor_key, st.session_state.get("pce_factors_table"))
+    return st.session_state.get("pce_factors_table")
 
 
 def _current_pce_factors_from_state() -> dict[str, float]:

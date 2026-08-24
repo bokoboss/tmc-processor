@@ -186,8 +186,9 @@ def test_pce_override_survives_widget_rehydration_without_spurious_transition() 
         export_mode=app.SAFE_PNG_EXPORT_MODE,
     )
 
-    # Streamlit can retain the old widget key from before the canonical table changed.
+    # Streamlit can retain stale widget values from before the canonical table changed.
     st.session_state["pce_factors_editor_0"] = app._pce_factor_records(default_pce)
+    st.session_state["pce_factors_editor_1"] = app._pce_factor_records(default_pce)
     rehydrated = app._current_pce_factors_from_state()
     assert rehydrated["MC"] == 0.5
     traceability = app.pce_factor_traceability_frame(rehydrated)
