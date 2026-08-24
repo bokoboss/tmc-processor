@@ -3,10 +3,76 @@ from __future__ import annotations
 from datetime import time
 from types import SimpleNamespace
 
+import pytest
 import streamlit as st
 
 import app
 from tmc_processor.session import apply_session_to_state, build_project_session
+from tmc_processor.workflow_state import WorkflowReadiness, WorkflowRevisions
+
+
+def _base_workflow_revisions() -> WorkflowRevisions:
+    return WorkflowRevisions(
+        source="source-a",
+        mapping="mapping-a",
+        analysis_config="analysis-a",
+        analysis_result="result-a",
+        review_decision="review-a",
+        export_config="export-a",
+    )
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected_readiness"),
+    [
+        (
+            {"source": "source-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False),
+        ),
+        (
+            {"mapping": "mapping-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False),
+        ),
+        (
+            {"analysis_config": "analysis-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False),
+        ),
+        (
+            {"analysis_result": "result-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=True, review=False, export=False),
+        ),
+        (
+            {"review_decision": "review-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False),
+        ),
+        (
+            {"export_config": "export-b"},
+            WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False),
+        ),
+        (
+            {},
+            WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True),
+        ),
+    ],
+)
+def test_stored_workflow_readiness_matches_transition(
+    changes: dict[str, str],
+    expected_readiness: WorkflowReadiness,
+) -> None:
+    st.session_state.clear()
+    base = _base_workflow_revisions()
+    full_readiness = WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True)
+    app._sync_workflow_contract(app.WORKFLOW_SINGLE_MODE, base, full_readiness)
+
+    app._sync_workflow_contract(
+        app.WORKFLOW_SINGLE_MODE,
+        base.with_updates(**changes),
+        full_readiness,
+    )
+
+    stored = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert stored is not None
+    assert stored.readiness == expected_readiness
 
 
 def _seed_single_state(source_bytes: bytes = b"source-a") -> None:

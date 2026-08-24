@@ -205,6 +205,21 @@ class WorkflowTransition:
         return bool(self.changed_fields)
 
 
+def readiness_after_transition(
+    readiness: WorkflowReadiness,
+    transition: WorkflowTransition,
+) -> WorkflowReadiness:
+    """Downgrade readiness so stored state cannot outlive invalidated stages."""
+
+    if transition.analysis_invalidated:
+        return replace(readiness, analysis=False, review=False, export=False)
+    if transition.review_invalidated:
+        return replace(readiness, review=False, export=False)
+    if transition.export_invalidated:
+        return replace(readiness, export=False)
+    return readiness
+
+
 def transition_workflow(
     previous: WorkflowRevisions | None,
     current: WorkflowRevisions,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tmc_processor.workflow_state import (
     WorkflowReadiness,
     WorkflowRevisions,
@@ -7,6 +9,7 @@ from tmc_processor.workflow_state import (
     analysis_config_fingerprint,
     export_config_fingerprint,
     mapping_fingerprint,
+    readiness_after_transition,
     review_decision_fingerprint,
     source_fingerprint,
     transition_workflow,
@@ -32,6 +35,50 @@ def test_same_semantic_source_and_configuration_does_not_invalidate() -> None:
     assert not transition.analysis_invalidated
     assert not transition.review_invalidated
     assert not transition.export_invalidated
+
+
+@pytest.mark.parametrize("field_name", ["source", "mapping", "analysis_config"])
+def test_analysis_input_invalidation_downgrades_analysis_and_downstream_readiness(field_name: str) -> None:
+    transition = transition_workflow(_revisions(), _revisions(**{field_name: f"{field_name}-changed"}))
+
+    assert readiness_after_transition(
+        WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True),
+        transition,
+    ) == WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False)
+
+
+def test_analysis_result_invalidation_downgrades_review_and_export_readiness_only() -> None:
+    transition = transition_workflow(_revisions(), _revisions(analysis_result="result-b"))
+
+    assert readiness_after_transition(
+        WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True),
+        transition,
+    ) == WorkflowReadiness(source=True, mapping=True, analysis=True, review=False, export=False)
+
+
+def test_review_decision_change_preserves_review_readiness_but_downgrades_export() -> None:
+    transition = transition_workflow(_revisions(), _revisions(review_decision="review-b"))
+
+    assert readiness_after_transition(
+        WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True),
+        transition,
+    ) == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False)
+
+
+def test_export_config_change_downgrades_export_readiness_only() -> None:
+    transition = transition_workflow(_revisions(), _revisions(export_config="export-b"))
+
+    assert readiness_after_transition(
+        WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True),
+        transition,
+    ) == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False)
+
+
+def test_unchanged_semantic_state_preserves_readiness() -> None:
+    transition = transition_workflow(_revisions(), _revisions())
+    readiness = WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True)
+
+    assert readiness_after_transition(readiness, transition) == readiness
 
 
 def test_source_bytes_change_is_detected_even_when_filename_and_size_match() -> None:

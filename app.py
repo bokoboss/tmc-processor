@@ -146,6 +146,7 @@ from tmc_processor.workflow_state import (
     export_config_fingerprint,
     mapping_fingerprint,
     review_decision_fingerprint,
+    readiness_after_transition,
     semantic_fingerprint,
     source_fingerprint,
     transition_workflow,
@@ -835,7 +836,13 @@ def _sync_workflow_contract(
     _apply_workflow_transition(mode, transition)
     if transition.analysis_invalidated:
         revisions = revisions.with_updates(analysis_result=None)
-    _store_workflow_state(WorkflowState(mode=mode, revisions=revisions, readiness=readiness))
+    _store_workflow_state(
+        WorkflowState(
+            mode=mode,
+            revisions=revisions,
+            readiness=readiness_after_transition(readiness, transition),
+        )
+    )
     return transition
 
 
