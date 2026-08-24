@@ -145,6 +145,73 @@ def test_pce_editor_change_updates_stored_readiness_in_same_adapter_flow() -> No
     assert stored.readiness.export is False
 
 
+def test_pce_override_survives_widget_rehydration_without_spurious_transition() -> None:
+    _seed_single_state()
+    default_pce = dict(st.session_state["tmc_selected_pce_factors"])
+    changed_pce = dict(default_pce)
+    changed_pce["MC"] = 0.5
+
+    app._store_selected_pce_factors(changed_pce)
+    app._sync_workflow_after_pce_editor(
+        is_single_file_mode=True,
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+    st.session_state["tmc_pce_results_stale"] = False
+    st.session_state["tmc_processed"] = {"result": SimpleNamespace(), "pce_factors": changed_pce}
+    st.session_state["tmc_output"] = {"workbook_bytes": b"new"}
+    st.session_state["tmc_confirmed_am_peak_start"] = "08:00"
+    st.session_state["tmc_confirmed_am_peak_end"] = "09:00"
+    st.session_state["tmc_confirmed_pm_peak_start"] = "17:00"
+    st.session_state["tmc_confirmed_pm_peak_end"] = "18:00"
+    app._sync_workflow_after_pce_editor(
+        is_single_file_mode=True,
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+    st.session_state["tmc_pce_results_stale"] = False
+    st.session_state["tmc_output"] = {"workbook_bytes": b"reprocessed"}
+    # Reprocessing may clear legacy review keys while applying the result transition;
+    # restore the confirmed Peak as the normal post-review state before reopening Settings.
+    st.session_state["tmc_confirmed_am_peak_start"] = "08:00"
+    st.session_state["tmc_confirmed_am_peak_end"] = "09:00"
+    st.session_state["tmc_confirmed_pm_peak_start"] = "17:00"
+    st.session_state["tmc_confirmed_pm_peak_end"] = "18:00"
+    app._sync_workflow_after_pce_editor(
+        is_single_file_mode=True,
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+
+    # Streamlit can retain the old widget key from before the canonical table changed.
+    st.session_state["pce_factors_editor_0"] = app._pce_factor_records(default_pce)
+    rehydrated = app._current_pce_factors_from_state()
+    assert rehydrated["MC"] == 0.5
+    traceability = app.pce_factor_traceability_frame(rehydrated)
+    mc_row = traceability.loc[traceability["vehicle_class"] == "MC"].iloc[0]
+    assert mc_row["source"] == "user_override"
+
+    app._store_selected_pce_factors(rehydrated)
+    transition = app._sync_workflow_after_pce_editor(
+        is_single_file_mode=True,
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+
+    assert transition.changed_fields == ()
+    assert st.session_state["tmc_pce_results_stale"] is False
+    assert "tmc_output" in st.session_state
+    stored = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert stored is not None
+    assert stored.readiness.analysis is True
+    assert stored.readiness.review is True
+    assert stored.readiness.export is True
+
+
 def test_mapping_editor_and_view_only_changes_do_not_stale_single_state() -> None:
     _seed_single_state()
     st.session_state["mapping_editor_version"] = 99

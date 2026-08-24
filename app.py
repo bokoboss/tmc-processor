@@ -2843,6 +2843,7 @@ def _store_selected_pce_factors(selected: dict[str, float]) -> None:
         if previous is not None and previous != selected:
             _mark_processed_outputs_stale_for_pce_change()
         st.session_state["pce_factors_table"] = records
+        st.session_state["pce_editor_version"] = int(st.session_state.get("pce_editor_version", 0) or 0) + 1
     st.session_state["tmc_selected_pce_factors"] = selected
 
 
