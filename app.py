@@ -2359,16 +2359,23 @@ def _render_top_status_bar(
 ) -> None:
     mode_value = "ไฟล์เดียว" if is_single_file_mode else "Batch"
     current_scheme = _current_mapping_scheme()
+    workflow_state = _workflow_state_for_mode(
+        WORKFLOW_SINGLE_MODE if is_single_file_mode else WORKFLOW_BATCH_MODE
+    )
     if is_single_file_mode:
-        source_value = "โหลดแล้ว" if uploaded_name else "ยังไม่มีไฟล์สำรวจ"
-        source_note = "พร้อมกำหนด Mapping" if uploaded_name else "อัปโหลดจากแถบด้านซ้าย"
+        source_ready = workflow_state.readiness.source if workflow_state is not None else bool(uploaded_name)
         mapping_rows = len(st.session_state.get("mapping_table") or [])
-        mapping_value = "พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"
+        mapping_ready = workflow_state.readiness.mapping if workflow_state is not None else bool(mapping_rows)
+        source_value = "โหลดแล้ว" if source_ready else "ยังไม่มีไฟล์สำรวจ"
+        source_note = "พร้อมกำหนด Mapping" if source_ready else "อัปโหลดจากแถบด้านซ้าย"
+        mapping_value = "พร้อมใช้งาน" if mapping_ready else "ยังไม่พร้อม"
         mapping_note = f"{current_scheme} · {mapping_rows:,} แถว" if mapping_rows else f"{current_scheme} · รอกำหนดทิศทาง"
     else:
-        source_value = f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่มีไฟล์ Batch"
-        source_note = "โหลดไฟล์ Batch แล้ว" if uploaded_count else "อัปโหลดจากแถบด้านซ้าย"
-        mapping_value = "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม"
+        source_ready = workflow_state.readiness.source if workflow_state is not None else bool(uploaded_count)
+        mapping_ready = workflow_state.readiness.mapping if workflow_state is not None else batch_mapping_ready
+        source_value = f"{uploaded_count:,} ไฟล์" if source_ready else "ยังไม่มีไฟล์ Batch"
+        source_note = "โหลดไฟล์ Batch แล้ว" if source_ready else "อัปโหลดจากแถบด้านซ้าย"
+        mapping_value = "พร้อมใช้งาน" if mapping_ready else "ยังไม่พร้อม"
         mapping_note = "Mapping Preset ใช้ร่วมกันทุกไฟล์" if batch_mapping_ready else "เปิด Mapping Preset"
 
     excel_value = "Excel COM พร้อม" if getattr(excel_com_status, "available", False) else "โหมดสำรอง PNG"
@@ -2581,6 +2588,63 @@ def _render_effective_peak_export_confirmation(result: object | None, peak_state
     )
 
 
+def _readiness_payload(readiness: WorkflowReadiness) -> dict[str, bool]:
+    return {
+        "source": readiness.source,
+        "mapping": readiness.mapping,
+        "analysis": readiness.analysis,
+        "review": readiness.review,
+        "export": readiness.export,
+    }
+
+
+def _single_shell_from_authoritative_readiness(
+    readiness: WorkflowReadiness,
+    legacy_state: dict[str, object],
+) -> dict[str, object]:
+    """Render engineering stages from the stored UX-0 state, not legacy adapters."""
+
+    steps = ["pending"] * 6
+    steps[0] = "completed" if readiness.source else "active"
+    steps[1] = list(legacy_state["steps"])[1]
+    steps[2] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
+    steps[3] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
+    steps[4] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
+    steps[5] = "completed" if readiness.export else ("active" if readiness.review else "pending")
+
+    if not readiness.source:
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif not readiness.mapping:
+        next_action = "ตรวจสอบ Mapping ก่อนประมวลผล"
+    elif not readiness.analysis:
+        next_action = "ประมวลผลไฟล์หลัง Mapping พร้อมใช้งาน"
+    elif not readiness.review:
+        next_action = "กำหนดช่วง Peak ก่อนส่งออก"
+    elif not readiness.export:
+        next_action = "พร้อมส่งออกรายงาน"
+    else:
+        next_action = "สร้างรายงานแล้ว พร้อมดาวน์โหลดไฟล์"
+
+    legacy_summary = list(legacy_state["summary"])
+    summary = [
+        (legacy_summary[0][0], "โหลดแล้ว" if readiness.source else "ยังไม่ได้โหลด", "success" if readiness.source else "neutral"),
+        legacy_summary[1],
+        (legacy_summary[2][0], "พร้อมใช้งาน" if readiness.mapping else "ยังไม่พร้อม", "success" if readiness.mapping else "neutral"),
+        (legacy_summary[3][0], "เสร็จแล้ว" if readiness.analysis else "ยังไม่ได้ประมวลผล", "success" if readiness.analysis else "neutral"),
+        (
+            legacy_summary[4][0],
+            "กำหนดแล้ว" if readiness.review else ("รอตรวจ Peak" if readiness.analysis else "ยังไม่มีผลประมวลผล"),
+            "success" if readiness.review else ("warning" if readiness.analysis else "neutral"),
+        ),
+        (
+            legacy_summary[5][0],
+            "สร้างแล้ว" if readiness.export else ("รอสร้างรายงาน" if readiness.review else "ยังไม่พร้อม"),
+            "success" if readiness.export else "neutral",
+        ),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action, "readiness": _readiness_payload(readiness)}
+
+
 def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
     mapping_rows = len(st.session_state.get("mapping_table") or [])
     mapping_frame = pd.DataFrame(st.session_state.get("mapping_table") or [])
@@ -2638,7 +2702,66 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
         ("Peak", str(peak_state["summary_text"]), str(peak_state["summary_kind"])),
         ("ส่งออก", "สร้างแล้ว" if output_ready else ("พร้อมสร้างรายงาน" if processed and peaks_ready and excel_ready else "ยังไม่พร้อม"), "success" if output_ready or (processed and peaks_ready and excel_ready) else "neutral"),
     ]
-    return {"steps": steps, "summary": summary, "next_action": next_action}
+    legacy_state = {"steps": steps, "summary": summary, "next_action": next_action}
+    workflow_state = _workflow_state_for_mode(WORKFLOW_SINGLE_MODE)
+    if workflow_state is not None:
+        return _single_shell_from_authoritative_readiness(workflow_state.readiness, legacy_state)
+    return legacy_state
+
+
+def _batch_shell_from_authoritative_readiness(
+    readiness: WorkflowReadiness,
+    legacy_state: dict[str, object],
+) -> dict[str, object]:
+    """Render Batch engineering stages from the stored UX-0 state."""
+
+    steps = ["pending"] * 6
+    steps[0] = "completed" if readiness.source else "active"
+    steps[1] = list(legacy_state["steps"])[1]
+    steps[2] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
+    steps[3] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
+    steps[4] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
+    steps[5] = "completed" if readiness.export else ("active" if readiness.review else "pending")
+
+    if not readiness.source:
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+    elif not readiness.mapping:
+        next_action = "เปิด Mapping Preset สำหรับ Batch ที่แถบด้านซ้าย"
+    elif not readiness.analysis:
+        next_action = "วิเคราะห์ Batch หลังไฟล์และ Mapping Preset พร้อม"
+    elif not readiness.review:
+        next_action = "กำหนดช่วง Peak ให้ครบทุกไฟล์ที่วิเคราะห์สำเร็จ"
+    elif not readiness.export:
+        next_action = "พร้อมสร้าง Batch ZIP"
+    else:
+        next_action = "สร้าง Batch ZIP แล้ว พร้อมดาวน์โหลดไฟล์"
+
+    legacy_summary = list(legacy_state["summary"])
+    summary = [
+        (
+            legacy_summary[0][0],
+            legacy_summary[0][1] if readiness.source else "ยังไม่ได้โหลด",
+            "success" if readiness.source else "neutral",
+        ),
+        legacy_summary[1],
+        (legacy_summary[2][0], "พร้อมใช้งาน" if readiness.mapping else "ยังไม่พร้อม", "success" if readiness.mapping else "neutral"),
+        (
+            legacy_summary[3][0],
+            "วิเคราะห์แล้ว" if readiness.analysis else "ต้องวิเคราะห์ใหม่",
+            "success" if readiness.analysis else "warning",
+        ),
+        (
+            legacy_summary[4][0],
+            legacy_summary[4][1] if readiness.review else ("รอกำหนด Peak" if readiness.analysis else "ยังไม่มีไฟล์สำเร็จ"),
+            "success" if readiness.review else ("warning" if readiness.analysis else "neutral"),
+        ),
+        (
+            legacy_summary[5][0],
+            "สร้าง Batch ZIP แล้ว" if readiness.export else ("รอสร้าง Batch ZIP" if readiness.review else "ยังไม่พร้อม"),
+            "success" if readiness.export else "neutral",
+        ),
+    ]
+    return {"steps": steps, "summary": summary, "next_action": next_action, "readiness": _readiness_payload(readiness)}
 
 
 def derive_batch_workflow_state(
@@ -2718,7 +2841,11 @@ def derive_batch_workflow_state(
         ("Peak", f"กำหนดแล้ว {confirmed_count:,}/{successful_count:,} ไฟล์" if successful_count else "ยังไม่มีไฟล์สำเร็จ", "success" if peaks_ready else ("warning" if successful_count else "neutral")),
         ("ส่งออก", "ต้องสร้าง ZIP ใหม่" if batch_export_stale and peaks_ready and not batch_stale else ("สร้าง Batch ZIP แล้ว" if batch_result else ("พร้อมสร้าง Batch ZIP" if peaks_ready and not batch_stale else "ยังไม่พร้อม")), "warning" if batch_export_stale and peaks_ready and not batch_stale else ("success" if batch_result or (peaks_ready and not batch_stale) else "neutral")),
     ]
-    return {"steps": steps, "summary": summary, "next_action": next_action}
+    legacy_state = {"steps": steps, "summary": summary, "next_action": next_action}
+    workflow_state = _workflow_state_for_mode(WORKFLOW_BATCH_MODE)
+    if workflow_state is not None:
+        return _batch_shell_from_authoritative_readiness(workflow_state.readiness, legacy_state)
+    return legacy_state
 
 
 def _render_workflow_shell(
@@ -3622,6 +3749,23 @@ def _batch_export_signature(
     )
 
 
+def _stable_batch_confirmed_peaks(
+    confirmed_peaks: dict[str, dict[str, str]] | None,
+    batch_analysis: object | None,
+) -> dict[str, dict[str, str]]:
+    """Key Batch review decisions by source file, not export folder names."""
+
+    confirmed = confirmed_peaks or {}
+    items = list(getattr(batch_analysis, "items", []) or []) if batch_analysis else []
+    if not items:
+        return confirmed
+    return {
+        str(item.file_name): dict(confirmed.get(str(item.folder_name), {}))
+        for item in items
+        if getattr(item, "file_name", None)
+    }
+
+
 def _sync_batch_workflow_from_state(
     *,
     batch_uploads: list[object] | tuple[object, ...] | None,
@@ -3643,7 +3787,10 @@ def _sync_batch_workflow_from_state(
         metadata_rows=metadata_rows,
         setup=setup,
         export_mode=export_mode,
-        confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+        confirmed_peaks=_stable_batch_confirmed_peaks(
+            st.session_state.get("tmc_batch_confirmed_peaks") or {},
+            batch_analysis,
+        ),
         analysis_present=analysis_present,
     )
     successful_items = list(getattr(batch_analysis, "successful_items", []) or []) if batch_analysis else []
@@ -4470,6 +4617,8 @@ def _run_streamlit_app() -> None:
         )
 
     _render_app_header()
+    top_status_placeholder = st.empty()
+    workflow_shell_placeholder = st.empty()
     shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
     shell_batch_signature = _batch_analysis_signature(
         uploads_signature=_batch_upload_signature(batch_uploads),
@@ -4486,23 +4635,6 @@ def _run_streamlit_app() -> None:
                 _time_text(st.session_state.get("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1]))),
             ),
         },
-    )
-    _render_top_status_bar(
-        is_single_file_mode=is_single_file_mode,
-        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-        uploaded_count=len(batch_uploads or []),
-        batch_mapping_ready=loaded_batch_preset is not None,
-        export_mode=export_mode if is_single_file_mode else shell_batch_export_mode,
-        excel_com_status=excel_com_status,
-    )
-    _render_workflow_shell(
-        is_single_file_mode=is_single_file_mode,
-        uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-        uploaded_count=len(batch_uploads or []),
-        batch_mapping_ready=loaded_batch_preset is not None,
-        batch_signature=shell_batch_signature,
-        export_mode=export_mode,
-        excel_com_status=excel_com_status,
     )
     flash_message = st.session_state.pop("tmc_flash_message", None)
     if flash_message:
@@ -4953,6 +5085,12 @@ def _run_streamlit_app() -> None:
                 if mapping_counts["excluded"]:
                     _render_alert(f"มีแถวที่ไม่แสดงในรายงาน {mapping_counts['excluded']:,} แถว", "info")
 
+                _sync_single_workflow_from_state(
+                    source_bytes=file_bytes if uploaded_file is not None else None,
+                    source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                    export_mode=export_mode,
+                )
+
                 if run and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
                     st.session_state["tmc_single_file_process_requested"] = True
                     st.rerun()
@@ -5143,6 +5281,13 @@ def _run_streamlit_app() -> None:
                             st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
                             _sync_batch_analysis_metadata_from_state()
                             _mark_batch_export_stale_now()
+                            _sync_batch_workflow_from_state(
+                                batch_uploads=batch_uploads,
+                                mapping_preset=loaded_batch_preset,
+                                movement_code_scheme=batch_mapping_scheme,
+                                metadata_rows=cleaned_metadata,
+                                export_mode=batch_export_mode,
+                            )
 
         if active_tab == "กำหนดทิศทาง":
             _render_section_header(
@@ -5298,7 +5443,10 @@ def _run_streamlit_app() -> None:
                     metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
                     setup=setup,
                     export_mode=batch_export_mode,
-                    confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                    confirmed_peaks=_stable_batch_confirmed_peaks(
+                        st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                        batch_analysis,
+                    ),
                     analysis_present=True,
                 )
                 _record_workflow_state(
@@ -6247,8 +6395,27 @@ def _run_streamlit_app() -> None:
                         _render_action_hint("ยังไม่มี metadata การส่งออกในรอบนี้")
                     _render_template_audit_notes()
                     _render_excel_com_status(excel_com_status)
-    
-    
+    with top_status_placeholder.container():
+        _render_top_status_bar(
+            is_single_file_mode=is_single_file_mode,
+            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+            uploaded_count=len(batch_uploads or []),
+            batch_mapping_ready=loaded_batch_preset is not None,
+            export_mode=export_mode if is_single_file_mode else shell_batch_export_mode,
+            excel_com_status=excel_com_status,
+        )
+    with workflow_shell_placeholder.container():
+        _render_workflow_shell(
+            is_single_file_mode=is_single_file_mode,
+            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
+            uploaded_count=len(batch_uploads or []),
+            batch_mapping_ready=loaded_batch_preset is not None,
+            batch_signature=shell_batch_signature,
+            export_mode=export_mode,
+            excel_com_status=excel_com_status,
+        )
+
+
 if __name__ == "__main__":
     _run_streamlit_app()
     st.stop()
