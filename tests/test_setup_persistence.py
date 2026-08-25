@@ -41,6 +41,14 @@ def _run_app_for_apptest() -> None:
     streamlit_app._run_streamlit_app()
 
 
+def _widget_by_key(widgets, key: str):
+    return next(widget for widget in widgets if widget.key == key)
+
+
+def _button_by_label(at: AppTest, label: str):
+    return next(button for button in at.button if button.label == label)
+
+
 def _mapping() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -247,6 +255,40 @@ def test_excel_template_openpyxl_path_writes_custom_setup_metadata() -> None:
     assert worksheet["E35"].value == CUSTOM_SETUP_VALUES["caption_text"]
 
 
+def test_streamlit_apptest_keeps_analysis_actions_in_analyze_stage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+
+    single = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    single.run(timeout=30)
+    stage_buttons = [button for button in single.button if button.key.startswith("workflow_tab_")]
+    assert [button.label for button in stage_buttons] == app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE)
+
+    _button_by_label(single, "Mapping").click()
+    single.run(timeout=30)
+    assert "Analyze TMC" not in [button.label for button in single.button]
+
+    _button_by_label(single, "Analyze").click()
+    single.run(timeout=30)
+    assert "Analyze TMC" in [button.label for button in single.button]
+
+    batch = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    batch.run(timeout=30)
+    batch.radio[0].set_value(batch.radio[0].options[1])
+    batch.run(timeout=30)
+    _button_by_label(batch, "Mapping").click()
+    batch.run(timeout=30)
+    assert _widget_by_key(batch.file_uploader, "batch_mapping_preset_upload")
+    assert "วิเคราะห์ Batch" not in [button.label for button in batch.button]
+
+    _button_by_label(batch, "Analyze").click()
+    batch.run(timeout=30)
+    assert "วิเคราะห์ Batch" in [button.label for button in batch.button]
+
+
 def test_project_session_save_load_preserves_custom_setup_state_and_u_turn_toggle() -> None:
     st.session_state.clear()
     app.initialize_setup_state_once("demo.xlsx")
@@ -288,28 +330,28 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     )
     at.run(timeout=60)
 
-    for index, value in {
-        2: CUSTOM_SETUP_VALUES["tmc_title"],
-        3: CUSTOM_SETUP_VALUES["survey_point"],
-        5: CUSTOM_SETUP_VALUES["survey_date_text"],
-        6: CUSTOM_SETUP_VALUES["responsible_party"],
-        8: CUSTOM_SETUP_VALUES["north_label"],
-        9: CUSTOM_SETUP_VALUES["east_label"],
-        10: CUSTOM_SETUP_VALUES["south_label"],
-        11: CUSTOM_SETUP_VALUES["west_label"],
-        12: CUSTOM_SETUP_VALUES["north_road"],
-        13: CUSTOM_SETUP_VALUES["east_road"],
-        14: CUSTOM_SETUP_VALUES["south_road"],
-        15: CUSTOM_SETUP_VALUES["west_road"],
-        16: CUSTOM_SETUP_VALUES["caption_text"],
+    for field, value in {
+        "tmc_title": CUSTOM_SETUP_VALUES["tmc_title"],
+        "survey_point": CUSTOM_SETUP_VALUES["survey_point"],
+        "survey_date_text": CUSTOM_SETUP_VALUES["survey_date_text"],
+        "responsible_party": CUSTOM_SETUP_VALUES["responsible_party"],
+        "north_label": CUSTOM_SETUP_VALUES["north_label"],
+        "east_label": CUSTOM_SETUP_VALUES["east_label"],
+        "south_label": CUSTOM_SETUP_VALUES["south_label"],
+        "west_label": CUSTOM_SETUP_VALUES["west_label"],
+        "north_road": CUSTOM_SETUP_VALUES["north_road"],
+        "east_road": CUSTOM_SETUP_VALUES["east_road"],
+        "south_road": CUSTOM_SETUP_VALUES["south_road"],
+        "west_road": CUSTOM_SETUP_VALUES["west_road"],
+        "caption_text": CUSTOM_SETUP_VALUES["caption_text"],
     }.items():
-        at.text_input[index].set_value(value)
-    at.checkbox[0].set_value(False)
+        _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS[field]).set_value(value)
+    _widget_by_key(at.checkbox, app.SETUP_FIELD_WIDGET_KEYS["show_u_turn"]).set_value(False)
     at.run(timeout=60)
 
-    at.button[1].click()
+    _button_by_label(at, "Mapping").click()
     at.run(timeout=60)
-    at.file_uploader[1].set_value(
+    _widget_by_key(at.file_uploader, "mapping_preset_upload").set_value(
         (
             "DEMO_TMC1_FourLeg.mapping.json",
             (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.mapping.json").read_bytes(),
@@ -317,29 +359,35 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
         )
     )
     at.run(timeout=60)
-    assert at.button[5].label == "ประมวลผลไฟล์ TMC"
-    assert at.button[5].disabled is False
-    at.button[5].click()
+    analyze_button = _button_by_label(at, "Analyze")
+    assert analyze_button.disabled is False
+    analyze_button.click()
+    at.run(timeout=60)
+    analyze_action = _button_by_label(at, "Analyze TMC")
+    assert analyze_action.disabled is False
+    analyze_action.click()
     at.run(timeout=90)
-    assert at.session_state["active_workflow_tab"] == "ตรวจ Peak"
+    assert at.session_state["active_workflow_tab"] == "Review"
 
-    at.button[0].click()
+    _button_by_label(at, "Data").click()
     at.run(timeout=60)
-    visible_values = [text_input.value for text_input in at.text_input]
-    assert visible_values[2] == CUSTOM_SETUP_VALUES["tmc_title"]
-    assert visible_values[3] == CUSTOM_SETUP_VALUES["survey_point"]
-    assert visible_values[5] == CUSTOM_SETUP_VALUES["survey_date_text"]
-    assert visible_values[6] == CUSTOM_SETUP_VALUES["responsible_party"]
-    assert visible_values[8] == CUSTOM_SETUP_VALUES["north_label"]
-    assert visible_values[12] == CUSTOM_SETUP_VALUES["north_road"]
-    assert visible_values[16] == CUSTOM_SETUP_VALUES["caption_text"]
-    assert at.checkbox[0].value is False
+    for field in (
+        "tmc_title",
+        "survey_point",
+        "survey_date_text",
+        "responsible_party",
+        "north_label",
+        "north_road",
+        "caption_text",
+    ):
+        assert _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS[field]).value == CUSTOM_SETUP_VALUES[field]
+    assert _widget_by_key(at.checkbox, app.SETUP_FIELD_WIDGET_KEYS["show_u_turn"]).value is False
 
-    at.button[3].click()
+    _button_by_label(at, "Export").click()
     at.run(timeout=60)
-    assert at.button[5].label == "สร้างรายงาน Excel"
-    assert at.button[5].disabled is False
-    at.button[5].click()
+    export_action = _button_by_label(at, "สร้างรายงาน Excel")
+    assert export_action.disabled is False
+    export_action.click()
     at.run(timeout=120)
 
     output = at.session_state["tmc_output"]

@@ -168,7 +168,7 @@ def test_mapping_editor_change_updates_stored_readiness_in_same_adapter_flow() -
     assert stored.readiness.export is False
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": False, "review": False, "export": False}
-    assert shell["steps"][3:] == ["active", "pending", "pending"]
+    assert shell["steps"][2:] == ["active", "pending", "pending"]
 
 
 def test_pce_editor_change_updates_stored_readiness_in_same_adapter_flow() -> None:
@@ -194,7 +194,7 @@ def test_pce_editor_change_updates_stored_readiness_in_same_adapter_flow() -> No
     assert shell["readiness"]["analysis"] is False
     assert shell["readiness"]["review"] is False
     assert shell["readiness"]["export"] is False
-    assert shell["steps"][3:] == ["active", "pending", "pending"]
+    assert shell["steps"][2:] == ["active", "pending", "pending"]
 
 
 def test_single_shell_prefers_stored_readiness_over_conflicting_legacy_state() -> None:
@@ -210,7 +210,7 @@ def test_single_shell_prefers_stored_readiness_over_conflicting_legacy_state() -
     shell = _single_shell_state()
 
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": False, "review": False, "export": False}
-    assert shell["steps"][3:] == ["active", "pending", "pending"]
+    assert shell["steps"][2:] == ["active", "pending", "pending"]
 
 
 def test_top_status_bar_prefers_stored_source_and_mapping_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,7 +306,7 @@ def test_pce_override_survives_widget_rehydration_without_spurious_transition() 
     assert stored.readiness.export is True
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": True}
-    assert shell["steps"][3:] == ["completed", "ready", "completed"]
+    assert shell["steps"][2:] == ["completed", "ready", "completed"]
 
 
 def test_mapping_editor_and_view_only_changes_do_not_stale_single_state() -> None:
@@ -323,7 +323,25 @@ def test_mapping_editor_and_view_only_changes_do_not_stale_single_state() -> Non
     assert "tmc_output" in st.session_state
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": True}
-    assert shell["steps"][3:] == ["completed", "ready", "completed"]
+    assert shell["steps"][2:] == ["completed", "ready", "completed"]
+
+
+def test_canonical_stage_navigation_does_not_invalidate_single_workflow() -> None:
+    _seed_single_state()
+    previous = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert previous is not None
+
+    for stage in app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE):
+        app.set_active_tab(stage)
+
+    transition = _sync()
+    current = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+
+    assert transition.changed_fields == ()
+    assert current is not None
+    assert current.revisions == previous.revisions
+    assert "tmc_processed" in st.session_state
+    assert "tmc_output" in st.session_state
 
 
 def test_peak_search_change_stales_analysis_but_peak_decision_only_stales_export() -> None:
@@ -339,7 +357,7 @@ def test_peak_search_change_stales_analysis_but_peak_decision_only_stales_export
     assert stored.readiness == WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False)
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": False, "review": False, "export": False}
-    assert shell["steps"][3:] == ["active", "pending", "pending"]
+    assert shell["steps"][2:] == ["active", "pending", "pending"]
 
     _seed_single_state()
     st.session_state["tmc_confirmed_am_peak_start"] = "09:00"
@@ -356,7 +374,7 @@ def test_peak_search_change_stales_analysis_but_peak_decision_only_stales_export
     assert stored.readiness == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False)
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": False}
-    assert shell["steps"][3:] == ["completed", "ready", "active"]
+    assert shell["steps"][2:] == ["completed", "ready", "active"]
 
 
 def test_export_metadata_change_preserves_analysis_and_invalidates_artifact() -> None:
@@ -375,7 +393,7 @@ def test_export_metadata_change_preserves_analysis_and_invalidates_artifact() ->
     assert stored.readiness == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False)
     shell = _single_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": False}
-    assert shell["steps"][3:] == ["completed", "ready", "active"]
+    assert shell["steps"][2:] == ["completed", "ready", "active"]
 
 
 def test_project_session_with_unchanged_semantic_inputs_does_not_clear_artifacts() -> None:
@@ -488,7 +506,49 @@ def test_batch_mapping_preset_change_updates_stored_readiness() -> None:
     assert stored.readiness.export is False
     shell = _batch_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": False, "review": False, "export": False}
-    assert shell["steps"][3:] == ["active", "pending", "pending"]
+    assert shell["steps"][2:] == ["active", "pending", "pending"]
+
+
+def test_workflow_shell_status_uses_authoritative_readiness_in_canonical_order() -> None:
+    _seed_single_state()
+    stored = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert stored is not None
+
+    shell = _single_shell_state()
+
+    assert [row[0] for row in shell["summary"]] == app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert len(shell["steps"]) == len(app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE))
+    assert shell["readiness"] == {
+        "source": stored.readiness.source,
+        "mapping": stored.readiness.mapping,
+        "analysis": stored.readiness.analysis,
+        "review": stored.readiness.review,
+        "export": stored.readiness.export,
+    }
+
+
+def test_canonical_stage_navigation_does_not_invalidate_batch_workflow() -> None:
+    upload, preset = _seed_batch_state()
+    previous = app._workflow_state_for_mode(app.WORKFLOW_BATCH_MODE)
+    assert previous is not None
+
+    for stage in app.workflow_stages_for_mode(app.WORKFLOW_BATCH_MODE):
+        app.set_active_tab(stage)
+
+    transition = app._sync_batch_workflow_from_state(
+        batch_uploads=[upload],
+        mapping_preset=preset,
+        movement_code_scheme="from_to",
+        metadata_rows=st.session_state["tmc_batch_file_metadata_table"],
+        export_mode=app.BATCH_SAFE_PNG_EXPORT_LABEL,
+    )
+    current = app._workflow_state_for_mode(app.WORKFLOW_BATCH_MODE)
+
+    assert transition.changed_fields == ()
+    assert current is not None
+    assert current.revisions == previous.revisions
+    assert st.session_state["tmc_batch_analysis_result"] is not None
+    assert st.session_state["tmc_batch_export_result"] is not None
 
 
 def test_batch_peak_decision_change_preserves_analysis_and_stales_export() -> None:
@@ -514,7 +574,7 @@ def test_batch_peak_decision_change_preserves_analysis_and_stales_export() -> No
     assert stored.readiness == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=False)
     shell = _batch_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": False}
-    assert shell["steps"][3:] == ["completed", "ready", "active"]
+    assert shell["steps"][2:] == ["completed", "ready", "active"]
 
 
 def test_batch_export_metadata_change_preserves_analysis_and_stales_export() -> None:
@@ -546,4 +606,4 @@ def test_batch_export_metadata_change_preserves_analysis_and_stales_export() -> 
     assert stored.readiness.export is False
     shell = _batch_shell_state()
     assert shell["readiness"] == {"source": True, "mapping": True, "analysis": True, "review": True, "export": False}
-    assert shell["steps"][3:] == ["completed", "ready", "active"]
+    assert shell["steps"][2:] == ["completed", "ready", "active"]
