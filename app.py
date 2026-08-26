@@ -224,6 +224,7 @@ BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY = "batch_mapping_preset_upload"
 SINGLE_SOURCE_CLEAR_REQUEST_KEY = "tmc_single_source_clear_requested"
 BATCH_SOURCE_CLEAR_REQUEST_KEY = "tmc_batch_source_clear_requested"
 BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY = "tmc_batch_mapping_preset_clear_requested"
+UPLOAD_WIDGET_REVISION_SUFFIX = "__revision"
 WORKFLOW_EXPORT_METADATA_FIELDS = (
     "project_name",
     "tmc_id",
@@ -681,6 +682,18 @@ def _remember_batch_uploads(uploads: list[object] | tuple[object, ...] | None) -
     return [upload for record in records if (upload := _stored_upload(record)) is not None]
 
 
+def _upload_widget_key(base_key: str) -> str:
+    revision = int(st.session_state.get(f"{base_key}{UPLOAD_WIDGET_REVISION_SUFFIX}", 0) or 0)
+    return base_key if revision <= 0 else f"{base_key}_{revision}"
+
+
+def _bump_upload_widget_revision(base_key: str) -> None:
+    current_key = _upload_widget_key(base_key)
+    st.session_state.pop(current_key, None)
+    revision_key = f"{base_key}{UPLOAD_WIDGET_REVISION_SUFFIX}"
+    st.session_state[revision_key] = int(st.session_state.get(revision_key, 0) or 0) + 1
+
+
 def _request_upload_clear(*, state_key: str, request_key: str) -> None:
     """Remove the canonical upload and mark its widget for reset on rerun."""
 
@@ -695,10 +708,12 @@ def _consume_upload_clear_request(*, state_key: str, widget_key: str, request_ke
         return False
     st.session_state.pop(state_key, None)
     st.session_state.pop(widget_key, None)
+    st.session_state.pop(_upload_widget_key(widget_key), None)
     return True
 
 
 def _clear_single_source_upload() -> None:
+    _bump_upload_widget_revision(SINGLE_SOURCE_UPLOAD_WIDGET_KEY)
     _request_upload_clear(
         state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
         request_key=SINGLE_SOURCE_CLEAR_REQUEST_KEY,
@@ -711,6 +726,7 @@ def _clear_single_source_upload() -> None:
 
 
 def _clear_batch_source_uploads() -> None:
+    _bump_upload_widget_revision(BATCH_SOURCE_UPLOAD_WIDGET_KEY)
     _request_upload_clear(
         state_key=BATCH_SOURCE_UPLOAD_STATE_KEY,
         request_key=BATCH_SOURCE_CLEAR_REQUEST_KEY,
@@ -722,6 +738,7 @@ def _clear_batch_source_uploads() -> None:
 
 
 def _clear_batch_mapping_preset_upload() -> None:
+    _bump_upload_widget_revision(BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY)
     _request_upload_clear(
         state_key=BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY,
         request_key=BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY,
@@ -770,7 +787,7 @@ def _render_primary_workflow_inputs(
                 current_upload = st.file_uploader(
                     "Upload TMC Excel workbook",
                     type=["xlsx", "xlsm", "xls"],
-                    key="raw_tmc_upload",
+                    key=_upload_widget_key(SINGLE_SOURCE_UPLOAD_WIDGET_KEY),
                 )
                 uploaded_file = _remember_upload(current_upload, SINGLE_SOURCE_UPLOAD_STATE_KEY)
                 if uploaded_file is not None:
@@ -788,7 +805,7 @@ def _render_primary_workflow_inputs(
                     "Upload multiple TMC Excel workbooks",
                     type=["xlsx", "xlsm", "xls"],
                     accept_multiple_files=True,
-                    key="batch_raw_tmc_uploads",
+                    key=_upload_widget_key(BATCH_SOURCE_UPLOAD_WIDGET_KEY),
                 )
                 batch_uploads = _remember_batch_uploads(current_uploads)
                 if batch_uploads:
@@ -806,7 +823,7 @@ def _render_primary_workflow_inputs(
             current_preset = st.file_uploader(
                 "Open Mapping Preset for all files",
                 type=["json"],
-                key="batch_mapping_preset_upload",
+                key=_upload_widget_key(BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY),
                 help="Batch uses one Mapping Preset for all uploaded workbooks.",
             )
             batch_preset_upload = _remember_upload(current_preset, BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY)

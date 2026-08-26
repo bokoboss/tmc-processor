@@ -45,6 +45,10 @@ def _widget_by_key(widgets, key: str):
     return next(widget for widget in widgets if widget.key == key)
 
 
+def _widget_by_prefix(widgets, prefix: str):
+    return next(widget for widget in widgets if widget.key == prefix or widget.key.startswith(f"{prefix}_"))
+
+
 def _button_by_label(at: AppTest, label: str):
     return next(button for button in at.button if button.label == label)
 
@@ -503,7 +507,17 @@ def test_streamlit_apptest_explicit_single_clear_removes_upload_and_invalidates_
     assert workflow_state.readiness.analysis is False
     assert workflow_state.readiness.review is False
     assert workflow_state.readiness.export is False
-    assert _widget_by_key(at.file_uploader, "raw_tmc_upload").value is None
+    assert _widget_by_prefix(at.file_uploader, "raw_tmc_upload").value is None
+
+    _widget_by_prefix(at.file_uploader, "raw_tmc_upload").set_value(
+        (
+            "DEMO_TMC1_FourLeg.xlsx",
+            (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.xlsx").read_bytes(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    )
+    at.run(timeout=60)
+    assert at.session_state[app.SINGLE_SOURCE_UPLOAD_STATE_KEY]["name"] == "DEMO_TMC1_FourLeg.xlsx"
 
 
 def test_streamlit_apptest_batch_clear_controls_remove_canonical_inputs(monkeypatch) -> None:
@@ -519,7 +533,7 @@ def test_streamlit_apptest_batch_clear_controls_remove_canonical_inputs(monkeypa
     at.run(timeout=30)
     at.radio[0].set_value(at.radio[0].options[1])
     at.run(timeout=30)
-    _widget_by_key(at.file_uploader, "batch_raw_tmc_uploads").set_value(
+    _widget_by_prefix(at.file_uploader, "batch_raw_tmc_uploads").set_value(
         [
             (
                 "DEMO_TMC1_FourLeg.xlsx",
@@ -541,7 +555,7 @@ def test_streamlit_apptest_batch_clear_controls_remove_canonical_inputs(monkeypa
     assert batch_state.readiness.review is False
     assert batch_state.readiness.export is False
 
-    _widget_by_key(at.file_uploader, "batch_raw_tmc_uploads").set_value(
+    _widget_by_prefix(at.file_uploader, "batch_raw_tmc_uploads").set_value(
         [
             (
                 "DEMO_TMC1_FourLeg.xlsx",
