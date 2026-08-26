@@ -203,6 +203,14 @@ SETUP_TIME_FIELDS = {
     "pm_peak_window_start",
     "pm_peak_window_end",
 }
+ANALYZE_SETUP_FIELDS = (
+    "survey_period",
+    "peak_mode",
+    "am_peak_window_start",
+    "am_peak_window_end",
+    "pm_peak_window_start",
+    "pm_peak_window_end",
+)
 
 WORKFLOW_STATE_KEY = "tmc_workflow_state"
 WORKFLOW_SINGLE_MODE = "single"
@@ -210,6 +218,12 @@ WORKFLOW_BATCH_MODE = "batch"
 SINGLE_SOURCE_UPLOAD_STATE_KEY = "tmc_single_source_upload"
 BATCH_SOURCE_UPLOAD_STATE_KEY = "tmc_batch_source_uploads"
 BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY = "tmc_batch_mapping_preset_upload"
+SINGLE_SOURCE_UPLOAD_WIDGET_KEY = "raw_tmc_upload"
+BATCH_SOURCE_UPLOAD_WIDGET_KEY = "batch_raw_tmc_uploads"
+BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY = "batch_mapping_preset_upload"
+SINGLE_SOURCE_CLEAR_REQUEST_KEY = "tmc_single_source_clear_requested"
+BATCH_SOURCE_CLEAR_REQUEST_KEY = "tmc_batch_source_clear_requested"
+BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY = "tmc_batch_mapping_preset_clear_requested"
 WORKFLOW_EXPORT_METADATA_FIELDS = (
     "project_name",
     "tmc_id",
@@ -451,6 +465,29 @@ def _hydrate_setup_widgets_from_state(state: MutableMapping[str, object] | None 
             state[widget_key] = setup_state[field]
 
 
+def _rehydrate_analyze_setup_widgets(state: MutableMapping[str, object] | None = None) -> dict[str, object]:
+    """Restore Analyze-owned widget keys from canonical setup state before rendering."""
+
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(
+        state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None
+    )
+    state[SETUP_STATE_KEY] = setup_state
+    for field in ANALYZE_SETUP_FIELDS:
+        widget_key = SETUP_FIELD_WIDGET_KEYS[field]
+        if widget_key not in state:
+            state[widget_key] = setup_state[field]
+    return dict(setup_state)
+
+
+def _discard_nonrendered_analyze_setup_widgets(state: MutableMapping[str, object] | None = None) -> None:
+    """Prevent pruned Analyze widgets from overwriting canonical setup state."""
+
+    state = _setup_state_mapping(state)
+    for field in ANALYZE_SETUP_FIELDS:
+        state.pop(SETUP_FIELD_WIDGET_KEYS[field], None)
+
+
 def initialize_setup_state_once(
     uploaded_filename_default: str = "",
     state: MutableMapping[str, object] | None = None,
@@ -602,6 +639,12 @@ def _upload_record(upload: object) -> dict[str, object]:
     }
 
 
+def _upload_record_identity(record: object) -> tuple[str, str]:
+    if not isinstance(record, dict):
+        return "", ""
+    return str(record.get("name") or ""), str(record.get("sha256") or "")
+
+
 def _stored_upload(record: object) -> _StoredUpload | None:
     if not isinstance(record, dict):
         return None
@@ -616,7 +659,7 @@ def _remember_upload(upload: object | None, state_key: str) -> _StoredUpload | N
     if upload is not None:
         record = _upload_record(upload)
         previous = st.session_state.get(state_key)
-        if not isinstance(previous, dict) or previous.get("sha256") != record["sha256"]:
+        if _upload_record_identity(previous) != _upload_record_identity(record):
             st.session_state[state_key] = record
         return _stored_upload(record)
     return _stored_upload(st.session_state.get(state_key))
@@ -626,8 +669,8 @@ def _remember_batch_uploads(uploads: list[object] | tuple[object, ...] | None) -
     if uploads:
         records = [_upload_record(upload) for upload in uploads]
         previous = st.session_state.get(BATCH_SOURCE_UPLOAD_STATE_KEY)
-        previous_signature = tuple(record.get("sha256") for record in previous) if isinstance(previous, list) else ()
-        current_signature = tuple(record.get("sha256") for record in records)
+        previous_signature = tuple(_upload_record_identity(record) for record in previous) if isinstance(previous, list) else ()
+        current_signature = tuple(_upload_record_identity(record) for record in records)
         if previous_signature != current_signature:
             st.session_state[BATCH_SOURCE_UPLOAD_STATE_KEY] = records
         return [upload for record in records if (upload := _stored_upload(record)) is not None]
@@ -638,12 +681,83 @@ def _remember_batch_uploads(uploads: list[object] | tuple[object, ...] | None) -
     return [upload for record in records if (upload := _stored_upload(record)) is not None]
 
 
+def _request_upload_clear(*, state_key: str, request_key: str) -> None:
+    """Remove the canonical upload and mark its widget for reset on rerun."""
+
+    st.session_state.pop(state_key, None)
+    st.session_state[request_key] = True
+
+
+def _consume_upload_clear_request(*, state_key: str, widget_key: str, request_key: str) -> bool:
+    """Reset an uploader before it is rendered after an explicit clear."""
+
+    if not st.session_state.pop(request_key, False):
+        return False
+    st.session_state.pop(state_key, None)
+    st.session_state.pop(widget_key, None)
+    return True
+
+
+def _clear_single_source_upload() -> None:
+    _request_upload_clear(
+        state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
+        request_key=SINGLE_SOURCE_CLEAR_REQUEST_KEY,
+    )
+    st.session_state.pop("tmc_uploaded_identity", None)
+    st.session_state.pop("tmc_uploaded_source_fingerprint", None)
+    st.session_state.pop("tmc_output", None)
+    st.session_state["tmc_pce_results_stale"] = True
+    _clear_single_review_state()
+
+
+def _clear_batch_source_uploads() -> None:
+    _request_upload_clear(
+        state_key=BATCH_SOURCE_UPLOAD_STATE_KEY,
+        request_key=BATCH_SOURCE_CLEAR_REQUEST_KEY,
+    )
+    st.session_state["tmc_batch_stale"] = True
+    st.session_state["tmc_batch_export_stale"] = True
+    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    st.session_state.pop("tmc_batch_export_result", None)
+
+
+def _clear_batch_mapping_preset_upload() -> None:
+    _request_upload_clear(
+        state_key=BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY,
+        request_key=BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY,
+    )
+    st.session_state["tmc_batch_stale"] = True
+    st.session_state["tmc_batch_export_stale"] = True
+    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    st.session_state.pop("tmc_batch_preset_name", None)
+    st.session_state.pop("tmc_batch_export_result", None)
+
+
 def _render_primary_workflow_inputs(
     *,
     is_single_file_mode: bool,
     active_stage: str,
 ) -> tuple[_StoredUpload | None, list[_StoredUpload], _StoredUpload | None]:
     """Render stage-owned source controls and retain inputs across stage navigation."""
+
+    if active_stage == "Data" and is_single_file_mode:
+        _consume_upload_clear_request(
+            state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
+            widget_key=SINGLE_SOURCE_UPLOAD_WIDGET_KEY,
+            request_key=SINGLE_SOURCE_CLEAR_REQUEST_KEY,
+        )
+    elif active_stage == "Data":
+        _consume_upload_clear_request(
+            state_key=BATCH_SOURCE_UPLOAD_STATE_KEY,
+            widget_key=BATCH_SOURCE_UPLOAD_WIDGET_KEY,
+            request_key=BATCH_SOURCE_CLEAR_REQUEST_KEY,
+        )
+    elif active_stage == "Mapping" and not is_single_file_mode:
+        _consume_upload_clear_request(
+            state_key=BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY,
+            widget_key=BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY,
+            request_key=BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY,
+        )
 
     uploaded_file = _stored_upload(st.session_state.get(SINGLE_SOURCE_UPLOAD_STATE_KEY))
     batch_uploads = _remember_batch_uploads(None)
@@ -661,6 +775,13 @@ def _render_primary_workflow_inputs(
                 uploaded_file = _remember_upload(current_upload, SINGLE_SOURCE_UPLOAD_STATE_KEY)
                 if uploaded_file is not None:
                     st.caption(f"Loaded source: {uploaded_file.name}")
+                if st.button(
+                    "Clear source",
+                    disabled=uploaded_file is None,
+                    key="clear_single_source_upload",
+                ):
+                    _clear_single_source_upload()
+                    st.rerun()
             else:
                 _render_section_header("Batch source workbooks", "Upload all workbooks for the Batch workflow.")
                 current_uploads = st.file_uploader(
@@ -672,6 +793,13 @@ def _render_primary_workflow_inputs(
                 batch_uploads = _remember_batch_uploads(current_uploads)
                 if batch_uploads:
                     st.caption(f"Loaded sources: {len(batch_uploads):,} workbook(s)")
+                if st.button(
+                    "Clear Batch sources",
+                    disabled=not batch_uploads,
+                    key="clear_batch_source_uploads",
+                ):
+                    _clear_batch_source_uploads()
+                    st.rerun()
     elif not is_single_file_mode and active_stage == "Mapping":
         with st.container(border=True):
             _render_section_header("Mapping Preset", "Load the shared movement mapping for every Batch workbook.")
@@ -684,6 +812,13 @@ def _render_primary_workflow_inputs(
             batch_preset_upload = _remember_upload(current_preset, BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY)
             if batch_preset_upload is not None:
                 st.caption(f"Loaded preset: {batch_preset_upload.name}")
+            if st.button(
+                "Clear Mapping Preset",
+                disabled=batch_preset_upload is None,
+                key="clear_batch_mapping_preset_upload",
+            ):
+                _clear_batch_mapping_preset_upload()
+                st.rerun()
 
     return uploaded_file, batch_uploads, batch_preset_upload
 
@@ -4603,6 +4738,8 @@ def _run_streamlit_app() -> None:
 
     _render_app_header()
     active_tab = render_workflow_navigation()
+    if active_tab != "Analyze":
+        _discard_nonrendered_analyze_setup_widgets()
     uploaded_file, batch_uploads, batch_preset_upload = _render_primary_workflow_inputs(
         is_single_file_mode=is_single_file_mode,
         active_stage=active_tab,
@@ -4647,6 +4784,8 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", None)
     _ensure_pce_factor_state()
+    if active_tab == "Analyze":
+        _rehydrate_analyze_setup_widgets()
     single_export_options = _single_export_mode_options(excel_com_status)
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
@@ -4906,14 +5045,41 @@ def _run_streamlit_app() -> None:
         with st.container(border=True):
             _render_section_header("Analysis settings", "Peak search windows and PCE factors are part of Analyze.")
             survey_period = st.text_input("Survey period", key="survey_period_input")
-            if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
-                st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
-            peak_mode = st.selectbox("Peak calculation mode", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
+            peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
+            if peak_mode_default not in PEAK_MODE_OPTIONS:
+                peak_mode_default = DEFAULT_PEAK_MODE
+                st.session_state["peak_mode_select"] = peak_mode_default
+            peak_mode = st.selectbox(
+                "Peak calculation mode",
+                options=PEAK_MODE_OPTIONS,
+                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                key="peak_mode_select",
+            )
             period_cols = st.columns(4)
-            am_peak_window_start = period_cols[0].time_input("AM window start", step=900, key="am_peak_window_start_input")
-            am_peak_window_end = period_cols[1].time_input("AM window end", step=900, key="am_peak_window_end_input")
-            pm_peak_window_start = period_cols[2].time_input("PM window start", step=900, key="pm_peak_window_start_input")
-            pm_peak_window_end = period_cols[3].time_input("PM window end", step=900, key="pm_peak_window_end_input")
+            am_peak_window_start = period_cols[0].time_input(
+                "AM window start",
+                value=_coerce_setup_time(st.session_state["am_peak_window_start_input"], _time_from_text(AM_WINDOW[0])),
+                step=900,
+                key="am_peak_window_start_input",
+            )
+            am_peak_window_end = period_cols[1].time_input(
+                "AM window end",
+                value=_coerce_setup_time(st.session_state["am_peak_window_end_input"], _time_from_text(AM_WINDOW[1])),
+                step=900,
+                key="am_peak_window_end_input",
+            )
+            pm_peak_window_start = period_cols[2].time_input(
+                "PM window start",
+                value=_coerce_setup_time(st.session_state["pm_peak_window_start_input"], _time_from_text(PM_WINDOW[0])),
+                step=900,
+                key="pm_peak_window_start_input",
+            )
+            pm_peak_window_end = period_cols[3].time_input(
+                "PM window end",
+                value=_coerce_setup_time(st.session_state["pm_peak_window_end_input"], _time_from_text(PM_WINDOW[1])),
+                step=900,
+                key="pm_peak_window_end_input",
+            )
             selected_pce_factors = _render_pce_factor_editor()
             _sync_workflow_after_pce_editor(
                 is_single_file_mode=True,
@@ -5503,14 +5669,41 @@ def _run_streamlit_app() -> None:
             with st.container(border=True):
                 _render_section_header("Analysis settings", "These settings apply to every uploaded Batch workbook.")
                 survey_period = st.text_input("Survey period", key="survey_period_input")
-                if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
-                    st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
-                peak_mode = st.selectbox("Peak calculation mode", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
+                peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
+                if peak_mode_default not in PEAK_MODE_OPTIONS:
+                    peak_mode_default = DEFAULT_PEAK_MODE
+                    st.session_state["peak_mode_select"] = peak_mode_default
+                peak_mode = st.selectbox(
+                    "Peak calculation mode",
+                    options=PEAK_MODE_OPTIONS,
+                    index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                    key="peak_mode_select",
+                )
                 period_cols = st.columns(4)
-                am_peak_window_start = period_cols[0].time_input("AM window start", step=900, key="am_peak_window_start_input")
-                am_peak_window_end = period_cols[1].time_input("AM window end", step=900, key="am_peak_window_end_input")
-                pm_peak_window_start = period_cols[2].time_input("PM window start", step=900, key="pm_peak_window_start_input")
-                pm_peak_window_end = period_cols[3].time_input("PM window end", step=900, key="pm_peak_window_end_input")
+                am_peak_window_start = period_cols[0].time_input(
+                    "AM window start",
+                    value=_coerce_setup_time(st.session_state["am_peak_window_start_input"], _time_from_text(AM_WINDOW[0])),
+                    step=900,
+                    key="am_peak_window_start_input",
+                )
+                am_peak_window_end = period_cols[1].time_input(
+                    "AM window end",
+                    value=_coerce_setup_time(st.session_state["am_peak_window_end_input"], _time_from_text(AM_WINDOW[1])),
+                    step=900,
+                    key="am_peak_window_end_input",
+                )
+                pm_peak_window_start = period_cols[2].time_input(
+                    "PM window start",
+                    value=_coerce_setup_time(st.session_state["pm_peak_window_start_input"], _time_from_text(PM_WINDOW[0])),
+                    step=900,
+                    key="pm_peak_window_start_input",
+                )
+                pm_peak_window_end = period_cols[3].time_input(
+                    "PM window end",
+                    value=_coerce_setup_time(st.session_state["pm_peak_window_end_input"], _time_from_text(PM_WINDOW[1])),
+                    step=900,
+                    key="pm_peak_window_end_input",
+                )
                 selected_pce_factors = _render_pce_factor_editor()
                 _sync_workflow_after_pce_editor(
                     is_single_file_mode=False,

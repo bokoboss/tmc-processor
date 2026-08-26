@@ -344,6 +344,99 @@ def test_canonical_stage_navigation_does_not_invalidate_single_workflow() -> Non
     assert "tmc_output" in st.session_state
 
 
+def test_rehydrate_analyze_setup_widgets_uses_canonical_values() -> None:
+    state: dict[str, object] = {}
+    app.initialize_setup_state_once(state=state)
+    state[app.SETUP_STATE_KEY].update(
+        {
+            "survey_period": "06.00 - 19.00",
+            "peak_mode": "rolling_60min",
+            "am_peak_window_start": time(6, 0),
+            "am_peak_window_end": time(10, 0),
+            "pm_peak_window_start": time(15, 0),
+            "pm_peak_window_end": time(19, 0),
+        }
+    )
+    for field in app.ANALYZE_SETUP_FIELDS:
+        state.pop(app.SETUP_FIELD_WIDGET_KEYS[field], None)
+
+    restored = app._rehydrate_analyze_setup_widgets(state)
+
+    assert restored["survey_period"] == "06.00 - 19.00"
+    assert restored["peak_mode"] == "rolling_60min"
+    assert restored["am_peak_window_start"] == time(6, 0)
+    assert restored["am_peak_window_end"] == time(10, 0)
+    assert restored["pm_peak_window_start"] == time(15, 0)
+    assert restored["pm_peak_window_end"] == time(19, 0)
+    assert state[app.SETUP_FIELD_WIDGET_KEYS["am_peak_window_start"]] == time(6, 0)
+
+
+def test_single_analyze_setup_rehydration_preserves_revisions_readiness_and_artifacts() -> None:
+    _seed_single_state()
+    st.session_state["tmc_processed"]["result"] = SimpleNamespace(
+        peaks=pd.DataFrame(
+            [
+                {"period": "AM", "peak_start": time(8, 0), "peak_end": time(9, 0), "hourly_pcu": 100},
+                {"period": "PM", "peak_start": time(17, 0), "peak_end": time(18, 0), "hourly_pcu": 120},
+            ]
+        )
+    )
+    app._sync_single_workflow_from_state(
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+    previous = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+    processed = st.session_state["tmc_processed"]
+    output = st.session_state["tmc_output"]
+    assert previous is not None
+    assert previous.readiness == WorkflowReadiness(source=True, mapping=True, analysis=True, review=True, export=True)
+
+    for field in app.ANALYZE_SETUP_FIELDS:
+        st.session_state.pop(app.SETUP_FIELD_WIDGET_KEYS[field], None)
+    app._rehydrate_analyze_setup_widgets()
+    transition = app._sync_single_workflow_from_state(
+        source_bytes=b"source-a",
+        source_file_name="demo.xlsx",
+        export_mode=app.SAFE_PNG_EXPORT_MODE,
+    )
+    current = app._workflow_state_for_mode(app.WORKFLOW_SINGLE_MODE)
+
+    assert transition.changed_fields == ()
+    assert current is not None
+    assert current.revisions == previous.revisions
+    assert current.readiness == previous.readiness
+    assert st.session_state["tmc_processed"] is processed
+    assert st.session_state["tmc_output"] is output
+
+
+def test_batch_analyze_setup_rehydration_preserves_revisions_readiness_and_artifacts() -> None:
+    upload, preset = _seed_batch_state()
+    previous = app._workflow_state_for_mode(app.WORKFLOW_BATCH_MODE)
+    analysis = st.session_state["tmc_batch_analysis_result"]
+    output = st.session_state["tmc_batch_export_result"]
+    assert previous is not None
+
+    for field in app.ANALYZE_SETUP_FIELDS:
+        st.session_state.pop(app.SETUP_FIELD_WIDGET_KEYS[field], None)
+    app._rehydrate_analyze_setup_widgets()
+    transition = app._sync_batch_workflow_from_state(
+        batch_uploads=[upload],
+        mapping_preset=preset,
+        movement_code_scheme="from_to",
+        metadata_rows=st.session_state["tmc_batch_file_metadata_table"],
+        export_mode=app.BATCH_SAFE_PNG_EXPORT_LABEL,
+    )
+    current = app._workflow_state_for_mode(app.WORKFLOW_BATCH_MODE)
+
+    assert transition.changed_fields == ()
+    assert current is not None
+    assert current.revisions == previous.revisions
+    assert current.readiness == previous.readiness
+    assert st.session_state["tmc_batch_analysis_result"] is analysis
+    assert st.session_state["tmc_batch_export_result"] is output
+
+
 def test_peak_search_change_stales_analysis_but_peak_decision_only_stales_export() -> None:
     _seed_single_state()
     st.session_state["peak_mode_select"] = "rolling_60min"
@@ -480,6 +573,26 @@ def test_batch_source_content_change_stales_analysis_and_export() -> None:
     assert transition.analysis_invalidated is True
     assert st.session_state["tmc_batch_stale"] is True
     assert "tmc_batch_export_result" not in st.session_state
+
+
+def test_batch_peak_search_change_stales_analysis_and_export() -> None:
+    upload, preset = _seed_batch_state()
+    st.session_state["am_peak_window_start_input"] = time(8, 0)
+
+    transition = app._sync_batch_workflow_from_state(
+        batch_uploads=[upload],
+        mapping_preset=preset,
+        movement_code_scheme="from_to",
+        metadata_rows=st.session_state["tmc_batch_file_metadata_table"],
+        export_mode=app.BATCH_SAFE_PNG_EXPORT_LABEL,
+    )
+
+    stored = app._workflow_state_for_mode(app.WORKFLOW_BATCH_MODE)
+    assert transition.analysis_invalidated is True
+    assert st.session_state["tmc_batch_stale"] is True
+    assert "tmc_batch_export_result" not in st.session_state
+    assert stored is not None
+    assert stored.readiness == WorkflowReadiness(source=True, mapping=True, analysis=False, review=False, export=False)
 
 
 def test_batch_mapping_preset_change_updates_stored_readiness() -> None:
