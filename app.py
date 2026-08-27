@@ -45,6 +45,7 @@ from tmc_processor.constants import (
     DEFAULT_PEAK_MODE,
     FACILITY_TYPE_OPTIONS,
     LEG_OPTIONS,
+    MAPPING_COLUMNS,
     MOVEMENT_CODE_OPTIONS,
     PEAK_MODE_OPTIONS,
     PM_WINDOW,
@@ -64,6 +65,9 @@ from tmc_processor.export_package import (
 from tmc_processor.importer import detect_raw_direction_sheet_names, load_detected_sheet_details, preview_detected_sheets
 from tmc_processor.mapping import (
     apply_saved_mapping_to_sheets,
+    PHYSICAL_APPROACH_OPTIONS,
+    PHYSICAL_MOVEMENT_OPTIONS,
+    canonical_movement_code_from_physical,
     default_mapping_for_sheets,
     mapping_to_excel_bytes,
     mapping_control_warnings,
@@ -72,6 +76,7 @@ from tmc_processor.mapping import (
     normalize_mapping_for_scheme,
     normalize_approach_movement_mapping,
     movement_aggregation_messages,
+    physical_mapping_from_canonical_code,
     read_mapping_excel_with_metadata,
     selectbox_options_with_existing_values,
     validate_mapping_scheme,
@@ -1270,6 +1275,10 @@ def _mapping_editor_labels(movement_code_scheme: str) -> dict[str, str]:
         "source_stream": "source_stream",
         "movement_code": "รหัส movement",
         "raw_movement_label": "ป้ายแสดงผล",
+        "physical_approach": "Physical approach",
+        "physical_movement": "Movement",
+        "derived_code": "Derived code",
+        "status": "Status",
         "include_in_report": "แสดงในรายงาน",
         "include_in_peak": "ใช้คำนวณ Peak",
     }
@@ -3571,25 +3580,117 @@ def _ordered_mapping_frame(mapping: pd.DataFrame) -> pd.DataFrame:
     return mapping[ordered].copy()
 
 
+_BASIC_MAPPING_UI_COLUMNS = {
+    "physical_approach",
+    "physical_movement",
+    "derived_code",
+    "status",
+}
+
+
+def _normalize_mapping_for_editor(mapping: pd.DataFrame, movement_code_scheme: str) -> pd.DataFrame:
+    """Normalize canonical values while retaining editor-only compatibility metadata."""
+
+    source = pd.DataFrame(mapping).reset_index(drop=True).copy()
+    normalized = normalize_mapping_for_scheme(source, movement_code_scheme).reset_index(drop=True)
+    for column in source.columns:
+        if column not in normalized.columns and column not in _BASIC_MAPPING_UI_COLUMNS:
+            normalized[column] = source[column].values
+    return normalized
+
+
+def _basic_mapping_row_status(row: object, movement_code_scheme: str) -> tuple[str, str]:
+    """Return the inline derived code and operator-facing status for one row."""
+
+    values = row if isinstance(row, dict) else pd.Series(row).to_dict()
+    code = str(values.get("movement_code") or "").strip().upper()
+    approach = str(values.get("physical_approach") or "").strip()
+    movement = str(values.get("physical_movement") or "").strip()
+    sheet = str(values.get("raw_sheet") or "source sheet").strip()
+    include_in_report = values.get("include_in_report", True)
+    if isinstance(include_in_report, str):
+        include_in_report = include_in_report.strip().casefold() not in {"false", "0", "no", "n", "off"}
+    else:
+        include_in_report = bool(include_in_report)
+
+    if approach or movement:
+        missing = []
+        if not approach:
+            missing.append("physical approach")
+        if not movement:
+            missing.append("movement")
+        if missing:
+            if code and physical_mapping_from_canonical_code(code, movement_code_scheme) is None:
+                return code, f"Advanced required · {sheet}: preserve {code}"
+            return "", f"Needs attention · {sheet}: select { ' and '.join(missing) }"
+        try:
+            derived_code = canonical_movement_code_from_physical(
+                approach,
+                movement,
+                movement_code_scheme,
+            )
+        except ValueError:
+            return "", f"Needs attention · {sheet}: unsupported physical combination"
+        return derived_code, f"Ready · {derived_code}"
+
+    if code:
+        if physical_mapping_from_canonical_code(code, movement_code_scheme) is None:
+            return code, f"Advanced required · {sheet}: preserve {code}"
+    if not include_in_report:
+        return code, f"Excluded · {sheet}: not included in report"
+    if code:
+        return "", f"Needs attention · {sheet}: select physical approach and movement"
+    return "", f"Needs attention · {sheet}: select physical approach and movement"
+
+
 def _mapping_editor_frame(mapping: pd.DataFrame, view_mode: str, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> pd.DataFrame:
-    ordered = _ordered_mapping_frame(normalize_mapping_for_scheme(mapping, movement_code_scheme))
+    ordered = _ordered_mapping_frame(_normalize_mapping_for_editor(mapping, movement_code_scheme))
     if _is_v2_scheme(movement_code_scheme):
         for column in ("approach_direction", "movement_type"):
             if column not in ordered.columns:
                 ordered[column] = ""
     if view_mode != "Basic":
         return ordered
+
+    physical_approaches: list[str] = []
+    physical_movements: list[str] = []
+    derived_codes: list[str] = []
+    statuses: list[str] = []
+    for _, row in ordered.iterrows():
+        physical = physical_mapping_from_canonical_code(row.get("movement_code", ""), movement_code_scheme)
+        approach = physical.approach if physical is not None else ""
+        movement = physical.movement if physical is not None else ""
+        derived_code, status = _basic_mapping_row_status(
+            {
+                **row.to_dict(),
+                "physical_approach": approach,
+                "physical_movement": movement,
+            },
+            movement_code_scheme,
+        )
+        physical_approaches.append(approach)
+        physical_movements.append(movement)
+        derived_codes.append(derived_code)
+        statuses.append(status)
+
+    basic = ordered.copy()
+    basic["physical_approach"] = physical_approaches
+    basic["physical_movement"] = physical_movements
+    basic["derived_code"] = derived_codes
+    basic["status"] = statuses
     basic_columns = [
         "raw_sheet",
         "raw_direction",
-        "source_stream",
-        "movement_code",
         "raw_movement_label",
+        "physical_approach",
+        "physical_movement",
         "include_in_report",
         "include_in_peak",
+        "derived_code",
+        "status",
     ]
-    visible = [column for column in basic_columns if column in ordered.columns]
-    return ordered[visible].copy()
+    visible = [column for column in basic_columns if column in basic.columns]
+    return basic[visible].copy()
 
 
 _MOVEMENT_LABELS_TH = {
@@ -3716,14 +3817,32 @@ def _apply_basic_mapping_widget_state(
     editor_frame: pd.DataFrame,
     version: int,
     state: MutableMapping[str, object] | None = None,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
 ) -> pd.DataFrame:
     source_state = st.session_state if state is None else state
     edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
     for row_index in range(len(edited)):
-        for column in ("source_stream", "movement_code", "raw_movement_label", "include_in_report", "include_in_peak"):
+        for column in (
+            "physical_approach",
+            "physical_movement",
+            "include_in_report",
+            "include_in_peak",
+        ):
             key = _basic_mapping_widget_key(column, version, row_index)
             if key in source_state and column in edited.columns:
                 edited.at[row_index, column] = source_state[key]
+
+        legacy_code_key = _basic_mapping_widget_key("movement_code", version, row_index)
+        if legacy_code_key in source_state:
+            legacy_code = source_state[legacy_code_key]
+            physical = physical_mapping_from_canonical_code(legacy_code, movement_code_scheme)
+            if physical is not None:
+                edited.at[row_index, "physical_approach"] = physical.approach
+                edited.at[row_index, "physical_movement"] = physical.movement
+            else:
+                # Keep pre-UX-2 widget state readable without making it part of
+                # the new Basic representation.
+                edited.at[row_index, "movement_code"] = legacy_code
     return edited
 
 
@@ -3733,7 +3852,11 @@ def _basic_mapping_widget_state_exists(version: int, state: MutableMapping[str, 
     return any(str(key).startswith(prefix) and suffix in str(key) for key in state)
 
 
-def _apply_mapping_editor_widget_state(editor_frame: pd.DataFrame, editor_state: object) -> pd.DataFrame:
+def _apply_mapping_editor_widget_state(
+    editor_frame: pd.DataFrame,
+    editor_state: object,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> pd.DataFrame:
     edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
     if not isinstance(editor_state, dict):
         return edited
@@ -3754,6 +3877,13 @@ def _apply_mapping_editor_widget_state(editor_frame: pd.DataFrame, editor_state:
             for column, value in changes.items():
                 if column in edited.columns:
                     edited.at[row_index, column] = value
+                elif column == "movement_code" and {"physical_approach", "physical_movement"}.issubset(edited.columns):
+                    physical = physical_mapping_from_canonical_code(value, movement_code_scheme)
+                    if physical is not None:
+                        edited.at[row_index, "physical_approach"] = physical.approach
+                        edited.at[row_index, "physical_movement"] = physical.movement
+                    else:
+                        edited.at[row_index, "movement_code"] = value
 
     for cell_key, value in (editor_state.get("edited_cells") or {}).items():
         row_text, _, column = str(cell_key).partition(":")
@@ -3761,60 +3891,82 @@ def _apply_mapping_editor_widget_state(editor_frame: pd.DataFrame, editor_state:
             row_index = int(row_text)
             if 0 <= row_index < len(edited):
                 edited.at[row_index, column] = value
+        elif row_text.isdigit() and column == "movement_code" and {"physical_approach", "physical_movement"}.issubset(edited.columns):
+            row_index = int(row_text)
+            if 0 <= row_index < len(edited):
+                physical = physical_mapping_from_canonical_code(value, movement_code_scheme)
+                if physical is not None:
+                    edited.at[row_index, "physical_approach"] = physical.approach
+                    edited.at[row_index, "physical_movement"] = physical.movement
+                else:
+                    edited.at[row_index, "movement_code"] = value
 
     return edited
 
 
 def _render_basic_mapping_editor(
     editor_frame: pd.DataFrame,
-    movement_code_options: list[str],
+    movement_code_options: list[str] | None,
     version: int,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
 ) -> pd.DataFrame:
+    del movement_code_options
     edited = pd.DataFrame(editor_frame).reset_index(drop=True).copy()
-    headers = st.columns([1.2, 1.2, 1.1, 1.2, 1.2, 0.8, 0.8])
+    widths = [1.4, 1.6, 1.0, 1.2, 0.8, 0.8, 1.0, 2.2]
+    headers = st.columns(widths)
     for column, label in zip(
         headers,
-        ["Sheet", "Raw", "Source", "Movement", "Label", "Report", "Peak"],
+        ["Source sheet", "Raw label / direction", "Approach", "Movement", "Report", "Peak", "Derived", "Status"],
         strict=True,
     ):
         column.caption(label)
 
     for row_index, row in edited.iterrows():
-        cols = st.columns([1.2, 1.2, 1.1, 1.2, 1.2, 0.8, 0.8])
+        cols = st.columns(widths)
         cols[0].write(str(row.get("raw_sheet", "")))
-        cols[1].write(str(row.get("raw_direction", "")))
-        edited.at[row_index, "source_stream"] = cols[2].selectbox(
-            "source_stream",
-            options=SOURCE_STREAM_OPTIONS,
-            index=_option_index(SOURCE_STREAM_OPTIONS, row.get("source_stream")),
-            key=_basic_mapping_widget_key("source_stream", version, row_index),
+        raw_direction = str(row.get("raw_direction", "") or "").strip()
+        raw_label = str(row.get("raw_movement_label", "") or "").strip()
+        raw_display = " · ".join(dict.fromkeys(value for value in (raw_direction, raw_label) if value))
+        cols[1].write(raw_display)
+        edited.at[row_index, "physical_approach"] = cols[2].selectbox(
+            "physical_approach",
+            options=PHYSICAL_APPROACH_OPTIONS,
+            index=_option_index(PHYSICAL_APPROACH_OPTIONS, row.get("physical_approach")),
+            key=_basic_mapping_widget_key("physical_approach", version, row_index),
             label_visibility="collapsed",
         )
-        edited.at[row_index, "movement_code"] = cols[3].selectbox(
-            "movement_code",
-            options=movement_code_options,
-            index=_option_index(movement_code_options, row.get("movement_code")),
-            key=_basic_mapping_widget_key("movement_code", version, row_index),
+        edited.at[row_index, "physical_movement"] = cols[3].selectbox(
+            "physical_movement",
+            options=PHYSICAL_MOVEMENT_OPTIONS,
+            index=_option_index(PHYSICAL_MOVEMENT_OPTIONS, row.get("physical_movement")),
+            key=_basic_mapping_widget_key("physical_movement", version, row_index),
             label_visibility="collapsed",
         )
-        edited.at[row_index, "raw_movement_label"] = cols[4].text_input(
-            "raw_movement_label",
-            value=str(row.get("raw_movement_label", "")),
-            key=_basic_mapping_widget_key("raw_movement_label", version, row_index),
-            label_visibility="collapsed",
-        )
-        edited.at[row_index, "include_in_report"] = cols[5].checkbox(
+        edited.at[row_index, "include_in_report"] = cols[4].checkbox(
             "include_in_report",
             value=bool(row.get("include_in_report", True)),
             key=_basic_mapping_widget_key("include_in_report", version, row_index),
             label_visibility="collapsed",
         )
-        edited.at[row_index, "include_in_peak"] = cols[6].checkbox(
+        edited.at[row_index, "include_in_peak"] = cols[5].checkbox(
             "include_in_peak",
             value=bool(row.get("include_in_peak", True)),
             key=_basic_mapping_widget_key("include_in_peak", version, row_index),
             label_visibility="collapsed",
         )
+        derived_code, status = _basic_mapping_row_status(
+            {
+                **row.to_dict(),
+                "physical_approach": edited.at[row_index, "physical_approach"],
+                "physical_movement": edited.at[row_index, "physical_movement"],
+                "include_in_report": edited.at[row_index, "include_in_report"],
+            },
+            movement_code_scheme,
+        )
+        edited.at[row_index, "derived_code"] = derived_code
+        edited.at[row_index, "status"] = status
+        cols[6].write(derived_code or "—")
+        cols[7].write(status)
     return edited
 
 
@@ -3830,14 +3982,19 @@ def _mapping_from_editor_widget_state(
     version = int(editor_key.rsplit("_", 1)[-1] or 0)
     if apply_basic_widgets and _basic_mapping_widget_state_exists(version, source_state):
         basic_visible = _mapping_editor_frame(base_mapping, "Basic", movement_code_scheme)
-        basic_edited = _apply_basic_mapping_widget_state(basic_visible, version, source_state)
+        basic_edited = _apply_basic_mapping_widget_state(
+            basic_visible,
+            version,
+            source_state,
+            movement_code_scheme,
+        )
         base_mapping = _merge_mapping_editor_result(base_mapping, basic_edited, movement_code_scheme)
 
     editor_state = source_state.get(editor_key)
     if not isinstance(editor_state, dict):
         return base_mapping
     visible = _mapping_editor_frame(base_mapping, view_mode, movement_code_scheme)
-    edited_visible = _apply_mapping_editor_widget_state(visible, editor_state)
+    edited_visible = _apply_mapping_editor_widget_state(visible, editor_state, movement_code_scheme)
     return _merge_mapping_editor_result(base_mapping, edited_visible, movement_code_scheme)
 
 
@@ -3852,7 +4009,30 @@ def _merge_mapping_editor_result(
         return base
     merged = base.reindex(range(len(edited))).copy()
     for column in edited.columns:
+        if column in _BASIC_MAPPING_UI_COLUMNS:
+            continue
         merged[column] = edited[column].values
+
+    if {"physical_approach", "physical_movement"}.issubset(edited.columns):
+        for row_index in range(len(edited)):
+            approach = edited.at[row_index, "physical_approach"]
+            movement = edited.at[row_index, "physical_movement"]
+            original_code = ""
+            if row_index < len(base) and "movement_code" in base.columns:
+                original_code = str(base.at[row_index, "movement_code"] or "").strip()
+            if str(approach or "").strip() and str(movement or "").strip():
+                try:
+                    merged.at[row_index, "movement_code"] = canonical_movement_code_from_physical(
+                        approach,
+                        movement,
+                        movement_code_scheme,
+                    )
+                except ValueError:
+                    pass
+            elif physical_mapping_from_canonical_code(original_code, movement_code_scheme) is not None:
+                # Clearing a previously representable Basic selection clears
+                # the canonical movement; an Advanced-only code is preserved.
+                merged.at[row_index, "movement_code"] = ""
     defaults = {
         "facility_type": "at_grade",
         "aggregation_method": "sum",
@@ -3863,7 +4043,15 @@ def _merge_mapping_editor_result(
     for column, default in defaults.items():
         if column in merged.columns:
             merged[column] = merged[column].fillna(default)
-    return _ordered_mapping_frame(normalize_mapping_for_scheme(merged, movement_code_scheme))
+    preserved_metadata = {
+        column: merged[column].copy()
+        for column in merged.columns
+        if column not in MAPPING_COLUMNS and column not in _BASIC_MAPPING_UI_COLUMNS
+    }
+    normalized = normalize_mapping_for_scheme(merged, movement_code_scheme)
+    for column, values in preserved_metadata.items():
+        normalized[column] = values.values
+    return _ordered_mapping_frame(normalized)
 
 
 def _interval_total_pcu(hourly_movement: pd.DataFrame, label: str) -> str:
@@ -5136,27 +5324,28 @@ def _run_streamlit_app() -> None:
                     default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
                 mapping_scheme = _current_mapping_scheme()
                 mapping_rows_committed = _mapping_rows_are_committed()
-                selected_scheme = st.selectbox(
-                    "ระบบรหัส Movement",
-                    options=MOVEMENT_SCHEMES,
-                    index=MOVEMENT_SCHEMES.index(mapping_scheme),
-                    format_func=_scheme_select_label,
-                    disabled=mapping_rows_committed,
-                    key="movement_code_scheme_selector",
-                    help="เลือกได้ก่อนโหลดหรือกรอก Mapping; ถ้ามี Mapping แล้วให้ล้างหรือโหลด Mapping ใหม่เพื่อไม่ตีความรหัสเดิมผิด",
-                )
-                if selected_scheme != mapping_scheme and not mapping_rows_committed:
-                    _set_current_mapping_scheme(selected_scheme)
-                    mapping_scheme = selected_scheme
-                    st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
-                if mapping_rows_committed:
-                    st.caption(f"Detected movement_code_scheme: {mapping_scheme}")
-                    st.caption(MAPPING_SCHEME_LOCK_CAPTION)
-                    if st.button("ล้าง Mapping เพื่อเปลี่ยนระบบรหัส", key="clear_mapping_for_scheme_change"):
-                        _clear_mapping_for_scheme_change()
-                        st.rerun()
-                else:
-                    st.caption(f"Selected movement_code_scheme: {mapping_scheme}")
+                with st.expander("Advanced mapping controls", expanded=False):
+                    selected_scheme = st.selectbox(
+                        "ระบบรหัส Movement",
+                        options=MOVEMENT_SCHEMES,
+                        index=MOVEMENT_SCHEMES.index(mapping_scheme),
+                        format_func=_scheme_select_label,
+                        disabled=mapping_rows_committed,
+                        key="movement_code_scheme_selector",
+                        help="เลือกได้ก่อนโหลดหรือกรอก Mapping; ถ้ามี Mapping แล้วให้ล้างหรือโหลด Mapping ใหม่เพื่อไม่ตีความรหัสเดิมผิด",
+                    )
+                    if selected_scheme != mapping_scheme and not mapping_rows_committed:
+                        _set_current_mapping_scheme(selected_scheme)
+                        mapping_scheme = selected_scheme
+                        st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
+                    if mapping_rows_committed:
+                        st.caption(f"Detected movement_code_scheme: {mapping_scheme}")
+                        st.caption(MAPPING_SCHEME_LOCK_CAPTION)
+                        if st.button("ล้าง Mapping เพื่อเปลี่ยนระบบรหัส", key="clear_mapping_for_scheme_change"):
+                            _clear_mapping_for_scheme_change()
+                            st.rerun()
+                    else:
+                        st.caption(f"Selected movement_code_scheme: {mapping_scheme}")
                 preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
                 preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
                 preset_bytes = serialize_mapping_preset(
@@ -5269,18 +5458,17 @@ def _run_streamlit_app() -> None:
                 mapping_editor_version = int(st.session_state.get("mapping_editor_version", 0) or 0)
                 mapping_view = str(st.session_state.get("mapping_editor_view_mode") or "Basic")
                 editor_key = _mapping_editor_key(mapping_view, mapping_editor_version)
-                basic_widget_source = _mapping_source() in {MAPPING_SOURCE_DEFAULT_PREVIEW, MAPPING_SOURCE_USER_EDITOR}
-                if basic_widget_source or mapping_view != "Basic":
+                if mapping_view in {"Basic", "Advanced"}:
                     default_mapping = _mapping_from_editor_widget_state(
                         default_mapping,
                         mapping_view,
                         mapping_scheme,
                         editor_key,
-                        apply_basic_widgets=basic_widget_source,
+                        apply_basic_widgets=True,
                     )
                 if _is_v2_scheme(mapping_scheme):
                     default_mapping = normalize_approach_movement_mapping(default_mapping)
-                if basic_widget_source and _basic_mapping_widget_state_exists(
+                if _basic_mapping_widget_state_exists(
                     mapping_editor_version,
                     st.session_state,
                 ):
@@ -5292,7 +5480,6 @@ def _run_streamlit_app() -> None:
                 process_block_reason = _single_file_processing_block_reason(mapping_scheme)
                 mapping_issues = _single_file_mapping_issues(detected_sheet_names, default_mapping, mapping_scheme)
                 mapping_counts = _mapping_workspace_counts(default_mapping, detected_sheet_names)
-                _render_mapping_scheme_status(mapping_scheme)
                 for issue in scheme_validation_issues:
                     _render_alert(issue, "warning")
                 _render_metric_strip(
@@ -5327,14 +5514,18 @@ def _run_streamlit_app() -> None:
                     key="mapping_editor_view_mode",
                     help="Basic แสดงคอลัมน์ที่ใช้บ่อย ส่วน Advanced แสดงคอลัมน์เสริมและเชิงเทคนิค",
                 )
+                if mapping_view != "Basic":
+                    _render_mapping_scheme_status(mapping_scheme)
                 editor_key = _mapping_editor_key(mapping_view, mapping_editor_version)
                 editor_frame = _mapping_editor_frame(default_mapping, mapping_view, mapping_scheme)
-                use_basic_controls = mapping_view == "Basic" and _mapping_source() in {
-                    MAPPING_SOURCE_DEFAULT_PREVIEW,
-                    MAPPING_SOURCE_USER_EDITOR,
-                }
+                use_basic_controls = mapping_view == "Basic"
                 if use_basic_controls:
-                    edited_frame = _render_basic_mapping_editor(editor_frame, movement_code_options, mapping_editor_version)
+                    edited_frame = _render_basic_mapping_editor(
+                        editor_frame,
+                        movement_code_options,
+                        mapping_editor_version,
+                        movement_code_scheme=mapping_scheme,
+                    )
                 else:
                     mapping = st.data_editor(
                         editor_frame,
@@ -5347,14 +5538,6 @@ def _run_streamlit_app() -> None:
                     edited_frame = _apply_mapping_editor_widget_state(edited_frame, st.session_state.get(editor_key))
                 editor_changed = _mapping_editor_changed(editor_frame, edited_frame)
                 mapping = _merge_mapping_editor_result(default_mapping, edited_frame, mapping_scheme)
-                if mapping_view == "Basic":
-                    basic_summary = _basic_mapping_derived_summary(mapping, mapping_scheme)
-                    st.table(basic_summary)
-                    invalid_basic_rows = basic_summary[
-                        basic_summary["Status"].astype(str).str.startswith("รหัสทิศทางไม่ถูกต้อง")
-                    ]
-                    if not invalid_basic_rows.empty:
-                        _render_alert("รหัสทิศทางไม่ถูกต้อง ใช้รูปแบบเช่น NE, NS, NW, NU", "warning")
                 if _mapping_rows_are_committed() or editor_changed:
                     st.session_state["mapping_table"] = mapping.to_dict("records")
                     st.session_state["tmc_mapping_table_from_session"] = False
@@ -5643,6 +5826,11 @@ def _run_streamlit_app() -> None:
                                     "file_name": Path(file.name).name,
                                     "detected_sheets": len(detected),
                                     "matched_sheets": apply_result.matched_sheet_count,
+                                    "source_coverage": (
+                                        f"{apply_result.matched_sheet_count}/{len(detected)}"
+                                        if detected
+                                        else "0/0"
+                                    ),
                                     "missing_detected_sheets": apply_result.missing_detected_sheet_count,
                                     "preset_rows_not_found": apply_result.extra_preset_row_count,
                                     "mapping_status": "พร้อม" if apply_result.missing_detected_sheet_count == 0 else "ต้องตรวจสอบ",
@@ -5655,6 +5843,7 @@ def _run_streamlit_app() -> None:
                                     "file_name": Path(file.name).name,
                                     "detected_sheets": 0,
                                     "matched_sheets": 0,
+                                    "source_coverage": "0/0",
                                     "missing_detected_sheets": 0,
                                     "preset_rows_not_found": 0,
                                     "mapping_status": "อ่านไฟล์ไม่สำเร็จ",
@@ -5665,21 +5854,27 @@ def _run_streamlit_app() -> None:
 
             if loaded_batch_preset and not preset_rows.empty:
                 with st.expander("ตัวอย่าง Mapping Preset", expanded=False):
+                    preset_basic = _mapping_editor_frame(preset_rows, "Basic", batch_mapping_scheme)
                     preview_columns = [
                         column
                         for column in [
                             "raw_sheet",
                             "raw_direction",
-                            "source_stream",
                             "raw_movement_label",
-                            "output_movement_code",
+                            "physical_approach",
+                            "physical_movement",
                             "include_in_report",
                             "include_in_peak",
-                            "aggregation_method",
+                            "derived_code",
+                            "status",
                         ]
-                        if column in preset_rows.columns
+                        if column in preset_basic.columns
                     ]
-                    st.dataframe(preset_rows[preview_columns].head(50) if preview_columns else preset_rows.head(50), width="stretch", hide_index=True)
+                    st.dataframe(
+                        preset_basic[preview_columns].head(50) if preview_columns else preset_basic.head(50),
+                        width="stretch",
+                        hide_index=True,
+                    )
 
         if active_tab == "Analyze":
             _render_section_header("Analyze Batch", "Configure shared analysis settings and run Analyze Batch.")

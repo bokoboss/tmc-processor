@@ -31,11 +31,13 @@ from tmc_processor.session import build_project_session, session_from_json, sess
 BASIC_MAPPING_COLUMNS = [
     "raw_sheet",
     "raw_direction",
-    "source_stream",
-    "movement_code",
     "raw_movement_label",
+    "physical_approach",
+    "physical_movement",
     "include_in_report",
     "include_in_peak",
+    "derived_code",
+    "status",
 ]
 
 

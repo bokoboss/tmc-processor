@@ -21,6 +21,7 @@ from .movement_scheme import (
     APPROACH_MOVEMENT_CODES,
     MOVEMENT_SCHEME_V1,
     MOVEMENT_SCHEME_V2,
+    build_approach_movement_code,
     derive_movement_leg_mapping_from_code,
     is_approach_movement_code,
     normalize_movement_code_scheme,
@@ -38,6 +39,30 @@ OPTIONAL_MAPPING_METADATA_COLUMNS = ["approach_direction", "movement_type"]
 _SOURCE_STREAM_DEFAULT = "mainline"
 _AGGREGATION_METHOD_DEFAULT = "sum"
 _FACILITY_TYPE_DEFAULT = "at_grade"
+
+PHYSICAL_APPROACH_OPTIONS = ["", "N", "E", "S", "W"]
+PHYSICAL_MOVEMENT_OPTIONS = ["", "Left", "Through", "Right", "U-turn"]
+
+_PHYSICAL_MOVEMENT_ALIASES = {
+    "l": "L",
+    "left": "L",
+    "left_turn": "L",
+    "t": "T",
+    "through": "T",
+    "straight": "T",
+    "r": "R",
+    "right": "R",
+    "right_turn": "R",
+    "u": "U",
+    "u_turn": "U",
+    "uturn": "U",
+}
+_PHYSICAL_MOVEMENT_LABELS = {
+    "L": "Left",
+    "T": "Through",
+    "R": "Right",
+    "U": "U-turn",
+}
 
 _SOURCE_STREAM_ALIASES = {
     "mainline": "mainline",
@@ -85,8 +110,46 @@ class MappingExcelLoadResult:
         return self.metadata.get("movement_code_scheme", MOVEMENT_SCHEME_V1)
 
 
+@dataclass(frozen=True)
+class PhysicalMapping:
+    """Lossless operator-facing representation of a supported movement."""
+
+    approach: str
+    movement: str
+
+
 def _choice_key(value: object) -> str:
     return str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _physical_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
+def normalize_physical_approach(value: object) -> str:
+    """Return a supported physical approach token or an empty value."""
+
+    approach = _physical_text(value).upper()
+    return approach if approach in PHYSICAL_APPROACH_OPTIONS else ""
+
+
+def normalize_physical_movement(value: object) -> str:
+    """Return the canonical movement token (L/T/R/U) or an empty value."""
+
+    return _PHYSICAL_MOVEMENT_ALIASES.get(_choice_key(_physical_text(value)), "")
+
+
+def physical_movement_label(value: object) -> str:
+    """Return the operator-facing label for a movement token or label."""
+
+    return _PHYSICAL_MOVEMENT_LABELS.get(normalize_physical_movement(value), "")
 
 
 def _canonical_choice(value: object, aliases: dict[str, str], options: list[str], default: str = "") -> str:
@@ -295,6 +358,92 @@ _FROM_TO_TURN_TYPE = {
     ("W", "S"): "R",
     ("W", "W"): "U",
 }
+
+_FROM_TO_PHYSICAL_CODE_BY_APPROACH_MOVEMENT = {
+    ("N", "L"): "NE",
+    ("N", "T"): "NS",
+    ("N", "R"): "NW",
+    ("N", "U"): "NU",
+    ("E", "L"): "ES",
+    ("E", "T"): "EW",
+    ("E", "R"): "EN",
+    ("E", "U"): "EU",
+    ("S", "L"): "SW",
+    ("S", "T"): "SN",
+    ("S", "R"): "SE",
+    ("S", "U"): "SU",
+    ("W", "L"): "WN",
+    ("W", "T"): "WE",
+    ("W", "R"): "WS",
+    ("W", "U"): "WU",
+}
+_PHYSICAL_MOVEMENT_BY_FROM_TO_CODE = {
+    code: movement for (approach, movement), code in _FROM_TO_PHYSICAL_CODE_BY_APPROACH_MOVEMENT.items()
+}
+
+
+def canonical_movement_code_from_physical(
+    approach: object,
+    movement: object,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> str:
+    """Derive a canonical movement code from operator physical semantics.
+
+    ``from_to`` uses the project's existing left-hand-traffic leg semantics;
+    ``approach_movement`` keeps the selected approach and movement tokens in
+    its existing v2 representation.
+    """
+
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    normalized_approach = normalize_physical_approach(approach)
+    normalized_movement = normalize_physical_movement(movement)
+    if not normalized_approach:
+        raise ValueError("Physical approach is required.")
+    if not normalized_movement:
+        raise ValueError("Physical movement is required.")
+    if scheme == MOVEMENT_SCHEME_V2:
+        return build_approach_movement_code(normalized_approach, normalized_movement)
+    return _FROM_TO_PHYSICAL_CODE_BY_APPROACH_MOVEMENT[(normalized_approach, normalized_movement)]
+
+
+def physical_mapping_from_canonical_code(
+    movement_code: object,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> PhysicalMapping | None:
+    """Hydrate Basic physical controls when a canonical code is lossless."""
+
+    scheme = normalize_movement_code_scheme(movement_code_scheme)
+    code = _physical_text(movement_code).upper()
+    if not code:
+        return None
+    if scheme == MOVEMENT_SCHEME_V2:
+        if not is_approach_movement_code(code):
+            return None
+        parsed = parse_approach_movement_code(code)
+        return PhysicalMapping(parsed.approach_direction, physical_movement_label(parsed.movement_type))
+    movement_token = _PHYSICAL_MOVEMENT_BY_FROM_TO_CODE.get(code)
+    if movement_token is None:
+        return None
+    return PhysicalMapping(code[0], physical_movement_label(movement_token))
+
+
+def canonical_code_from_physical(
+    approach: object,
+    movement: object,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> str:
+    """Short alias for :func:`canonical_movement_code_from_physical`."""
+
+    return canonical_movement_code_from_physical(approach, movement, movement_code_scheme)
+
+
+def physical_mapping_from_code(
+    movement_code: object,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> PhysicalMapping | None:
+    """Short alias for :func:`physical_mapping_from_canonical_code`."""
+
+    return physical_mapping_from_canonical_code(movement_code, movement_code_scheme)
 
 
 def normalize_from_to_movement_mapping(mapping: pd.DataFrame) -> pd.DataFrame:
