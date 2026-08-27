@@ -19,4 +19,4 @@ Project-specific instructions belong below this line and override the shared wor
 - Protect real-workbook regression behavior in `samples/raw/`, including the Kabin Buri, Bo Phloi, and Nong Prue workbooks; do not add those local files to public Git history.
 - Do not use destructive Git operations or discard existing user changes without explicit authorization.
 - Implementation work must include an evidence package covering scope, baseline, validation commands/results, changed files, and known limitations.
-- Keep the project-owned `.ai-workflow/` governance directory intact. Resolve any overlap with this official workflow as a documented follow-up, not as an automatic consolidation.
+- The official `engineering-development-workflow` installation is the active governance layer. Do not recreate the removed legacy `.ai-workflow/` directory.
