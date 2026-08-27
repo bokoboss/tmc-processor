@@ -12,10 +12,10 @@
 
 ## Current accepted baseline
 - Accepted branch: `main`
-- Accepted HEAD SHA: `b75efcff3f359267906137f70ce5b1d90eeb9cd3`
-- Accepted date: 2026-08-25
-- Current phase/milestone: UX-0 workflow/state contract merged; UX-1 is next.
-- Last accepted PR / CI run: Not recorded in the local repository metadata.
+- Accepted HEAD SHA: `512b5cc68031611f47366fe6d87ee514e5807925`
+- Accepted date: 2026-08-27
+- Current phase/milestone: UX-1 canonical five-stage navigation merged; UX-2 Mapping redesign is next.
+- Last accepted PR / CI run: PR #15; GitHub Actions CI #72 passed on Windows / Python 3.10 and 3.12.
 
 ## Technology stack
 - Languages: Python
@@ -57,7 +57,7 @@ python -m streamlit run app.py
 ## Architecture / invariants
 - `app.py` is the Streamlit application shell; the validated calculation/domain engine is under `src/tmc_processor/`.
 - `src/tmc_processor/workflow_state.py` is pure Python with no Streamlit dependency. `WorkflowState`, semantic revisions/fingerprints, readiness, and `transition_workflow` define the dependency chain and invalidation rules; `app.py` adapts these rules to legacy session-state keys.
-- The intended operator flow for Single and Batch is `Data -> Mapping -> Analyze -> Review -> Export`.
+- The canonical operator flow for Single and Batch is `Data -> Mapping -> Analyze -> Review -> Export`.
 - `from_to` remains the compatibility movement-code scheme; `approach_movement` is also supported with its documented export limitations.
 - Effective Peak decisions must remain consistent in every Peak-dependent export artifact.
 
@@ -107,7 +107,6 @@ Changes must not alter the following unless explicitly approved:
 - Batch review is still primarily file-by-file.
 - Excel Template Mode depends on Windows Microsoft Excel/Excel COM; Safe PNG/generated export is the fallback. Batch `approach_movement` Excel Template Mode remains blocked.
 - No dedicated browser automation, wheel/package qualification, or separate release-build gate is defined.
-- The older project-owned `.ai-workflow/` directory overlaps conceptually with this workflow and is intentionally preserved for a separate follow-up.
 
 ## Current next objective
-- UX-1: implement the canonical five-stage navigation shell, `Data -> Mapping -> Analyze -> Review -> Export`, for Single and Batch while preserving the UX-0 state/invalidation contract and validated engineering outputs.
+- UX-2: redesign Basic Mapping around actual detected source sheet names and operator-assigned physical approach/movement semantics, deriving canonical internal movement fields where deterministic while preserving legacy Mapping Excel/Preset compatibility and the UX-0 invalidation contract.
