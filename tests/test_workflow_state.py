@@ -60,21 +60,21 @@ def _single_ready_state() -> dict[str, object]:
 def test_single_processed_effective_peaks_export_ready_not_completed() -> None:
     state = _single_ready_state()
 
-    assert state["steps"][3] == "completed"
+    assert state["steps"][2] == "completed"
+    assert state["steps"][3] == "ready"
     assert state["steps"][4] == "ready"
-    assert state["steps"][5] == "ready"
-    assert ("ส่งออก", "พร้อมสร้างรายงาน", "success") in state["summary"]
+    assert ("Export", "Ready to generate", "neutral") in state["summary"]
 
 
 def test_active_tab_state_persists_after_export_mode_change() -> None:
     _reset_state()
     st.session_state["tmc_output"] = {"workbook_bytes": b"x"}
-    app.set_active_tab("ส่งออก")
+    app.set_active_tab("Export")
 
     changed = app.apply_single_export_mode_change(app.EXCEL_TEMPLATE_EXPORT_MODE, app.SAFE_PNG_EXPORT_MODE)
 
     assert changed is True
-    assert app.get_active_tab() == "ส่งออก"
+    assert app.get_active_tab() == "Export"
     assert st.session_state["report_export_mode"] == app.EXCEL_TEMPLATE_EXPORT_MODE
     assert "tmc_output" not in st.session_state
 
@@ -82,38 +82,39 @@ def test_active_tab_state_persists_after_export_mode_change() -> None:
 def test_process_action_can_set_active_tab_to_peak_review() -> None:
     _reset_state()
 
-    app.set_active_tab("ตรวจ Peak")
+    app.set_active_tab("Review")
 
-    assert app.get_active_tab() == "ตรวจ Peak"
+    assert app.get_active_tab() == "Review"
 
 
 def test_export_action_keeps_active_tab_as_export() -> None:
     _reset_state()
 
-    app.set_active_tab("ส่งออก")
+    app.set_active_tab("Export")
 
-    assert app.get_active_tab() == "ส่งออก"
+    assert app.get_active_tab() == "Export"
 
 
 def test_invalid_active_tab_falls_back_to_default_setup() -> None:
     _reset_state()
     st.session_state["active_workflow_tab"] = "ไม่ใช่แท็บ"
 
-    assert app.get_active_tab() == "ตั้งค่า"
-    assert st.session_state["active_workflow_tab"] == "ตั้งค่า"
+    assert app.get_active_tab() == "Data"
+    assert st.session_state["active_workflow_tab"] == "Data"
 
 
 def test_work_mode_switch_does_not_reset_valid_active_tab() -> None:
     _reset_state()
-    app.set_active_tab("ส่งออก")
+    app.set_active_tab("Export")
 
     st.session_state["work_mode"] = "ประมวลผลหลายไฟล์"
 
-    assert app.get_active_tab() == "ส่งออก"
+    assert app.get_active_tab() == "Export"
 
 
 def test_workflow_tab_choices_match_required_labels() -> None:
-    assert app.workflow_tab_choices() == ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
+    assert app.workflow_tab_choices() == ["Data", "Mapping", "Analyze", "Review", "Export"]
+    assert app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE) == app.workflow_stages_for_mode(app.WORKFLOW_BATCH_MODE)
 
 
 def test_single_generated_report_marks_export_completed() -> None:
@@ -124,8 +125,8 @@ def test_single_generated_report_marks_export_completed() -> None:
 
     state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
 
-    assert state["steps"][5] == "completed"
-    assert ("ส่งออก", "สร้างแล้ว", "success") in state["summary"]
+    assert state["steps"][4] == "completed"
+    assert ("Export", "Complete", "success") in state["summary"]
 
 
 def test_peak_change_clears_export_and_returns_workflow_to_export_ready() -> None:
@@ -138,15 +139,15 @@ def test_peak_change_clears_export_and_returns_workflow_to_export_ready() -> Non
 
     state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
 
-    assert state["steps"][5] == "ready"
-    assert ("ส่งออก", "พร้อมสร้างรายงาน", "success") in state["summary"]
+    assert state["steps"][4] == "ready"
+    assert ("Export", "Ready to generate", "neutral") in state["summary"]
 
 
 def test_single_processed_result_peak_summary_uses_suggested_not_no_results() -> None:
     state = _single_ready_state()
 
-    peak_chip = next(item for item in state["summary"] if item[0] == "Peak")
-    assert peak_chip == ("Peak", "ใช้ค่าแนะนำ", "success")
+    review_chip = next(item for item in state["summary"] if item[0] == "Review")
+    assert review_chip == ("Review", "Ready", "success")
 
 
 def test_single_confirmed_peak_summary_uses_release_status_wording() -> None:
@@ -161,8 +162,8 @@ def test_single_confirmed_peak_summary_uses_release_status_wording() -> None:
 
     state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
 
-    peak_chip = next(item for item in state["summary"] if item[0] == "Peak")
-    assert peak_chip == ("Peak", "กำหนดแล้ว", "success")
+    review_chip = next(item for item in state["summary"] if item[0] == "Review")
+    assert review_chip == ("Review", "Ready", "success")
 
 
 def test_batch_analyzed_peaks_export_ready_not_completed() -> None:
@@ -185,21 +186,21 @@ def test_batch_analyzed_peaks_export_ready_not_completed() -> None:
 
     state = app.derive_batch_workflow_state(uploaded_count=1, batch_mapping_ready=True, batch_signature=("same",))
 
-    assert state["steps"][3] == "completed"
+    assert state["steps"][2] == "completed"
+    assert state["steps"][3] == "ready"
     assert state["steps"][4] == "ready"
-    assert state["steps"][5] == "ready"
-    assert ("ส่งออก", "พร้อมสร้าง Batch ZIP", "success") in state["summary"]
+    assert ("Export", "Ready to generate", "neutral") in state["summary"]
 
 
 def test_batch_export_mode_change_does_not_reset_active_tab() -> None:
     _set_batch_analyzed_state()
     st.session_state["tmc_batch_export_result"] = BatchResult(package_bytes=b"zip")
-    app.set_active_tab("ส่งออก")
+    app.set_active_tab("Export")
 
     changed = app.apply_batch_export_mode_change(app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, app.BATCH_SAFE_PNG_EXPORT_LABEL)
 
     assert changed is True
-    assert app.get_active_tab() == "ส่งออก"
+    assert app.get_active_tab() == "Export"
     assert st.session_state["tmc_batch_export_mode"] == app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL
     assert not st.session_state.get("tmc_batch_stale", False)
     assert st.session_state["tmc_batch_export_stale"] is True
@@ -217,9 +218,9 @@ def test_batch_analyzed_change_export_mode_keeps_analysis_valid_and_export_stale
     assert not st.session_state.get("tmc_batch_stale", False)
     assert st.session_state["tmc_batch_analysis_result"] is not None
     assert st.session_state["tmc_batch_export_stale"] is True
-    assert ("Batch Analysis", "วิเคราะห์แล้ว", "success") in state["summary"]
-    assert ("Peak", "กำหนดแล้ว 1/1 ไฟล์", "success") in state["summary"]
-    assert ("ส่งออก", "ต้องสร้าง ZIP ใหม่", "warning") in state["summary"]
+    assert ("Analyze", "Complete", "success") in state["summary"]
+    assert ("Review", "Ready", "success") in state["summary"]
+    assert ("Export", "Regenerate required", "warning") in state["summary"]
 
 
 def test_batch_analyzed_change_output_stem_keeps_analysis_valid_and_export_stale() -> None:
@@ -292,9 +293,9 @@ def test_single_file_export_mode_change_keeps_processed_and_peaks_valid() -> Non
 def test_batch_analyze_action_can_set_active_tab_to_peak_review() -> None:
     _reset_state()
 
-    app.set_active_tab("ตรวจ Peak")
+    app.set_active_tab("Review")
 
-    assert app.get_active_tab() == "ตรวจ Peak"
+    assert app.get_active_tab() == "Review"
 
 
 def test_batch_zip_marks_export_completed() -> None:
@@ -318,8 +319,8 @@ def test_batch_zip_marks_export_completed() -> None:
 
     state = app.derive_batch_workflow_state(uploaded_count=1, batch_mapping_ready=True, batch_signature=("same",))
 
-    assert state["steps"][5] == "completed"
-    assert ("ส่งออก", "สร้าง Batch ZIP แล้ว", "success") in state["summary"]
+    assert state["steps"][4] == "completed"
+    assert ("Export", "Complete", "success") in state["summary"]
 
 
 def test_stale_batch_process_warning_and_export_not_ready() -> None:
@@ -342,6 +343,6 @@ def test_stale_batch_process_warning_and_export_not_ready() -> None:
 
     state = app.derive_batch_workflow_state(uploaded_count=1, batch_mapping_ready=True, batch_signature=("new",))
 
-    assert state["steps"][3] == "warning"
-    assert state["steps"][5] == "pending"
-    assert ("ส่งออก", "ยังไม่พร้อม", "neutral") in state["summary"]
+    assert state["steps"][2] == "warning"
+    assert state["steps"][4] == "pending"
+    assert ("Export", "Not ready", "neutral") in state["summary"]

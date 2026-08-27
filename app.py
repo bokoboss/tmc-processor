@@ -161,8 +161,16 @@ V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE = (
 )
 BATCH_EXCEL_TEMPLATE_EXPORT_LABEL = EXCEL_TEMPLATE_EXPORT_MODE
 BATCH_SAFE_PNG_EXPORT_LABEL = "Safe PNG Export Mode — โหมดสำรอง"
-WORKFLOW_TAB_LABELS = ["ตั้งค่า", "กำหนดทิศทาง", "ตรวจ Peak", "ส่งออก", "ตรวจสอบข้อมูล"]
-DEFAULT_WORKFLOW_TAB = "ตั้งค่า"
+CANONICAL_WORKFLOW_STAGES = ("Data", "Mapping", "Analyze", "Review", "Export")
+WORKFLOW_TAB_LABELS = list(CANONICAL_WORKFLOW_STAGES)
+DEFAULT_WORKFLOW_TAB = CANONICAL_WORKFLOW_STAGES[0]
+LEGACY_WORKFLOW_TAB_ALIASES = {
+    "\u0e15\u0e31\u0e49\u0e07\u0e04\u0e48\u0e32": "Data",
+    "\u0e01\u0e33\u0e2b\u0e19\u0e14\u0e17\u0e34\u0e28\u0e17\u0e32\u0e07": "Mapping",
+    "\u0e15\u0e23\u0e27\u0e08 Peak": "Review",
+    "\u0e2a\u0e48\u0e07\u0e2d\u0e2d\u0e01": "Export",
+    "\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25": "Review",
+}
 SETUP_STATE_KEY = "tmc_setup_state"
 SETUP_FIELD_WIDGET_KEYS = {
     "project_name": "project_name_input",
@@ -195,10 +203,28 @@ SETUP_TIME_FIELDS = {
     "pm_peak_window_start",
     "pm_peak_window_end",
 }
+ANALYZE_SETUP_FIELDS = (
+    "survey_period",
+    "peak_mode",
+    "am_peak_window_start",
+    "am_peak_window_end",
+    "pm_peak_window_start",
+    "pm_peak_window_end",
+)
 
 WORKFLOW_STATE_KEY = "tmc_workflow_state"
 WORKFLOW_SINGLE_MODE = "single"
 WORKFLOW_BATCH_MODE = "batch"
+SINGLE_SOURCE_UPLOAD_STATE_KEY = "tmc_single_source_upload"
+BATCH_SOURCE_UPLOAD_STATE_KEY = "tmc_batch_source_uploads"
+BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY = "tmc_batch_mapping_preset_upload"
+SINGLE_SOURCE_UPLOAD_WIDGET_KEY = "raw_tmc_upload"
+BATCH_SOURCE_UPLOAD_WIDGET_KEY = "batch_raw_tmc_uploads"
+BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY = "batch_mapping_preset_upload"
+SINGLE_SOURCE_CLEAR_REQUEST_KEY = "tmc_single_source_clear_requested"
+BATCH_SOURCE_CLEAR_REQUEST_KEY = "tmc_batch_source_clear_requested"
+BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY = "tmc_batch_mapping_preset_clear_requested"
+UPLOAD_WIDGET_REVISION_SUFFIX = "__revision"
 WORKFLOW_EXPORT_METADATA_FIELDS = (
     "project_name",
     "tmc_id",
@@ -440,6 +466,29 @@ def _hydrate_setup_widgets_from_state(state: MutableMapping[str, object] | None 
             state[widget_key] = setup_state[field]
 
 
+def _rehydrate_analyze_setup_widgets(state: MutableMapping[str, object] | None = None) -> dict[str, object]:
+    """Restore Analyze-owned widget keys from canonical setup state before rendering."""
+
+    state = _setup_state_mapping(state)
+    setup_state = _normalized_setup_state(
+        state.get(SETUP_STATE_KEY) if isinstance(state.get(SETUP_STATE_KEY), dict) else None
+    )
+    state[SETUP_STATE_KEY] = setup_state
+    for field in ANALYZE_SETUP_FIELDS:
+        widget_key = SETUP_FIELD_WIDGET_KEYS[field]
+        if widget_key not in state:
+            state[widget_key] = setup_state[field]
+    return dict(setup_state)
+
+
+def _discard_nonrendered_analyze_setup_widgets(state: MutableMapping[str, object] | None = None) -> None:
+    """Prevent pruned Analyze widgets from overwriting canonical setup state."""
+
+    state = _setup_state_mapping(state)
+    for field in ANALYZE_SETUP_FIELDS:
+        state.pop(SETUP_FIELD_WIDGET_KEYS[field], None)
+
+
 def initialize_setup_state_once(
     uploaded_filename_default: str = "",
     state: MutableMapping[str, object] | None = None,
@@ -570,8 +619,236 @@ def _render_download_button(label: str, data: bytes | None, file_name: str, mime
     )
 
 
+class _StoredUpload:
+    """Small upload adapter used when a stage-specific uploader is not rendered."""
+
+    def __init__(self, name: str, data: bytes) -> None:
+        self.name = str(name)
+        self._data = bytes(data)
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+def _upload_record(upload: object) -> dict[str, object]:
+    data = bytes(upload.getvalue())
+    name = str(getattr(upload, "name", "uploaded_file.xlsx"))
+    return {
+        "name": name,
+        "data": data,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _upload_record_identity(record: object) -> tuple[str, str]:
+    if not isinstance(record, dict):
+        return "", ""
+    return str(record.get("name") or ""), str(record.get("sha256") or "")
+
+
+def _stored_upload(record: object) -> _StoredUpload | None:
+    if not isinstance(record, dict):
+        return None
+    name = record.get("name")
+    data = record.get("data")
+    if not name or not isinstance(data, (bytes, bytearray, memoryview)):
+        return None
+    return _StoredUpload(str(name), bytes(data))
+
+
+def _remember_upload(upload: object | None, state_key: str) -> _StoredUpload | None:
+    if upload is not None:
+        record = _upload_record(upload)
+        previous = st.session_state.get(state_key)
+        if _upload_record_identity(previous) != _upload_record_identity(record):
+            st.session_state[state_key] = record
+        return _stored_upload(record)
+    return _stored_upload(st.session_state.get(state_key))
+
+
+def _remember_batch_uploads(uploads: list[object] | tuple[object, ...] | None) -> list[_StoredUpload]:
+    if uploads:
+        records = [_upload_record(upload) for upload in uploads]
+        previous = st.session_state.get(BATCH_SOURCE_UPLOAD_STATE_KEY)
+        previous_signature = tuple(_upload_record_identity(record) for record in previous) if isinstance(previous, list) else ()
+        current_signature = tuple(_upload_record_identity(record) for record in records)
+        if previous_signature != current_signature:
+            st.session_state[BATCH_SOURCE_UPLOAD_STATE_KEY] = records
+        return [upload for record in records if (upload := _stored_upload(record)) is not None]
+
+    records = st.session_state.get(BATCH_SOURCE_UPLOAD_STATE_KEY)
+    if not isinstance(records, list):
+        return []
+    return [upload for record in records if (upload := _stored_upload(record)) is not None]
+
+
+def _upload_widget_key(base_key: str) -> str:
+    revision = int(st.session_state.get(f"{base_key}{UPLOAD_WIDGET_REVISION_SUFFIX}", 0) or 0)
+    return base_key if revision <= 0 else f"{base_key}_{revision}"
+
+
+def _bump_upload_widget_revision(base_key: str) -> None:
+    current_key = _upload_widget_key(base_key)
+    st.session_state.pop(current_key, None)
+    revision_key = f"{base_key}{UPLOAD_WIDGET_REVISION_SUFFIX}"
+    st.session_state[revision_key] = int(st.session_state.get(revision_key, 0) or 0) + 1
+
+
+def _request_upload_clear(*, state_key: str, request_key: str) -> None:
+    """Remove the canonical upload and mark its widget for reset on rerun."""
+
+    st.session_state.pop(state_key, None)
+    st.session_state[request_key] = True
+
+
+def _consume_upload_clear_request(*, state_key: str, widget_key: str, request_key: str) -> bool:
+    """Reset an uploader before it is rendered after an explicit clear."""
+
+    if not st.session_state.pop(request_key, False):
+        return False
+    st.session_state.pop(state_key, None)
+    st.session_state.pop(widget_key, None)
+    st.session_state.pop(_upload_widget_key(widget_key), None)
+    return True
+
+
+def _clear_single_source_upload() -> None:
+    _bump_upload_widget_revision(SINGLE_SOURCE_UPLOAD_WIDGET_KEY)
+    _request_upload_clear(
+        state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
+        request_key=SINGLE_SOURCE_CLEAR_REQUEST_KEY,
+    )
+    st.session_state.pop("tmc_uploaded_identity", None)
+    st.session_state.pop("tmc_uploaded_source_fingerprint", None)
+    st.session_state.pop("tmc_output", None)
+    st.session_state["tmc_pce_results_stale"] = True
+    _clear_single_review_state()
+
+
+def _clear_batch_source_uploads() -> None:
+    _bump_upload_widget_revision(BATCH_SOURCE_UPLOAD_WIDGET_KEY)
+    _request_upload_clear(
+        state_key=BATCH_SOURCE_UPLOAD_STATE_KEY,
+        request_key=BATCH_SOURCE_CLEAR_REQUEST_KEY,
+    )
+    st.session_state["tmc_batch_stale"] = True
+    st.session_state["tmc_batch_export_stale"] = True
+    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    st.session_state.pop("tmc_batch_export_result", None)
+
+
+def _clear_batch_mapping_preset_upload() -> None:
+    _bump_upload_widget_revision(BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY)
+    _request_upload_clear(
+        state_key=BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY,
+        request_key=BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY,
+    )
+    st.session_state["tmc_batch_stale"] = True
+    st.session_state["tmc_batch_export_stale"] = True
+    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    st.session_state.pop("tmc_batch_preset_name", None)
+    st.session_state.pop("tmc_batch_export_result", None)
+
+
+def _render_primary_workflow_inputs(
+    *,
+    is_single_file_mode: bool,
+    active_stage: str,
+) -> tuple[_StoredUpload | None, list[_StoredUpload], _StoredUpload | None]:
+    """Render stage-owned source controls and retain inputs across stage navigation."""
+
+    if active_stage == "Data" and is_single_file_mode:
+        _consume_upload_clear_request(
+            state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
+            widget_key=SINGLE_SOURCE_UPLOAD_WIDGET_KEY,
+            request_key=SINGLE_SOURCE_CLEAR_REQUEST_KEY,
+        )
+    elif active_stage == "Data":
+        _consume_upload_clear_request(
+            state_key=BATCH_SOURCE_UPLOAD_STATE_KEY,
+            widget_key=BATCH_SOURCE_UPLOAD_WIDGET_KEY,
+            request_key=BATCH_SOURCE_CLEAR_REQUEST_KEY,
+        )
+    elif active_stage == "Mapping" and not is_single_file_mode:
+        _consume_upload_clear_request(
+            state_key=BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY,
+            widget_key=BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY,
+            request_key=BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY,
+        )
+
+    uploaded_file = _stored_upload(st.session_state.get(SINGLE_SOURCE_UPLOAD_STATE_KEY))
+    batch_uploads = _remember_batch_uploads(None)
+    batch_preset_upload = _stored_upload(st.session_state.get(BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY))
+
+    if active_stage == "Data":
+        with st.container(border=True):
+            if is_single_file_mode:
+                _render_section_header("Source workbook", "Upload the TMC workbook that starts the Single workflow.")
+                current_upload = st.file_uploader(
+                    "Upload TMC Excel workbook",
+                    type=["xlsx", "xlsm", "xls"],
+                    key=_upload_widget_key(SINGLE_SOURCE_UPLOAD_WIDGET_KEY),
+                )
+                uploaded_file = _remember_upload(current_upload, SINGLE_SOURCE_UPLOAD_STATE_KEY)
+                if uploaded_file is not None:
+                    st.caption(f"Loaded source: {uploaded_file.name}")
+                if st.button(
+                    "Clear source",
+                    disabled=uploaded_file is None,
+                    key="clear_single_source_upload",
+                ):
+                    _clear_single_source_upload()
+                    st.rerun()
+            else:
+                _render_section_header("Batch source workbooks", "Upload all workbooks for the Batch workflow.")
+                current_uploads = st.file_uploader(
+                    "Upload multiple TMC Excel workbooks",
+                    type=["xlsx", "xlsm", "xls"],
+                    accept_multiple_files=True,
+                    key=_upload_widget_key(BATCH_SOURCE_UPLOAD_WIDGET_KEY),
+                )
+                batch_uploads = _remember_batch_uploads(current_uploads)
+                if batch_uploads:
+                    st.caption(f"Loaded sources: {len(batch_uploads):,} workbook(s)")
+                if st.button(
+                    "Clear Batch sources",
+                    disabled=not batch_uploads,
+                    key="clear_batch_source_uploads",
+                ):
+                    _clear_batch_source_uploads()
+                    st.rerun()
+    elif not is_single_file_mode and active_stage == "Mapping":
+        with st.container(border=True):
+            _render_section_header("Mapping Preset", "Load the shared movement mapping for every Batch workbook.")
+            current_preset = st.file_uploader(
+                "Open Mapping Preset for all files",
+                type=["json"],
+                key=_upload_widget_key(BATCH_MAPPING_PRESET_UPLOAD_WIDGET_KEY),
+                help="Batch uses one Mapping Preset for all uploaded workbooks.",
+            )
+            batch_preset_upload = _remember_upload(current_preset, BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY)
+            if batch_preset_upload is not None:
+                st.caption(f"Loaded preset: {batch_preset_upload.name}")
+            if st.button(
+                "Clear Mapping Preset",
+                disabled=batch_preset_upload is None,
+                key="clear_batch_mapping_preset_upload",
+            ):
+                _clear_batch_mapping_preset_upload()
+                st.rerun()
+
+    return uploaded_file, batch_uploads, batch_preset_upload
+
+
+def _canonical_workflow_stage(value: object) -> str:
+    candidate = str(value or "")
+    if candidate in CANONICAL_WORKFLOW_STAGES:
+        return candidate
+    return LEGACY_WORKFLOW_TAB_ALIASES.get(candidate, DEFAULT_WORKFLOW_TAB)
+
+
 def set_active_tab(tab_name: str) -> str:
-    active = tab_name if tab_name in WORKFLOW_TAB_LABELS else DEFAULT_WORKFLOW_TAB
+    active = _canonical_workflow_stage(tab_name)
     st.session_state["active_workflow_tab"] = active
     return active
 
@@ -580,8 +857,18 @@ def get_active_tab() -> str:
     return set_active_tab(str(st.session_state.get("active_workflow_tab") or DEFAULT_WORKFLOW_TAB))
 
 
+def workflow_stages_for_mode(mode: str) -> list[str]:
+    if mode not in {WORKFLOW_SINGLE_MODE, WORKFLOW_BATCH_MODE}:
+        raise ValueError(f"Unsupported workflow mode: {mode}")
+    return list(CANONICAL_WORKFLOW_STAGES)
+
+
+def workflow_stage_choices() -> list[str]:
+    return list(CANONICAL_WORKFLOW_STAGES)
+
+
 def workflow_tab_choices() -> list[str]:
-    return list(WORKFLOW_TAB_LABELS)
+    return workflow_stage_choices()
 
 
 def _workflow_tab_button_key(index: int) -> str:
@@ -620,7 +907,7 @@ def render_workflow_navigation() -> str:
 
 
 def apply_single_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
-    set_active_tab("ส่งออก")
+    set_active_tab("Export")
     if selected_mode == previous_mode:
         return False
     st.session_state["report_export_mode"] = selected_mode
@@ -851,7 +1138,7 @@ def _record_workflow_state(mode: str, revisions: WorkflowRevisions, readiness: W
 
 
 def apply_batch_export_mode_change(selected_mode: str, previous_mode: str | None) -> bool:
-    set_active_tab("ส่งออก")
+    set_active_tab("Export")
     if selected_mode == previous_mode:
         return False
     st.session_state["tmc_batch_export_mode"] = selected_mode
@@ -2367,14 +2654,14 @@ def _render_top_status_bar(
         mapping_rows = len(st.session_state.get("mapping_table") or [])
         mapping_ready = workflow_state.readiness.mapping if workflow_state is not None else bool(mapping_rows)
         source_value = "โหลดแล้ว" if source_ready else "ยังไม่มีไฟล์สำรวจ"
-        source_note = "พร้อมกำหนด Mapping" if source_ready else "อัปโหลดจากแถบด้านซ้าย"
+        source_note = "พร้อมกำหนด Mapping" if source_ready else "เปิด Data เพื่ออัปโหลด"
         mapping_value = "พร้อมใช้งาน" if mapping_ready else "ยังไม่พร้อม"
         mapping_note = f"{current_scheme} · {mapping_rows:,} แถว" if mapping_rows else f"{current_scheme} · รอกำหนดทิศทาง"
     else:
         source_ready = workflow_state.readiness.source if workflow_state is not None else bool(uploaded_count)
         mapping_ready = workflow_state.readiness.mapping if workflow_state is not None else batch_mapping_ready
         source_value = f"{uploaded_count:,} ไฟล์" if source_ready else "ยังไม่มีไฟล์ Batch"
-        source_note = "โหลดไฟล์ Batch แล้ว" if source_ready else "อัปโหลดจากแถบด้านซ้าย"
+        source_note = "โหลดไฟล์ Batch แล้ว" if source_ready else "เปิด Data เพื่ออัปโหลด"
         mapping_value = "พร้อมใช้งาน" if mapping_ready else "ยังไม่พร้อม"
         mapping_note = "Mapping Preset ใช้ร่วมกันทุกไฟล์" if batch_mapping_ready else "เปิด Mapping Preset"
 
@@ -2405,17 +2692,17 @@ def _workflow_step_statuses(*, is_single_file_mode: bool, uploaded: bool, batch_
     batch_analysis_ready = st.session_state.get("tmc_batch_analysis_result") is not None
     batch_export_ready = st.session_state.get("tmc_batch_export_result") is not None
     if is_single_file_mode:
-        done = [uploaded, uploaded, mapping_ready, processed, processed, output_ready]
+        done = [uploaded, mapping_ready, processed, processed, output_ready]
     else:
         batch_files_ready = bool(st.session_state.get("tmc_batch_file_metadata_table"))
         preset_ready = batch_mapping_ready
-        done = [uploaded, batch_files_ready, preset_ready, batch_analysis_ready, batch_analysis_ready, batch_export_ready]
+        done = [uploaded, preset_ready, batch_analysis_ready, batch_analysis_ready, batch_export_ready]
     active_index = next((index for index, value in enumerate(done) if not value), len(done) - 1)
     return ["done" if value else ("active" if index == active_index else "pending") for index, value in enumerate(done)]
 
 
 def _render_workflow_stepper(*, is_single_file_mode: bool, uploaded: bool, batch_mapping_ready: bool = False) -> None:
-    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "Peak Review", "Export"]
+    labels = list(CANONICAL_WORKFLOW_STAGES)
     state_text = {"done": "พร้อม", "active": "ขั้นตอนปัจจุบัน", "pending": "รอดำเนินการ"}
     statuses = _workflow_step_statuses(
         is_single_file_mode=is_single_file_mode,
@@ -2598,22 +2885,47 @@ def _readiness_payload(readiness: WorkflowReadiness) -> dict[str, bool]:
     }
 
 
+def _canonical_workflow_summary(
+    readiness: WorkflowReadiness,
+    *,
+    analysis_stale: bool = False,
+    export_stale: bool = False,
+) -> list[tuple[str, str, str]]:
+    export_ready_to_generate = readiness.analysis and readiness.review
+    return [
+        ("Data", "Ready" if readiness.source else "Not ready", "success" if readiness.source else "neutral"),
+        ("Mapping", "Ready" if readiness.mapping else "Not ready", "success" if readiness.mapping else "neutral"),
+        (
+            "Analyze",
+            "Re-analyze required" if analysis_stale else ("Complete" if readiness.analysis else "Not ready"),
+            "warning" if analysis_stale else ("success" if readiness.analysis else "neutral"),
+        ),
+        ("Review", "Ready" if readiness.review else ("Needs review" if readiness.analysis else "Not ready"), "success" if readiness.review else ("warning" if readiness.analysis else "neutral")),
+        (
+            "Export",
+            "Regenerate required"
+            if export_stale and export_ready_to_generate
+            else ("Complete" if readiness.export else "Ready to generate" if export_ready_to_generate else "Not ready"),
+            "warning" if export_stale else ("success" if readiness.export else "neutral"),
+        ),
+    ]
+
+
 def _single_shell_from_authoritative_readiness(
     readiness: WorkflowReadiness,
     legacy_state: dict[str, object],
 ) -> dict[str, object]:
     """Render engineering stages from the stored UX-0 state, not legacy adapters."""
 
-    steps = ["pending"] * 6
+    steps = ["pending"] * 5
     steps[0] = "completed" if readiness.source else "active"
-    steps[1] = list(legacy_state["steps"])[1]
-    steps[2] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
-    steps[3] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
-    steps[4] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
-    steps[5] = "completed" if readiness.export else ("active" if readiness.review else "pending")
+    steps[1] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
+    steps[2] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
+    steps[3] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
+    steps[4] = "completed" if readiness.export else ("active" if readiness.review else "pending")
 
     if not readiness.source:
-        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ใน Data"
     elif not readiness.mapping:
         next_action = "ตรวจสอบ Mapping ก่อนประมวลผล"
     elif not readiness.analysis:
@@ -2625,24 +2937,12 @@ def _single_shell_from_authoritative_readiness(
     else:
         next_action = "สร้างรายงานแล้ว พร้อมดาวน์โหลดไฟล์"
 
-    legacy_summary = list(legacy_state["summary"])
-    summary = [
-        (legacy_summary[0][0], "โหลดแล้ว" if readiness.source else "ยังไม่ได้โหลด", "success" if readiness.source else "neutral"),
-        legacy_summary[1],
-        (legacy_summary[2][0], "พร้อมใช้งาน" if readiness.mapping else "ยังไม่พร้อม", "success" if readiness.mapping else "neutral"),
-        (legacy_summary[3][0], "เสร็จแล้ว" if readiness.analysis else "ยังไม่ได้ประมวลผล", "success" if readiness.analysis else "neutral"),
-        (
-            legacy_summary[4][0],
-            "กำหนดแล้ว" if readiness.review else ("รอตรวจ Peak" if readiness.analysis else "ยังไม่มีผลประมวลผล"),
-            "success" if readiness.review else ("warning" if readiness.analysis else "neutral"),
-        ),
-        (
-            legacy_summary[5][0],
-            "สร้างแล้ว" if readiness.export else ("รอสร้างรายงาน" if readiness.review else "ยังไม่พร้อม"),
-            "success" if readiness.export else "neutral",
-        ),
-    ]
-    return {"steps": steps, "summary": summary, "next_action": next_action, "readiness": _readiness_payload(readiness)}
+    return {
+        "steps": steps,
+        "summary": _canonical_workflow_summary(readiness),
+        "next_action": next_action,
+        "readiness": _readiness_payload(readiness),
+    }
 
 
 def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | None, excel_com_status: ExcelComStatus) -> dict[str, object]:
@@ -2658,34 +2958,33 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
     mapping_needs_review = bool(uploaded_name and (not mapping_rows or int(preset_info.get("missing", 0) or 0) > 0))
 
-    steps = ["pending"] * 6
+    steps = ["pending"] * 5
     if uploaded_name:
         steps[0] = "completed"
-        steps[1] = "completed"
     if mapping_rows and not mapping_needs_review and not scheme_issue_count:
-        steps[2] = "completed"
+        steps[1] = "completed"
     elif mapping_needs_review or scheme_issue_count:
-        steps[2] = "warning"
+        steps[1] = "warning"
     if processed:
-        steps[3] = "completed"
+        steps[2] = "completed"
     elif st.session_state.get("tmc_pce_results_stale"):
-        steps[3] = "warning"
+        steps[2] = "warning"
     if peaks_ready:
-        steps[4] = "ready"
+        steps[3] = "ready"
     elif processed:
-        steps[4] = "warning"
+        steps[3] = "warning"
     if output_ready:
-        steps[5] = "completed"
+        steps[4] = "completed"
     elif processed and peaks_ready and excel_ready:
-        steps[5] = "ready"
+        steps[4] = "ready"
 
     if not uploaded_name:
         steps[0] = "active"
-        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ใน Data"
     elif mapping_needs_review:
         next_action = "ตรวจสอบ Mapping ก่อนประมวลผล"
     elif not processed:
-        steps[3] = "active"
+        steps[2] = "active"
         next_action = "ประมวลผลไฟล์หลัง Mapping พร้อมใช้งาน"
     elif not peaks_ready:
         next_action = "กำหนดช่วง Peak ก่อนส่งออก"
@@ -2694,15 +2993,20 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     else:
         next_action = "สร้างรายงานแล้ว พร้อมดาวน์โหลดไฟล์"
 
-    summary = [
-        ("ไฟล์สำรวจ", "โหลดแล้ว" if uploaded_name else "ยังไม่ได้โหลด", "success" if uploaded_name else "neutral"),
-        ("Scheme", _current_mapping_scheme(), "success" if _is_v2_scheme(_current_mapping_scheme()) else "neutral"),
-        ("Mapping", "ต้องตรวจสอบ" if mapping_needs_review else ("พร้อมใช้งาน" if mapping_rows else "ยังไม่พร้อม"), "warning" if mapping_needs_review else ("success" if mapping_rows else "neutral")),
-        ("ประมวลผล", "เสร็จแล้ว" if processed else "ยังไม่ได้ประมวลผล", "success" if processed else "neutral"),
-        ("Peak", str(peak_state["summary_text"]), str(peak_state["summary_kind"])),
-        ("ส่งออก", "สร้างแล้ว" if output_ready else ("พร้อมสร้างรายงาน" if processed and peaks_ready and excel_ready else "ยังไม่พร้อม"), "success" if output_ready or (processed and peaks_ready and excel_ready) else "neutral"),
-    ]
-    legacy_state = {"steps": steps, "summary": summary, "next_action": next_action}
+    legacy_state = {
+        "steps": steps,
+        "summary": _canonical_workflow_summary(
+            WorkflowReadiness(
+                source=bool(uploaded_name),
+                mapping=bool(mapping_rows and not mapping_needs_review and not scheme_issue_count),
+                analysis=processed,
+                review=peaks_ready,
+                export=output_ready,
+            ),
+            analysis_stale=bool(st.session_state.get("tmc_pce_results_stale")),
+        ),
+        "next_action": next_action,
+    }
     workflow_state = _workflow_state_for_mode(WORKFLOW_SINGLE_MODE)
     if workflow_state is not None:
         return _single_shell_from_authoritative_readiness(workflow_state.readiness, legacy_state)
@@ -2715,18 +3019,17 @@ def _batch_shell_from_authoritative_readiness(
 ) -> dict[str, object]:
     """Render Batch engineering stages from the stored UX-0 state."""
 
-    steps = ["pending"] * 6
+    steps = ["pending"] * 5
     steps[0] = "completed" if readiness.source else "active"
-    steps[1] = list(legacy_state["steps"])[1]
-    steps[2] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
-    steps[3] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
-    steps[4] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
-    steps[5] = "completed" if readiness.export else ("active" if readiness.review else "pending")
+    steps[1] = "completed" if readiness.mapping else ("active" if readiness.source else "pending")
+    steps[2] = "completed" if readiness.analysis else ("active" if readiness.mapping else "pending")
+    steps[3] = "ready" if readiness.review else ("active" if readiness.analysis else "pending")
+    steps[4] = "completed" if readiness.export else ("active" if readiness.review else "pending")
 
     if not readiness.source:
-        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ใน Data"
     elif not readiness.mapping:
-        next_action = "เปิด Mapping Preset สำหรับ Batch ที่แถบด้านซ้าย"
+        next_action = "เปิด Mapping Preset ใน Mapping"
     elif not readiness.analysis:
         next_action = "วิเคราะห์ Batch หลังไฟล์และ Mapping Preset พร้อม"
     elif not readiness.review:
@@ -2736,32 +3039,12 @@ def _batch_shell_from_authoritative_readiness(
     else:
         next_action = "สร้าง Batch ZIP แล้ว พร้อมดาวน์โหลดไฟล์"
 
-    legacy_summary = list(legacy_state["summary"])
-    summary = [
-        (
-            legacy_summary[0][0],
-            legacy_summary[0][1] if readiness.source else "ยังไม่ได้โหลด",
-            "success" if readiness.source else "neutral",
-        ),
-        legacy_summary[1],
-        (legacy_summary[2][0], "พร้อมใช้งาน" if readiness.mapping else "ยังไม่พร้อม", "success" if readiness.mapping else "neutral"),
-        (
-            legacy_summary[3][0],
-            "วิเคราะห์แล้ว" if readiness.analysis else "ต้องวิเคราะห์ใหม่",
-            "success" if readiness.analysis else "warning",
-        ),
-        (
-            legacy_summary[4][0],
-            legacy_summary[4][1] if readiness.review else ("รอกำหนด Peak" if readiness.analysis else "ยังไม่มีไฟล์สำเร็จ"),
-            "success" if readiness.review else ("warning" if readiness.analysis else "neutral"),
-        ),
-        (
-            legacy_summary[5][0],
-            "สร้าง Batch ZIP แล้ว" if readiness.export else ("รอสร้าง Batch ZIP" if readiness.review else "ยังไม่พร้อม"),
-            "success" if readiness.export else "neutral",
-        ),
-    ]
-    return {"steps": steps, "summary": summary, "next_action": next_action, "readiness": _readiness_payload(readiness)}
+    return {
+        "steps": steps,
+        "summary": _canonical_workflow_summary(readiness),
+        "next_action": next_action,
+        "readiness": _readiness_payload(readiness),
+    }
 
 
 def derive_batch_workflow_state(
@@ -2786,40 +3069,40 @@ def derive_batch_workflow_state(
     confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
     peaks_ready = bool(successful_items) and confirmed_count == successful_count
 
-    steps = ["pending"] * 6
+    steps = ["pending"] * 5
     if uploaded_count:
         steps[0] = "completed"
     else:
         steps[0] = "active"
     if uploaded_count and metadata_rows and pce_ready:
-        steps[1] = "completed"
+        steps[0] = "completed"
     elif uploaded_count:
         steps[1] = "active"
     if batch_mapping_ready:
-        steps[2] = "completed"
+        steps[1] = "completed"
     elif uploaded_count:
-        steps[2] = "active"
+        steps[1] = "active"
     if batch_analysis and not batch_stale:
-        steps[3] = "completed"
+        steps[2] = "completed"
     elif batch_stale:
-        steps[3] = "warning"
+        steps[2] = "warning"
     elif uploaded_count and batch_mapping_ready and pce_ready:
-        steps[3] = "active"
+        steps[2] = "active"
     if peaks_ready:
-        steps[4] = "ready"
+        steps[3] = "ready"
     elif batch_analysis and successful_items:
-        steps[4] = "warning" if confirmed_count else "active"
+        steps[3] = "warning" if confirmed_count else "active"
     if batch_result and not batch_export_stale:
-        steps[5] = "completed"
+        steps[4] = "completed"
     elif peaks_ready and not batch_stale and batch_export_stale:
-        steps[5] = "warning"
+        steps[4] = "warning"
     elif peaks_ready and not batch_stale:
-        steps[5] = "ready"
+        steps[4] = "ready"
 
     if not uploaded_count:
-        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย"
+        next_action = "เริ่มจากอัปโหลดไฟล์ TMC Excel ใน Data"
     elif not batch_mapping_ready:
-        next_action = "เปิด Mapping Preset สำหรับ Batch ที่แถบด้านซ้าย"
+        next_action = "เปิด Mapping Preset ใน Mapping"
     elif batch_stale:
         next_action = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
     elif not batch_analysis:
@@ -2833,15 +3116,21 @@ def derive_batch_workflow_state(
     else:
         next_action = "สร้าง Batch ZIP แล้ว พร้อมดาวน์โหลดไฟล์"
 
-    summary = [
-        ("ไฟล์สำรวจ", f"{uploaded_count:,} ไฟล์" if uploaded_count else "ยังไม่ได้โหลด", "success" if uploaded_count else "neutral"),
-        ("Scheme", str(st.session_state.get("tmc_batch_mapping_code_scheme") or MOVEMENT_SCHEME_V1), "warning" if _is_v2_scheme(str(st.session_state.get("tmc_batch_mapping_code_scheme") or MOVEMENT_SCHEME_V1)) else "neutral"),
-        ("Mapping Preset", "พร้อมใช้งาน" if batch_mapping_ready else "ยังไม่พร้อม", "success" if batch_mapping_ready else "neutral"),
-        ("Batch Analysis", "ต้องวิเคราะห์ใหม่" if batch_stale else ("วิเคราะห์แล้ว" if batch_analysis else "ยังไม่ได้วิเคราะห์"), "warning" if batch_stale else ("success" if batch_analysis else "neutral")),
-        ("Peak", f"กำหนดแล้ว {confirmed_count:,}/{successful_count:,} ไฟล์" if successful_count else "ยังไม่มีไฟล์สำเร็จ", "success" if peaks_ready else ("warning" if successful_count else "neutral")),
-        ("ส่งออก", "ต้องสร้าง ZIP ใหม่" if batch_export_stale and peaks_ready and not batch_stale else ("สร้าง Batch ZIP แล้ว" if batch_result else ("พร้อมสร้าง Batch ZIP" if peaks_ready and not batch_stale else "ยังไม่พร้อม")), "warning" if batch_export_stale and peaks_ready and not batch_stale else ("success" if batch_result or (peaks_ready and not batch_stale) else "neutral")),
-    ]
-    legacy_state = {"steps": steps, "summary": summary, "next_action": next_action}
+    legacy_state = {
+        "steps": steps,
+        "summary": _canonical_workflow_summary(
+            WorkflowReadiness(
+                source=bool(uploaded_count),
+                mapping=batch_mapping_ready,
+                analysis=bool(batch_analysis and not batch_stale),
+                review=peaks_ready,
+                export=bool(batch_result and not batch_export_stale),
+            ),
+            analysis_stale=batch_stale,
+            export_stale=batch_export_stale,
+        ),
+        "next_action": next_action,
+    }
     workflow_state = _workflow_state_for_mode(WORKFLOW_BATCH_MODE)
     if workflow_state is not None:
         return _batch_shell_from_authoritative_readiness(workflow_state.readiness, legacy_state)
@@ -2858,7 +3147,7 @@ def _render_workflow_shell(
     export_mode: str | None,
     excel_com_status: ExcelComStatus,
 ) -> None:
-    labels = ["อัปโหลดไฟล์", "ตั้งค่างาน", "Mapping", "ประมวลผล", "ตรวจ Peak", "ส่งออก"]
+    labels = list(CANONICAL_WORKFLOW_STAGES)
     state = (
         derive_single_workflow_state(uploaded_name, export_mode, excel_com_status)
         if is_single_file_mode
@@ -4461,29 +4750,17 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
-        _render_sidebar_section("Input")
-        if is_single_file_mode:
-            st.caption("ใช้สำหรับประมวลผลไฟล์ TMC หนึ่งไฟล์ และตรวจ Peak ก่อนส่งออกรายงาน")
-            uploaded_file = st.file_uploader(
-                "อัปโหลดไฟล์ TMC Excel",
-                type=["xlsx", "xlsm", "xls"],
-                key="raw_tmc_upload",
-            )
-        else:
-            st.caption("เหมาะสำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
-            batch_uploads = st.file_uploader(
-                "อัปโหลดไฟล์ TMC Excel หลายไฟล์",
-                type=["xlsx", "xlsm", "xls"],
-                accept_multiple_files=True,
-                key="batch_raw_tmc_uploads",
-                help="อัปโหลด raw TMC workbook หลายไฟล์ของจุดสำรวจเดียวกัน เช่น หลายวันสำรวจ",
-            )
-            batch_preset_upload = st.file_uploader(
-                "เปิด Mapping Preset สำหรับทุกไฟล์",
-                type=["json"],
-                key="batch_mapping_preset_upload",
-                help="Batch ใช้ Mapping Preset เดียวกันกับทุกไฟล์",
-            )
+        _render_sidebar_section("Workspace utilities")
+        st.caption("Primary source and mapping actions live in their workflow stages.")
+
+    _render_app_header()
+    active_tab = render_workflow_navigation()
+    if active_tab != "Analyze":
+        _discard_nonrendered_analyze_setup_widgets()
+    uploaded_file, batch_uploads, batch_preset_upload = _render_primary_workflow_inputs(
+        is_single_file_mode=is_single_file_mode,
+        active_stage=active_tab,
+    )
 
     file_bytes = uploaded_file.getvalue() if uploaded_file is not None else b""
     uploaded_identity = (uploaded_file.name, len(file_bytes)) if uploaded_file is not None else None
@@ -4524,6 +4801,8 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", None)
     _ensure_pce_factor_state()
+    if active_tab == "Analyze":
+        _rehydrate_analyze_setup_widgets()
     single_export_options = _single_export_mode_options(excel_com_status)
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
@@ -4616,26 +4895,6 @@ def _run_streamlit_app() -> None:
             export_mode=str(st.session_state.get("tmc_batch_export_mode") or BATCH_SAFE_PNG_EXPORT_LABEL),
         )
 
-    _render_app_header()
-    top_status_placeholder = st.empty()
-    workflow_shell_placeholder = st.empty()
-    shell_batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
-    shell_batch_signature = _batch_analysis_signature(
-        uploads_signature=_batch_upload_signature(batch_uploads),
-        preset_signature=batch_preset_signature,
-        pce_factors=_current_pce_factors_from_state(),
-        peak_mode=st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE),
-        peak_windows={
-            "AM": (
-                _time_text(st.session_state.get("am_peak_window_start_input", _time_from_text(AM_WINDOW[0]))),
-                _time_text(st.session_state.get("am_peak_window_end_input", _time_from_text(AM_WINDOW[1]))),
-            ),
-            "PM": (
-                _time_text(st.session_state.get("pm_peak_window_start_input", _time_from_text(PM_WINDOW[0]))),
-                _time_text(st.session_state.get("pm_peak_window_end_input", _time_from_text(PM_WINDOW[1]))),
-            ),
-        },
-    )
     flash_message = st.session_state.pop("tmc_flash_message", None)
     if flash_message:
         _render_alert(str(flash_message.get("message", "")), str(flash_message.get("kind", "success")))
@@ -4656,8 +4915,6 @@ def _run_streamlit_app() -> None:
         except Exception as exc:  # pragma: no cover - UI guardrail
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
-
-    active_tab = render_workflow_navigation()
 
     project_name = st.session_state.get("project_name_input", "")
     tmc_id = st.session_state.get("tmc_id_input", "")
@@ -4685,10 +4942,10 @@ def _run_streamlit_app() -> None:
     selected_pce_factors = _current_pce_factors_from_state()
 
     if is_single_file_mode:
-      if active_tab == "ตั้งค่า":
-        _render_section_header("ตั้งค่างาน", "ระบุข้อมูลงานและค่าที่ใช้ในการประมวลผลรายงาน")
+      if active_tab == "Data":
+        _render_section_header("Data", "Upload the source workbook and enter project/report setup.")
         if uploaded_file is None:
-            _render_action_hint("เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย")
+            _render_action_hint("Start by uploading a TMC Excel workbook above.")
 
         setup_left, setup_right = st.columns([1.15, 1])
         with setup_left:
@@ -4703,18 +4960,6 @@ def _run_streamlit_app() -> None:
                 survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
                 weather = info_cols[0].text_input("สภาพอากาศ", key="weather_input")
                 responsible_party = info_cols[1].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
-
-            with st.container(border=True):
-                _render_section_header("ช่วงสำรวจและ Peak", "กำหนดกรอบเวลาที่ใช้คัดเลือก Peak อัตโนมัติ")
-                survey_period = st.text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
-                if st.session_state.get("peak_mode_select", DEFAULT_PEAK_MODE) not in PEAK_MODE_OPTIONS:
-                    st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
-                peak_mode = st.selectbox("รูปแบบการคำนวณ Peak", options=PEAK_MODE_OPTIONS, key="peak_mode_select")
-                period_cols = st.columns(4)
-                am_peak_window_start = period_cols[0].time_input("เริ่มช่วง AM", step=900, key="am_peak_window_start_input")
-                am_peak_window_end = period_cols[1].time_input("สิ้นสุดช่วง AM", step=900, key="am_peak_window_end_input")
-                pm_peak_window_start = period_cols[2].time_input("เริ่มช่วง PM", step=900, key="pm_peak_window_start_input")
-                pm_peak_window_end = period_cols[3].time_input("สิ้นสุดช่วง PM", step=900, key="pm_peak_window_end_input")
 
         with setup_right:
             with st.container(border=True):
@@ -4733,20 +4978,6 @@ def _run_streamlit_app() -> None:
                 west_road = road_cols[1].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
                 caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
                 show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
-
-            with st.container(border=True):
-                _render_section_header("ค่า PCE", "แก้เฉพาะกรณีต้องใช้ค่าเทียบเท่ารถยนต์นั่งต่างจากค่าเริ่มต้น")
-                selected_pce_factors = _render_pce_factor_editor()
-                _sync_workflow_after_pce_editor(
-                    is_single_file_mode=True,
-                    source_bytes=file_bytes if uploaded_file is not None else None,
-                    source_file_name=uploaded_file.name if uploaded_file is not None else None,
-                    export_mode=export_mode,
-                )
-                has_overrides, override_text = _pce_override_summary(selected_pce_factors)
-                _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
-                if has_overrides:
-                    st.caption(override_text)
 
     if not is_single_file_mode:
         project_name = st.session_state.get("project_name_input", "")
@@ -4805,16 +5036,97 @@ def _run_streamlit_app() -> None:
     }
     mapping = pd.DataFrame(st.session_state.get("mapping_table") or [])
 
+    if is_single_file_mode and active_tab == "Analyze":
+        _render_section_header("Analyze", "Configure analysis settings, review blockers, and run Analyze TMC.")
+        mapping_scheme = _current_mapping_scheme()
+        scheme_validation_issues = validate_mapping_scheme(mapping, mapping_scheme)
+        mapping_issues = _single_file_mapping_issues(detected_sheet_names, mapping, mapping_scheme)
+        process_block_reason = _single_file_processing_block_reason(mapping_scheme)
+        workflow_state = _workflow_state_for_mode(WORKFLOW_SINGLE_MODE)
+        analysis_ready = bool(workflow_state and workflow_state.readiness.analysis)
+        analysis_stale = bool(st.session_state.get("tmc_pce_results_stale")) or bool(
+            workflow_state and workflow_state.readiness.mapping and not analysis_ready and st.session_state.get("tmc_processed")
+        )
+        _render_readiness_checklist(
+            [
+                ("Source workbook", uploaded_file is not None, uploaded_file.name if uploaded_file is not None else "Upload in Data"),
+                ("Mapping", mapping_issues.empty and not scheme_validation_issues and not process_block_reason, "Ready" if mapping_issues.empty and not scheme_validation_issues and not process_block_reason else "Fix Mapping first"),
+                ("Analysis result", analysis_ready and not analysis_stale, "Re-analysis required" if analysis_stale else "Not analyzed" if not analysis_ready else "Ready"),
+            ]
+        )
+        if analysis_stale:
+            _render_alert("Analysis is stale. Update the settings below and run Analyze TMC again.", "warning")
+        elif workflow_state and workflow_state.readiness.analysis:
+            _render_alert("Analysis result is current for the active source, Mapping, and settings.", "success")
+
+        with st.container(border=True):
+            _render_section_header("Analysis settings", "Peak search windows and PCE factors are part of Analyze.")
+            survey_period = st.text_input("Survey period", key="survey_period_input")
+            peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
+            if peak_mode_default not in PEAK_MODE_OPTIONS:
+                peak_mode_default = DEFAULT_PEAK_MODE
+                st.session_state["peak_mode_select"] = peak_mode_default
+            peak_mode = st.selectbox(
+                "Peak calculation mode",
+                options=PEAK_MODE_OPTIONS,
+                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                key="peak_mode_select",
+            )
+            period_cols = st.columns(4)
+            am_peak_window_start = period_cols[0].time_input(
+                "AM window start",
+                value=_coerce_setup_time(st.session_state["am_peak_window_start_input"], _time_from_text(AM_WINDOW[0])),
+                step=900,
+                key="am_peak_window_start_input",
+            )
+            am_peak_window_end = period_cols[1].time_input(
+                "AM window end",
+                value=_coerce_setup_time(st.session_state["am_peak_window_end_input"], _time_from_text(AM_WINDOW[1])),
+                step=900,
+                key="am_peak_window_end_input",
+            )
+            pm_peak_window_start = period_cols[2].time_input(
+                "PM window start",
+                value=_coerce_setup_time(st.session_state["pm_peak_window_start_input"], _time_from_text(PM_WINDOW[0])),
+                step=900,
+                key="pm_peak_window_start_input",
+            )
+            pm_peak_window_end = period_cols[3].time_input(
+                "PM window end",
+                value=_coerce_setup_time(st.session_state["pm_peak_window_end_input"], _time_from_text(PM_WINDOW[1])),
+                step=900,
+                key="pm_peak_window_end_input",
+            )
+            selected_pce_factors = _render_pce_factor_editor()
+            _sync_workflow_after_pce_editor(
+                is_single_file_mode=True,
+                source_bytes=file_bytes if uploaded_file is not None else None,
+                source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                export_mode=export_mode,
+            )
+            has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+            _render_status_chip("User-adjusted PCE" if has_overrides else "Default PCE factors", "warning" if has_overrides else "success")
+            if has_overrides:
+                st.caption(override_text)
+
+        setup = build_setup_for_processing(uploaded_file.name if uploaded_file is not None else "")
+        setup["movement_code_scheme"] = _current_mapping_scheme()
+        peak_mode = str(setup.get("peak_mode", DEFAULT_PEAK_MODE) or DEFAULT_PEAK_MODE)
+        peak_windows = {
+            "AM": (setup["am_peak_window_start"], setup["am_peak_window_end"]),
+            "PM": (setup["pm_peak_window_start"], setup["pm_peak_window_end"]),
+        }
+
     if is_single_file_mode:
-        if active_tab == "กำหนดทิศทาง":
+        if active_tab == "Mapping":
             _render_section_header(
-                "กำหนดทิศทาง",
-                "จับคู่ข้อมูลจากชีตสำรวจเข้ากับรหัสการเคลื่อนที่มาตรฐาน ก่อนประมวลผลรายงาน",
+                "Mapping",
+                "Map detected source sheets to movement directions. Analysis is performed in Analyze.",
             )
             if uploaded_file is None:
                 _render_empty_state(
                     "ยังไม่มีไฟล์สำรวจ",
-                    "เริ่มจากอัปโหลดไฟล์ TMC Excel ที่แถบด้านซ้าย",
+                    "Start from the Data stage and upload a TMC Excel workbook.",
                 )
             elif not detected_sheet_names:
                 _render_alert('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"', "warning")
@@ -4995,20 +5307,12 @@ def _run_streamlit_app() -> None:
                     columns=6,
                 )
 
-                action_col, readiness_col = st.columns([0.82, 1.18])
-                process_requested = bool(st.session_state.get("tmc_single_file_process_requested"))
-                with action_col:
-                    run = st.button("ประมวลผลไฟล์ TMC", type="primary", disabled=bool(process_block_reason) or not mapping_issues.empty or bool(scheme_validation_issues), key="process_tmc_mapping_top")
-                    process_status_placeholder = st.empty()
-                    if process_requested:
-                        process_status_placeholder.status("กำลังประมวลผลไฟล์ TMC...", expanded=True)
-                with readiness_col:
-                    if process_block_reason:
-                        _render_alert(process_block_reason, "warning")
-                    elif mapping_issues.empty and not scheme_validation_issues:
-                        _render_alert("การกำหนดทิศทางพร้อมสำหรับประมวลผล", "success")
-                    else:
-                        _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
+                if process_block_reason:
+                    _render_alert(process_block_reason, "warning")
+                elif mapping_issues.empty and not scheme_validation_issues:
+                    _render_action_hint("Mapping is ready. Continue to Analyze to run Analyze TMC.")
+                else:
+                    _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
                 for warning_message in mapping_control_warnings(default_mapping, mapping_scheme):
                     _render_alert(_thai_mapping_control_warning(warning_message), "warning")
@@ -5091,70 +5395,72 @@ def _run_streamlit_app() -> None:
                     export_mode=export_mode,
                 )
 
-                if run and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
-                    st.session_state["tmc_single_file_process_requested"] = True
-                    st.rerun()
-
-                if process_requested and mapping_issues.empty and not process_block_reason and not scheme_validation_issues:
-                    st.session_state.pop("tmc_single_file_process_requested", None)
-                    try:
-                        raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
-                        with process_status_placeholder.status("กำลังประมวลผลไฟล์ TMC...", expanded=True) as processing_status:
-                            try:
-                                result = _process_single_file_for_ui(
-                                    raw_sheets=raw_sheets,
-                                    mapping=mapping,
-                                    setup=setup,
-                                    detected_sheets=detected_sheet_names,
-                                    peak_mode=peak_mode,
-                                    peak_windows=peak_windows,
-                                    pce_factors=selected_pce_factors,
-                                )
-                            except Exception:
-                                processing_status.update(label="กำลังประมวลผลไฟล์ TMC...", state="error", expanded=True)
-                                raise
-                            processing_status.update(label="กำลังประมวลผลไฟล์ TMC...", state="complete", expanded=False)
-                    except Exception as exc:  # pragma: no cover - UI guardrail
-                        st.error(f"ประมวลผลไม่สำเร็จ: {exc}")
-                    else:
-                        st.session_state["tmc_processed"] = {
-                            "result": result,
-                            "mapping": mapping,
-                            "setup": setup,
-                            "peak_windows": peak_windows,
-                            "pce_factors": selected_pce_factors,
-                        }
-                        st.session_state.pop("tmc_output", None)
-                        st.session_state.pop("tmc_pce_results_stale", None)
-                        processed_revisions = _single_workflow_revisions(
-                            source_bytes=file_bytes if uploaded_file is not None else None,
-                            source_file_name=uploaded_file.name if uploaded_file is not None else None,
-                            mapping=mapping,
-                            pce_factors=selected_pce_factors,
-                            peak_mode=peak_mode,
-                            peak_windows=peak_windows,
-                            movement_code_scheme=_current_mapping_scheme(),
-                            setup=setup,
-                            export_mode=export_mode,
-                            confirmed_peaks=_confirmed_peaks_from_state(),
-                            analysis_present=True,
-                        )
-                        _record_workflow_state(
-                            WORKFLOW_SINGLE_MODE,
-                            processed_revisions,
-                            WorkflowReadiness(
-                                source=uploaded_file is not None,
-                                mapping=bool(mapping.to_dict("records")),
-                                analysis=True,
-                                review=bool(_single_effective_peak_state().get("ready")),
-                                export=False,
-                            ),
-                        )
-                        set_active_tab("ตรวจ Peak")
-                        _flash_and_rerun("ประมวลผลเสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนในแท็บ “ตรวจ Peak”")
-                elif process_requested:
-                    st.session_state.pop("tmc_single_file_process_requested", None)
-                    process_status_placeholder.empty()
+    if is_single_file_mode and active_tab == "Analyze":
+        analysis_block_reason = ""
+        if uploaded_file is None:
+            analysis_block_reason = "Upload a source workbook in Data first."
+        elif process_block_reason:
+            analysis_block_reason = process_block_reason
+        elif not mapping_issues.empty or scheme_validation_issues:
+            analysis_block_reason = "Resolve Mapping issues before analysis."
+        _render_action_hint(analysis_block_reason or "Ready to analyze the current source and Mapping.")
+        analyze_tmc = st.button(
+            "Analyze TMC",
+            type="primary",
+            disabled=bool(analysis_block_reason),
+            key="analyze_tmc_stage",
+        )
+        if analyze_tmc:
+            try:
+                raw_sheets = {name: parsed.data for name, parsed in parsed_details.items()}
+                with st.spinner("Analyzing TMC..."):
+                    result = _process_single_file_for_ui(
+                        raw_sheets=raw_sheets,
+                        mapping=mapping,
+                        setup=setup,
+                        detected_sheets=detected_sheet_names,
+                        peak_mode=peak_mode,
+                        peak_windows=peak_windows,
+                        pce_factors=selected_pce_factors,
+                    )
+            except Exception as exc:  # pragma: no cover - UI guardrail
+                st.error(f"Analysis failed: {exc}")
+            else:
+                st.session_state["tmc_processed"] = {
+                    "result": result,
+                    "mapping": mapping,
+                    "setup": setup,
+                    "peak_windows": peak_windows,
+                    "pce_factors": selected_pce_factors,
+                }
+                st.session_state.pop("tmc_output", None)
+                st.session_state.pop("tmc_pce_results_stale", None)
+                processed_revisions = _single_workflow_revisions(
+                    source_bytes=file_bytes if uploaded_file is not None else None,
+                    source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                    mapping=mapping,
+                    pce_factors=selected_pce_factors,
+                    peak_mode=peak_mode,
+                    peak_windows=peak_windows,
+                    movement_code_scheme=_current_mapping_scheme(),
+                    setup=setup,
+                    export_mode=export_mode,
+                    confirmed_peaks=_confirmed_peaks_from_state(),
+                    analysis_present=True,
+                )
+                _record_workflow_state(
+                    WORKFLOW_SINGLE_MODE,
+                    processed_revisions,
+                    WorkflowReadiness(
+                        source=uploaded_file is not None,
+                        mapping=bool(mapping.to_dict("records")),
+                        analysis=True,
+                        review=bool(_single_effective_peak_state().get("ready")),
+                        export=False,
+                    ),
+                )
+                set_active_tab("Review")
+                _flash_and_rerun("Analyze TMC completed. Review the AM/PM Peak result next.")
 
     if not is_single_file_mode:
         batch_export_mode = st.session_state.get("tmc_batch_export_mode", BATCH_SAFE_PNG_EXPORT_LABEL)
@@ -5186,20 +5492,20 @@ def _run_streamlit_app() -> None:
         )
         batch_export_stale = _mark_batch_export_stale_if_inputs_changed(batch_export_signature)
 
-        if active_tab == "ตั้งค่า":
-            _render_section_header("ตั้งค่า Batch", "ใช้สำหรับจุดสำรวจเดียวกันหลายวัน โดยใช้ Mapping Preset เดียวกันทุกไฟล์")
+        if active_tab == "Data":
+            _render_section_header("Data Batch", "Set shared metadata and inspect the uploaded workbook inventory.")
             if batch_stale:
                 _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
 
             batch_left, batch_right = st.columns([1.1, 1])
             with batch_left:
                 with st.container(border=True):
-                    _render_section_header("ขอบเขต Batch", "ค่ากลางที่จะใช้ร่วมกันทุกไฟล์")
+                    _render_section_header("Data", "Shared project setup and Batch source inventory.")
                     _render_readiness_checklist(
                         [
-                            ("ใช้ Mapping Preset เดียวกันทุกไฟล์", mapping_ready, "เปิดไฟล์ Preset ใน sidebar"),
-                            ("ใช้ค่า PCE ชุดเดียวกัน", pce_ready, ""),
-                            ("ตรวจ Peak แยกแต่ละไฟล์", bool(batch_analysis), "อยู่ในแท็บตรวจ Peak"),
+                            ("Mapping Preset", mapping_ready, "Configure it in Mapping"),
+                            ("Shared PCE factors", pce_ready, "Configure them in Analyze"),
+                            ("Per-file Review", bool(batch_analysis), "Review results after Analyze"),
                             ("ไม่รวม raw Excel ใน ZIP", True, "แพ็กเกจส่งออกมีเฉพาะรายงานและไฟล์ประกอบ"),
                         ]
                     )
@@ -5218,27 +5524,11 @@ def _run_streamlit_app() -> None:
                     road_cols[2].text_input("ชื่อถนนด้านตะวันออก", key="east_road_input")
                     road_cols[3].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
 
-                with st.container(border=True):
-                    _render_section_header("ค่า PCE ร่วม", "ค่า PCE ชุดนี้จะใช้กับทุกไฟล์ใน Batch")
-                    selected_pce_factors = _render_pce_factor_editor()
-                    _sync_workflow_after_pce_editor(
-                        is_single_file_mode=False,
-                        export_mode=str(st.session_state.get("tmc_batch_export_mode") or BATCH_SAFE_PNG_EXPORT_LABEL),
-                        batch_uploads=batch_uploads,
-                        mapping_preset=loaded_batch_preset,
-                        movement_code_scheme=batch_mapping_scheme,
-                        metadata_rows=batch_metadata_rows,
-                    )
-                    has_overrides, override_text = _pce_override_summary(selected_pce_factors)
-                    _render_status_chip("มีค่า PCE ที่แก้ไขเอง" if has_overrides else "ใช้ค่า PCE เริ่มต้น", "warning" if has_overrides else "success")
-                    if has_overrides:
-                        st.caption(override_text)
-
             with batch_right:
                 with st.container(border=True):
                     _render_section_header("ไฟล์ที่อัปโหลด", "ตรวจจำนวนไฟล์และชื่อไฟล์ก่อนวิเคราะห์ Batch")
                     if not batch_metadata_rows:
-                        _render_action_hint("อัปโหลดไฟล์ TMC Excel หลายไฟล์ในแถบด้านซ้าย")
+                        _render_action_hint("Upload Batch workbooks in the Data stage above.")
                     else:
                         _render_metric_strip(
                             [
@@ -5289,10 +5579,10 @@ def _run_streamlit_app() -> None:
                                 export_mode=batch_export_mode,
                             )
 
-        if active_tab == "กำหนดทิศทาง":
+        if active_tab == "Mapping":
             _render_section_header(
-                "กำหนดทิศทาง Batch",
-                "ใช้ Mapping Preset เดียวกันสำหรับไฟล์สำรวจหลายวันของจุดเดียวกัน",
+                "Mapping Batch",
+                "Apply and validate one Mapping Preset for every uploaded workbook.",
             )
             preset_rows = _mapping_preset_rows_frame(loaded_batch_preset)
             preset_code_column = "output_movement_code" if "output_movement_code" in preset_rows else "movement_code"
@@ -5306,7 +5596,7 @@ def _run_streamlit_app() -> None:
 
             _render_metric_strip(
                 [
-                    ("Mapping Preset", "พร้อมใช้งาน" if loaded_batch_preset else "ยังไม่พร้อม", "", batch_preset_name if loaded_batch_preset else "เปิดไฟล์ Preset ที่ sidebar", "พร้อมใช้งาน" if loaded_batch_preset else "ต้องตรวจสอบ"),
+                    ("Mapping Preset", "พร้อมใช้งาน" if loaded_batch_preset else "ยังไม่พร้อม", "", batch_preset_name if loaded_batch_preset else "Open the preset above", "พร้อมใช้งาน" if loaded_batch_preset else "ต้องตรวจสอบ"),
                     ("แถว Mapping", len(preset_rows), "แถว", "shared preset", "พร้อม" if loaded_batch_preset else "ต้องตรวจสอบ"),
                     ("Movement ที่ใช้", preset_included, "แถว", "include_in_report", "พร้อม" if preset_included else "ต้องตรวจสอบ"),
                     ("รวมหลาย source", preset_duplicate_count, "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if preset_duplicate_count else "พร้อม"),
@@ -5317,24 +5607,24 @@ def _run_streamlit_app() -> None:
                 _render_mapping_scheme_status(batch_mapping_scheme)
 
             if not batch_uploads:
-                _render_action_hint("อัปโหลดไฟล์ TMC หลายไฟล์ที่แถบด้านซ้ายก่อนตรวจ Mapping")
+                _render_action_hint("Upload Batch workbooks in the Data stage before checking Mapping.")
             if not loaded_batch_preset:
                 _render_action_hint("เปิด Mapping Preset เพื่อใช้กับไฟล์ Batch")
 
-            _render_section_header("ความพร้อม Batch", "ตรวจรายการจำเป็นก่อนวิเคราะห์ในแท็บ ตรวจ Peak")
+            _render_section_header("Mapping readiness", "Resolve Mapping blockers before moving to Analyze.")
             _render_readiness_checklist(
                 [
                     ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
                     ("Mapping Preset พร้อมใช้งาน", mapping_ready, batch_preset_name if mapping_ready else "ยังไม่เปิด Preset"),
-                    ("ค่า PCE พร้อมใช้งาน", pce_ready, "พร้อมใช้งาน" if pce_ready else "ตรวจค่า PCE ในแท็บตั้งค่า"),
-                    ("Metadata รายไฟล์พร้อมใช้งาน", bool(batch_metadata_rows), f"{len(batch_metadata_rows):,} แถว" if batch_metadata_rows else "ตั้งค่ารายไฟล์ในแท็บตั้งค่า"),
+                    ("ค่า PCE พร้อมใช้งาน", pce_ready, "พร้อมใช้งาน" if pce_ready else "Configure them in Analyze"),
+                    ("Metadata รายไฟล์พร้อมใช้งาน", bool(batch_metadata_rows), f"{len(batch_metadata_rows):,} แถว" if batch_metadata_rows else "Configure them in Data"),
                 ]
             )
             if mapping_ready:
                 if batch_process_block_reason:
                     _render_alert(batch_process_block_reason, "warning")
                 else:
-                    _render_action_hint("เมื่อ Mapping พร้อมใช้งานแล้ว ไปที่แท็บ ตรวจ Peak เพื่อวิเคราะห์ Batch")
+                    _render_action_hint("When Mapping is ready, go to Analyze to run Analyze Batch.")
 
             with st.expander("สถานะ Sheet matching รายไฟล์", expanded=False):
                 _render_action_hint("ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
@@ -5391,16 +5681,81 @@ def _run_streamlit_app() -> None:
                     ]
                     st.dataframe(preset_rows[preview_columns].head(50) if preview_columns else preset_rows.head(50), width="stretch", hide_index=True)
 
-        if active_tab == "ตรวจ Peak":
-            _render_section_header("ตรวจ Peak รายไฟล์", "ตรวจกราฟและยืนยัน AM/PM Peak แยกตามไฟล์ ก่อนสร้าง Batch ZIP")
+        if active_tab == "Analyze":
+            _render_section_header("Analyze Batch", "Configure shared analysis settings and run Analyze Batch.")
+            with st.container(border=True):
+                _render_section_header("Analysis settings", "These settings apply to every uploaded Batch workbook.")
+                survey_period = st.text_input("Survey period", key="survey_period_input")
+                peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
+                if peak_mode_default not in PEAK_MODE_OPTIONS:
+                    peak_mode_default = DEFAULT_PEAK_MODE
+                    st.session_state["peak_mode_select"] = peak_mode_default
+                peak_mode = st.selectbox(
+                    "Peak calculation mode",
+                    options=PEAK_MODE_OPTIONS,
+                    index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                    key="peak_mode_select",
+                )
+                period_cols = st.columns(4)
+                am_peak_window_start = period_cols[0].time_input(
+                    "AM window start",
+                    value=_coerce_setup_time(st.session_state["am_peak_window_start_input"], _time_from_text(AM_WINDOW[0])),
+                    step=900,
+                    key="am_peak_window_start_input",
+                )
+                am_peak_window_end = period_cols[1].time_input(
+                    "AM window end",
+                    value=_coerce_setup_time(st.session_state["am_peak_window_end_input"], _time_from_text(AM_WINDOW[1])),
+                    step=900,
+                    key="am_peak_window_end_input",
+                )
+                pm_peak_window_start = period_cols[2].time_input(
+                    "PM window start",
+                    value=_coerce_setup_time(st.session_state["pm_peak_window_start_input"], _time_from_text(PM_WINDOW[0])),
+                    step=900,
+                    key="pm_peak_window_start_input",
+                )
+                pm_peak_window_end = period_cols[3].time_input(
+                    "PM window end",
+                    value=_coerce_setup_time(st.session_state["pm_peak_window_end_input"], _time_from_text(PM_WINDOW[1])),
+                    step=900,
+                    key="pm_peak_window_end_input",
+                )
+                selected_pce_factors = _render_pce_factor_editor()
+                _sync_workflow_after_pce_editor(
+                    is_single_file_mode=False,
+                    export_mode=str(st.session_state.get("tmc_batch_export_mode") or BATCH_SAFE_PNG_EXPORT_LABEL),
+                    batch_uploads=batch_uploads,
+                    mapping_preset=loaded_batch_preset,
+                    movement_code_scheme=batch_mapping_scheme,
+                    metadata_rows=batch_metadata_rows,
+                )
+                has_overrides, override_text = _pce_override_summary(selected_pce_factors)
+                _render_status_chip("User-adjusted PCE" if has_overrides else "Default PCE factors", "warning" if has_overrides else "success")
+                if has_overrides:
+                    st.caption(override_text)
+            setup = build_setup_for_processing("")
+            setup["movement_code_scheme"] = batch_mapping_scheme
+            peak_mode = str(setup.get("peak_mode", DEFAULT_PEAK_MODE) or DEFAULT_PEAK_MODE)
+            peak_windows = {
+                "AM": (setup["am_peak_window_start"], setup["am_peak_window_end"]),
+                "PM": (setup["pm_peak_window_start"], setup["pm_peak_window_end"]),
+            }
+            pce_ready = bool(selected_pce_factors)
+            batch_ready = batch_inputs_ready(
+                uploaded_workbook_count=len(batch_uploads or []),
+                mapping_available=mapping_ready,
+                pce_factors_ready=pce_ready,
+                movement_code_scheme=batch_mapping_scheme,
+            )
             if batch_stale:
                 _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
             if not batch_ready:
                 _render_readiness_checklist(
                     [
                         ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่ได้อัปโหลดไฟล์ TMC Excel"),
-                        ("Mapping Preset", mapping_ready, "พร้อมใช้งาน" if mapping_ready else "เปิด Mapping Preset ใน sidebar"),
-                        ("ค่า PCE", pce_ready, "พร้อมใช้งาน" if pce_ready else "ตรวจสอบค่า PCE ในแท็บตั้งค่า"),
+                         ("Mapping Preset", mapping_ready, "พร้อมใช้งาน" if mapping_ready else "Configure it in Mapping"),
+                         ("Shared PCE factors", pce_ready, "พร้อมใช้งาน" if pce_ready else "Configure them above"),
                     ]
                 )
                 if batch_process_block_reason:
@@ -5464,9 +5819,10 @@ def _run_streamlit_app() -> None:
                         export=False,
                     ),
                 )
-                set_active_tab("ตรวจ Peak")
+                set_active_tab("Review")
                 _flash_and_rerun("วิเคราะห์ Batch เสร็จแล้ว กรุณาตรวจสอบช่วงเร่งด่วนก่อนสร้าง ZIP")
 
+        if active_tab == "Review":
             if batch_analysis:
                 batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
                 batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
@@ -5581,7 +5937,7 @@ def _run_streamlit_app() -> None:
             else:
                 _render_empty_state("กรุณาวิเคราะห์ Batch ก่อนตรวจสอบ Peak", "กด วิเคราะห์ Batch เพื่อสร้างตารางตรวจ Peak รายไฟล์")
 
-        if active_tab == "ส่งออก":
+        if active_tab == "Export":
             _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
             previous_batch_export_mode = st.session_state.get("tmc_batch_export_mode", batch_export_mode)
@@ -5638,7 +5994,7 @@ def _run_streamlit_app() -> None:
             _render_action_hint(block_reason or "พร้อมสร้าง Batch ZIP")
             generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
             if generate_batch and batch_analysis:
-                set_active_tab("ส่งออก")
+                set_active_tab("Export")
                 block_reason = batch_zip_generation_block_reason(
                     has_successful_files=bool(batch_analysis.successful_items),
                     peaks_ready=reviewed_peak_values_complete(batch_analysis),
@@ -5666,7 +6022,7 @@ def _run_streamlit_app() -> None:
                     export_mode=batch_export_mode,
                     confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
                 )
-                set_active_tab("ส่งออก")
+                set_active_tab("Export")
                 _flash_and_rerun("สร้าง Batch ZIP เสร็จแล้ว")
 
             batch_export_left, batch_export_right = st.columns([0.95, 1.05])
@@ -5739,7 +6095,7 @@ def _run_streamlit_app() -> None:
             elif not peaks_ready:
                 _render_alert(batch_zip_generation_block_reason(has_successful_files=True, peaks_ready=False, batch_stale=False), "warning")
 
-        if active_tab == "ตรวจสอบข้อมูล":
+        if active_tab == "Review":
             _render_section_header(
                 "ตรวจสอบข้อมูล Batch",
                 "ตรวจสอบสถานะรายไฟล์, QC รวม, และรายละเอียด Batch_QC ก่อนนำผลไปใช้ต่อ",
@@ -5854,7 +6210,7 @@ def _run_streamlit_app() -> None:
     confirmed_pm_end = st.session_state.get("tmc_confirmed_pm_peak_end", "")
 
     if is_single_file_mode:
-        if active_tab == "ตรวจ Peak":
+        if active_tab == "Review":
             _render_section_header("ตรวจ Peak", "ตรวจสอบรูปแบบปริมาณจราจรรายชั่วโมง และกำหนดช่วง AM/PM Peak สำหรับใช้ในรายงาน")
             if pce_results_stale:
                 _render_alert("ค่า PCE เปลี่ยนหลังจากประมวลผลแล้ว กรุณาประมวลผลใหม่ก่อนตรวจ Peak หรือส่งออกรายงาน", "warning")
@@ -5957,7 +6313,7 @@ def _run_streamlit_app() -> None:
                     st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
     
     if is_single_file_mode:
-        if active_tab == "ส่งออก":
+        if active_tab == "Export":
             export_peak_state = _single_effective_peak_state(result if result is not None and not pce_results_stale else None)
             effective_peaks = dict(export_peak_state.get("values") or {})
             confirmed_ready = bool(export_peak_state.get("ready"))
@@ -6033,7 +6389,7 @@ def _run_streamlit_app() -> None:
                     )
 
             if export_run:
-                set_active_tab("ส่งออก")
+                set_active_tab("Export")
                 excel_com_requested = bool(use_excel_com_native_charts)
                 export_excel_com_status = probe_excel_com() if excel_com_requested else None
                 excel_com_enabled = bool(export_excel_com_status and export_excel_com_status.available)
@@ -6146,7 +6502,7 @@ def _run_streamlit_app() -> None:
                             "export_mode": export_mode,
                             "generated_at": export_generated_at,
                         }
-                        set_active_tab("ส่งออก")
+                        set_active_tab("Export")
                         _flash_and_rerun("สร้างรายงาน Excel เสร็จแล้ว")
                 except Exception as exc:  # pragma: no cover - UI guardrail
                     st.error(f"ส่งออกไฟล์ไม่สำเร็จ: {exc}")
@@ -6283,7 +6639,7 @@ def _run_streamlit_app() -> None:
                 )
 
     if is_single_file_mode:
-        if active_tab == "ตรวจสอบข้อมูล":
+        if active_tab == "Review":
             _render_section_header(
                 "ตรวจสอบข้อมูล",
                 "ตรวจสอบ QC, ข้อมูลที่ประมวลผลแล้ว และรายการ Audit ก่อนนำผลไปใช้ในรายงาน",
@@ -6395,27 +6751,6 @@ def _run_streamlit_app() -> None:
                         _render_action_hint("ยังไม่มี metadata การส่งออกในรอบนี้")
                     _render_template_audit_notes()
                     _render_excel_com_status(excel_com_status)
-    with top_status_placeholder.container():
-        _render_top_status_bar(
-            is_single_file_mode=is_single_file_mode,
-            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-            uploaded_count=len(batch_uploads or []),
-            batch_mapping_ready=loaded_batch_preset is not None,
-            export_mode=export_mode if is_single_file_mode else shell_batch_export_mode,
-            excel_com_status=excel_com_status,
-        )
-    with workflow_shell_placeholder.container():
-        _render_workflow_shell(
-            is_single_file_mode=is_single_file_mode,
-            uploaded_name=uploaded_file.name if uploaded_file is not None else None,
-            uploaded_count=len(batch_uploads or []),
-            batch_mapping_ready=loaded_batch_preset is not None,
-            batch_signature=shell_batch_signature,
-            export_mode=export_mode,
-            excel_com_status=excel_com_status,
-        )
-
-
 if __name__ == "__main__":
     _run_streamlit_app()
     st.stop()

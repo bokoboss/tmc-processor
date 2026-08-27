@@ -41,6 +41,18 @@ def _run_app_for_apptest() -> None:
     streamlit_app._run_streamlit_app()
 
 
+def _widget_by_key(widgets, key: str):
+    return next(widget for widget in widgets if widget.key == key)
+
+
+def _widget_by_prefix(widgets, prefix: str):
+    return next(widget for widget in widgets if widget.key == prefix or widget.key.startswith(f"{prefix}_"))
+
+
+def _button_by_label(at: AppTest, label: str):
+    return next(button for button in at.button if button.label == label)
+
+
 def _mapping() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -247,6 +259,110 @@ def test_excel_template_openpyxl_path_writes_custom_setup_metadata() -> None:
     assert worksheet["E35"].value == CUSTOM_SETUP_VALUES["caption_text"]
 
 
+def test_streamlit_apptest_keeps_analysis_actions_in_analyze_stage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+
+    single = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    single.run(timeout=30)
+    stage_buttons = [button for button in single.button if button.key.startswith("workflow_tab_")]
+    assert [button.label for button in stage_buttons] == app.workflow_stages_for_mode(app.WORKFLOW_SINGLE_MODE)
+    assert "Clear source" in [button.label for button in single.button]
+
+    _button_by_label(single, "Mapping").click()
+    single.run(timeout=30)
+    assert "Analyze TMC" not in [button.label for button in single.button]
+
+    _button_by_label(single, "Analyze").click()
+    single.run(timeout=30)
+    assert "Analyze TMC" in [button.label for button in single.button]
+
+    batch = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    batch.run(timeout=30)
+    batch.radio[0].set_value(batch.radio[0].options[1])
+    batch.run(timeout=30)
+    assert "Clear Batch sources" in [button.label for button in batch.button]
+    _button_by_label(batch, "Mapping").click()
+    batch.run(timeout=30)
+    assert _widget_by_key(batch.file_uploader, "batch_mapping_preset_upload")
+    assert "Clear Mapping Preset" in [button.label for button in batch.button]
+    assert "วิเคราะห์ Batch" not in [button.label for button in batch.button]
+
+    _button_by_label(batch, "Analyze").click()
+    batch.run(timeout=30)
+    assert "วิเคราะห์ Batch" in [button.label for button in batch.button]
+
+
+def _assert_analyze_setup_values(at: AppTest, expected: dict[str, object]) -> None:
+    for field in ("am_peak_window_start", "am_peak_window_end", "pm_peak_window_start", "pm_peak_window_end"):
+        widget_key = app.SETUP_FIELD_WIDGET_KEYS[field]
+        assert _widget_by_key(at.time_input, widget_key).value == expected[field]
+    assert _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).value == expected["peak_mode"]
+    assert _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS["survey_period"]).value == expected["survey_period"]
+
+
+def _exercise_analyze_setup_round_trip(at: AppTest, *, batch: bool = False) -> None:
+    at.run(timeout=30)
+    if batch:
+        at.radio[0].set_value(at.radio[0].options[1])
+        at.run(timeout=30)
+
+    _button_by_label(at, "Analyze").click()
+    at.run(timeout=30)
+    defaults = {
+        "am_peak_window_start": time(7, 0),
+        "am_peak_window_end": time(12, 0),
+        "pm_peak_window_start": time(15, 0),
+        "pm_peak_window_end": time(19, 0),
+        "peak_mode": app.DEFAULT_PEAK_MODE,
+        "survey_period": app.DEFAULT_SURVEY_PERIOD,
+    }
+    _assert_analyze_setup_values(at, defaults)
+
+    configured = {
+        "am_peak_window_start": time(6, 0),
+        "am_peak_window_end": time(10, 0),
+        "pm_peak_window_start": time(15, 0),
+        "pm_peak_window_end": time(19, 0),
+        "peak_mode": "rolling_60min",
+        "survey_period": "06.00 - 19.00",
+    }
+    for field in ("am_peak_window_start", "am_peak_window_end", "pm_peak_window_start", "pm_peak_window_end"):
+        _widget_by_key(at.time_input, app.SETUP_FIELD_WIDGET_KEYS[field]).set_value(configured[field])
+    _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).set_value(configured["peak_mode"])
+    _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS["survey_period"]).set_value(configured["survey_period"])
+    at.run(timeout=30)
+
+    _button_by_label(at, "Data" if batch else "Mapping").click()
+    at.run(timeout=30)
+    _button_by_label(at, "Analyze").click()
+    at.run(timeout=30)
+    _assert_analyze_setup_values(at, configured)
+    assert at.session_state[app.SETUP_STATE_KEY]["peak_mode"] == configured["peak_mode"]
+    assert at.session_state[app.SETUP_STATE_KEY]["survey_period"] == configured["survey_period"]
+
+
+def test_streamlit_apptest_analyze_setup_persists_across_single_stage_navigation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+    _exercise_analyze_setup_round_trip(AppTest.from_function(_run_app_for_apptest, default_timeout=20))
+
+
+def test_streamlit_apptest_analyze_setup_persists_across_batch_stage_navigation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+    _exercise_analyze_setup_round_trip(AppTest.from_function(_run_app_for_apptest, default_timeout=20), batch=True)
+
+
 def test_project_session_save_load_preserves_custom_setup_state_and_u_turn_toggle() -> None:
     st.session_state.clear()
     app.initialize_setup_state_once("demo.xlsx")
@@ -288,28 +404,28 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     )
     at.run(timeout=60)
 
-    for index, value in {
-        2: CUSTOM_SETUP_VALUES["tmc_title"],
-        3: CUSTOM_SETUP_VALUES["survey_point"],
-        5: CUSTOM_SETUP_VALUES["survey_date_text"],
-        6: CUSTOM_SETUP_VALUES["responsible_party"],
-        8: CUSTOM_SETUP_VALUES["north_label"],
-        9: CUSTOM_SETUP_VALUES["east_label"],
-        10: CUSTOM_SETUP_VALUES["south_label"],
-        11: CUSTOM_SETUP_VALUES["west_label"],
-        12: CUSTOM_SETUP_VALUES["north_road"],
-        13: CUSTOM_SETUP_VALUES["east_road"],
-        14: CUSTOM_SETUP_VALUES["south_road"],
-        15: CUSTOM_SETUP_VALUES["west_road"],
-        16: CUSTOM_SETUP_VALUES["caption_text"],
+    for field, value in {
+        "tmc_title": CUSTOM_SETUP_VALUES["tmc_title"],
+        "survey_point": CUSTOM_SETUP_VALUES["survey_point"],
+        "survey_date_text": CUSTOM_SETUP_VALUES["survey_date_text"],
+        "responsible_party": CUSTOM_SETUP_VALUES["responsible_party"],
+        "north_label": CUSTOM_SETUP_VALUES["north_label"],
+        "east_label": CUSTOM_SETUP_VALUES["east_label"],
+        "south_label": CUSTOM_SETUP_VALUES["south_label"],
+        "west_label": CUSTOM_SETUP_VALUES["west_label"],
+        "north_road": CUSTOM_SETUP_VALUES["north_road"],
+        "east_road": CUSTOM_SETUP_VALUES["east_road"],
+        "south_road": CUSTOM_SETUP_VALUES["south_road"],
+        "west_road": CUSTOM_SETUP_VALUES["west_road"],
+        "caption_text": CUSTOM_SETUP_VALUES["caption_text"],
     }.items():
-        at.text_input[index].set_value(value)
-    at.checkbox[0].set_value(False)
+        _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS[field]).set_value(value)
+    _widget_by_key(at.checkbox, app.SETUP_FIELD_WIDGET_KEYS["show_u_turn"]).set_value(False)
     at.run(timeout=60)
 
-    at.button[1].click()
+    _button_by_label(at, "Mapping").click()
     at.run(timeout=60)
-    at.file_uploader[1].set_value(
+    _widget_by_key(at.file_uploader, "mapping_preset_upload").set_value(
         (
             "DEMO_TMC1_FourLeg.mapping.json",
             (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.mapping.json").read_bytes(),
@@ -317,29 +433,35 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
         )
     )
     at.run(timeout=60)
-    assert at.button[5].label == "ประมวลผลไฟล์ TMC"
-    assert at.button[5].disabled is False
-    at.button[5].click()
+    analyze_button = _button_by_label(at, "Analyze")
+    assert analyze_button.disabled is False
+    analyze_button.click()
+    at.run(timeout=60)
+    analyze_action = _button_by_label(at, "Analyze TMC")
+    assert analyze_action.disabled is False
+    analyze_action.click()
     at.run(timeout=90)
-    assert at.session_state["active_workflow_tab"] == "ตรวจ Peak"
+    assert at.session_state["active_workflow_tab"] == "Review"
 
-    at.button[0].click()
+    _button_by_label(at, "Data").click()
     at.run(timeout=60)
-    visible_values = [text_input.value for text_input in at.text_input]
-    assert visible_values[2] == CUSTOM_SETUP_VALUES["tmc_title"]
-    assert visible_values[3] == CUSTOM_SETUP_VALUES["survey_point"]
-    assert visible_values[5] == CUSTOM_SETUP_VALUES["survey_date_text"]
-    assert visible_values[6] == CUSTOM_SETUP_VALUES["responsible_party"]
-    assert visible_values[8] == CUSTOM_SETUP_VALUES["north_label"]
-    assert visible_values[12] == CUSTOM_SETUP_VALUES["north_road"]
-    assert visible_values[16] == CUSTOM_SETUP_VALUES["caption_text"]
-    assert at.checkbox[0].value is False
+    for field in (
+        "tmc_title",
+        "survey_point",
+        "survey_date_text",
+        "responsible_party",
+        "north_label",
+        "north_road",
+        "caption_text",
+    ):
+        assert _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS[field]).value == CUSTOM_SETUP_VALUES[field]
+    assert _widget_by_key(at.checkbox, app.SETUP_FIELD_WIDGET_KEYS["show_u_turn"]).value is False
 
-    at.button[3].click()
+    _button_by_label(at, "Export").click()
     at.run(timeout=60)
-    assert at.button[5].label == "สร้างรายงาน Excel"
-    assert at.button[5].disabled is False
-    at.button[5].click()
+    export_action = _button_by_label(at, "สร้างรายงาน Excel")
+    assert export_action.disabled is False
+    export_action.click()
     at.run(timeout=120)
 
     output = at.session_state["tmc_output"]
@@ -353,3 +475,114 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     assert metadata_rows["caption_text"] == CUSTOM_SETUP_VALUES["caption_text"]
     assert setup_rows["north_road"] == CUSTOM_SETUP_VALUES["north_road"]
     assert setup_rows["north_label"] == CUSTOM_SETUP_VALUES["north_label"]
+
+
+def test_streamlit_apptest_explicit_single_clear_removes_upload_and_invalidates_state(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+    root = Path(__file__).resolve().parents[1]
+    at = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    at.run(timeout=30)
+    _widget_by_key(at.file_uploader, "raw_tmc_upload").set_value(
+        (
+            "DEMO_TMC1_FourLeg.xlsx",
+            (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.xlsx").read_bytes(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    )
+    at.run(timeout=60)
+
+    assert app.SINGLE_SOURCE_UPLOAD_STATE_KEY in at.session_state
+    clear_button = _button_by_label(at, "Clear source")
+    assert clear_button.disabled is False
+    clear_button.click()
+    at.run(timeout=60)
+
+    assert app.SINGLE_SOURCE_UPLOAD_STATE_KEY not in at.session_state
+    workflow_state = at.session_state[app.WORKFLOW_STATE_KEY][app.WORKFLOW_SINGLE_MODE]
+    assert workflow_state.readiness.source is False
+    assert workflow_state.readiness.analysis is False
+    assert workflow_state.readiness.review is False
+    assert workflow_state.readiness.export is False
+    assert _widget_by_prefix(at.file_uploader, "raw_tmc_upload").value is None
+
+    _widget_by_prefix(at.file_uploader, "raw_tmc_upload").set_value(
+        (
+            "DEMO_TMC1_FourLeg.xlsx",
+            (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.xlsx").read_bytes(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    )
+    at.run(timeout=60)
+    assert at.session_state[app.SINGLE_SOURCE_UPLOAD_STATE_KEY]["name"] == "DEMO_TMC1_FourLeg.xlsx"
+
+
+def test_streamlit_apptest_batch_clear_controls_remove_canonical_inputs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_excel_com_for_ui",
+        lambda force=False: ExcelComStatus(available=False, reason="mocked in AppTest", detail="", version=""),
+    )
+    root = Path(__file__).resolve().parents[1]
+    workbook_bytes = (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.xlsx").read_bytes()
+    preset_bytes = (root / "samples" / "demo" / "DEMO_TMC1_FourLeg.mapping.json").read_bytes()
+    at = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
+    at.run(timeout=30)
+    at.radio[0].set_value(at.radio[0].options[1])
+    at.run(timeout=30)
+    _widget_by_prefix(at.file_uploader, "batch_raw_tmc_uploads").set_value(
+        [
+            (
+                "DEMO_TMC1_FourLeg.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        ]
+    )
+    at.run(timeout=60)
+
+    assert app.BATCH_SOURCE_UPLOAD_STATE_KEY in at.session_state
+    _button_by_label(at, "Clear Batch sources").click()
+    at.run(timeout=60)
+
+    assert app.BATCH_SOURCE_UPLOAD_STATE_KEY not in at.session_state
+    batch_state = at.session_state[app.WORKFLOW_STATE_KEY][app.WORKFLOW_BATCH_MODE]
+    assert batch_state.readiness.source is False
+    assert batch_state.readiness.analysis is False
+    assert batch_state.readiness.review is False
+    assert batch_state.readiness.export is False
+
+    _widget_by_prefix(at.file_uploader, "batch_raw_tmc_uploads").set_value(
+        [
+            (
+                "DEMO_TMC1_FourLeg.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        ]
+    )
+    at.run(timeout=60)
+    _button_by_label(at, "Mapping").click()
+    at.run(timeout=60)
+    _widget_by_key(at.file_uploader, "batch_mapping_preset_upload").set_value(
+        (
+            "DEMO_TMC1_FourLeg.mapping.json",
+            preset_bytes,
+            "application/json",
+        )
+    )
+    at.run(timeout=60)
+
+    assert app.BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY in at.session_state
+    _button_by_label(at, "Clear Mapping Preset").click()
+    at.run(timeout=60)
+
+    assert app.BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY not in at.session_state
+    batch_state = at.session_state[app.WORKFLOW_STATE_KEY][app.WORKFLOW_BATCH_MODE]
+    assert batch_state.readiness.mapping is False
+    assert batch_state.readiness.analysis is False
+    assert batch_state.readiness.review is False
+    assert batch_state.readiness.export is False

@@ -12,7 +12,7 @@
 
 ## Current accepted baseline
 - Accepted branch: `main`
-- Accepted HEAD SHA: `e840e09db25fce15ab2e66e938713165382e3ca8`
+- Accepted HEAD SHA: `b75efcff3f359267906137f70ce5b1d90eeb9cd3`
 - Accepted date: 2026-08-25
 - Current phase/milestone: UX-0 workflow/state contract merged; UX-1 is next.
 - Last accepted PR / CI run: Not recorded in the local repository metadata.
