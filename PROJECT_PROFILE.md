@@ -12,10 +12,10 @@
 
 ## Current accepted baseline
 - Accepted branch: `main`
-- Accepted HEAD SHA: `512b5cc68031611f47366fe6d87ee514e5807925`
+- Accepted HEAD SHA: `472da24108535a58dc41bd6bfb403cb2402f67ea`
 - Accepted date: 2026-08-27
-- Current phase/milestone: UX-1 canonical five-stage navigation merged; UX-2 Mapping redesign is next.
-- Last accepted PR / CI run: PR #15; GitHub Actions CI #72 passed on Windows / Python 3.10 and 3.12.
+- Current phase/milestone: UX-2 sheet-centric physical-semantics Mapping merged; UX-3 explicit Peak Review is next.
+- Last accepted PR / CI run: PR #17; GitHub Actions CI #77 passed on Windows / Python 3.10 and 3.12.
 
 ## Technology stack
 - Languages: Python
@@ -109,4 +109,4 @@ Changes must not alter the following unless explicitly approved:
 - No dedicated browser automation, wheel/package qualification, or separate release-build gate is defined.
 
 ## Current next objective
-- UX-2: redesign Basic Mapping around actual detected source sheet names and operator-assigned physical approach/movement semantics, deriving canonical internal movement fields where deterministic while preserving legacy Mapping Excel/Preset compatibility and the UX-0 invalidation contract.
+- UX-3: separate system Peak suggestions, operator draft selections, and explicit human confirmation; make Review the engineering evidence/QC workspace while preserving effective-Peak calculations and the UX-0 invalidation contract.
