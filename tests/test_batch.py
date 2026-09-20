@@ -176,7 +176,7 @@ def test_unique_safe_output_stems_fallback_and_collision_handling() -> None:
     assert unique_safe_output_stems(items) == ["bad_stem", "bad_stem_02", "Unsafe_Name"]
 
 
-def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
+def test_batch_analysis_returns_suggestions_without_confirmed_peaks() -> None:
     analysis = analyze_batch_files(
         _demo_items(),
         mapping_preset=_preset(),
@@ -188,8 +188,8 @@ def test_batch_analysis_returns_suggested_and_default_confirmed_peaks() -> None:
     for item in analysis.successful_items:
         assert item.suggested_AM_peak
         assert item.suggested_PM_peak
-        assert item.confirmed_AM_peak == item.suggested_AM_peak
-        assert item.confirmed_PM_peak == item.suggested_PM_peak
+        assert item.confirmed_AM_peak == ""
+        assert item.confirmed_PM_peak == ""
         assert item.suggested_AM_peak in item.hourly_period_options
         assert item.suggested_PM_peak in item.hourly_period_options
         assert not item.hourly_movement_pcu.empty
@@ -212,7 +212,7 @@ def test_selected_file_preview_helper_exposes_compact_values() -> None:
     assert preview["total_vehicles"] > 0
     assert preview["total_PCU"] > 0
     assert preview["suggested_AM_peak"]
-    assert preview["confirmed_AM_peak"] == preview["suggested_AM_peak"]
+    assert preview["confirmed_AM_peak"] == ""
     assert {"QC_errors", "QC_warnings", "QC_info"}.issubset(preview)
 
 
@@ -389,6 +389,7 @@ def test_custom_confirmed_peak_overrides_suggested_in_final_zip() -> None:
     first = analysis.successful_items[0]
     custom_am = next(option for option in first.hourly_period_options if option != first.suggested_AM_peak)
     first.confirmed_AM_peak = custom_am
+    first.confirmed_PM_peak = first.suggested_PM_peak
 
     result = generate_batch_zip_from_reviewed_peaks(
         analysis,
@@ -502,6 +503,9 @@ def test_failed_analysis_item_does_not_block_reviewed_batch_zip() -> None:
 
     assert [item.status for item in analysis.items] == ["success", "failed"]
 
+    analysis.successful_items[0].confirmed_AM_peak = analysis.successful_items[0].suggested_AM_peak
+    analysis.successful_items[0].confirmed_PM_peak = analysis.successful_items[0].suggested_PM_peak
+
     result = generate_batch_zip_from_reviewed_peaks(analysis, setup=_setup())
 
     assert [row.status for row in result.summary_rows] == ["success", "failed"]
@@ -594,8 +598,8 @@ def test_v2_batch_analyzes_demo_files_with_approach_movement_order_and_qc_scheme
     for item in analysis.successful_items:
         assert item.suggested_AM_peak
         assert item.suggested_PM_peak
-        assert item.confirmed_AM_peak == item.suggested_AM_peak
-        assert item.confirmed_PM_peak == item.suggested_PM_peak
+        assert item.confirmed_AM_peak == ""
+        assert item.confirmed_PM_peak == ""
         assert list(item.hourly_movement_pcu.columns[1:-1]) == APPROACH_MOVEMENT_CODES
         assert not item.hourly_totals.empty
         assert not item.movement_summary.empty
@@ -674,6 +678,7 @@ def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
     first = analysis.successful_items[0]
     custom_am = next(option for option in first.hourly_period_options if option != first.suggested_AM_peak)
     first.confirmed_AM_peak = custom_am
+    first.confirmed_PM_peak = first.suggested_PM_peak
 
     result = generate_batch_zip_from_reviewed_peaks(
         analysis,

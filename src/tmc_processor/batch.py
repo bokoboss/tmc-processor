@@ -1146,8 +1146,8 @@ def analyze_batch_files(
                     mapping=active_mapping,
                     suggested_AM_peak=suggested_am,
                     suggested_PM_peak=suggested_pm,
-                    confirmed_AM_peak=suggested_am,
-                    confirmed_PM_peak=suggested_pm,
+                    confirmed_AM_peak="",
+                    confirmed_PM_peak="",
                     hourly_period_options=options,
                     hourly_movement_pcu=hourly_movement,
                     hourly_totals=result.hourly,
@@ -1193,6 +1193,21 @@ def reviewed_peak_values_complete(analysis: BatchAnalysisResult) -> bool:
     """Return whether all successful analyzed files have confirmed AM/PM peaks."""
 
     return all(item.confirmed_AM_peak and item.confirmed_PM_peak for item in analysis.successful_items)
+
+
+def _confirm_suggested_peaks_for_one_shot(analysis: BatchAnalysisResult) -> BatchAnalysisResult:
+    """Materialize suggestions for the legacy one-shot processing API.
+
+    The interactive Batch workflow keeps analysis suggestions separate from
+    confirmed review values.  ``process_batch_files`` is the pre-review API,
+    however, and its contract is to analyze and immediately build an export;
+    preserve that contract without changing the interactive analysis result.
+    """
+
+    for item in analysis.successful_items:
+        item.confirmed_AM_peak = item.suggested_AM_peak
+        item.confirmed_PM_peak = item.suggested_PM_peak
+    return analysis
 
 
 def generate_batch_zip_from_reviewed_peaks(
@@ -1398,6 +1413,7 @@ def process_batch_files(
         mapping_preset_name=mapping_preset_name,
         generated_at=generated_at,
     )
+    _confirm_suggested_peaks_for_one_shot(analysis)
     return generate_batch_zip_from_reviewed_peaks(
         analysis,
         setup=setup,

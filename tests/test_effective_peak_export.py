@@ -254,6 +254,8 @@ def test_streamlit_effective_peak_state_prefers_selected_over_recommended() -> N
     app.st.session_state["am_peak_period_select"] = "17:00-18:00"
     app.st.session_state["tmc_confirmed_am_peak_start"] = "17:00"
     app.st.session_state["tmc_confirmed_am_peak_end"] = "18:00"
+    app.st.session_state["tmc_confirmed_pm_peak_start"] = "17:00"
+    app.st.session_state["tmc_confirmed_pm_peak_end"] = "18:00"
 
     state = app._single_effective_peak_state()
 

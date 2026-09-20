@@ -443,6 +443,11 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     at.run(timeout=90)
     assert at.session_state["active_workflow_tab"] == "Review"
 
+    confirm_review = _button_by_label(at, "Confirm Peak Review")
+    assert confirm_review.disabled is False
+    confirm_review.click()
+    at.run(timeout=60)
+
     _button_by_label(at, "Data").click()
     at.run(timeout=60)
     for field in (

@@ -57,13 +57,13 @@ def _single_ready_state() -> dict[str, object]:
     return app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
 
 
-def test_single_processed_effective_peaks_export_ready_not_completed() -> None:
+def test_single_processed_effective_peaks_require_review_before_export() -> None:
     state = _single_ready_state()
 
     assert state["steps"][2] == "completed"
-    assert state["steps"][3] == "ready"
-    assert state["steps"][4] == "ready"
-    assert ("Export", "Ready to generate", "neutral") in state["summary"]
+    assert state["steps"][3] == "warning"
+    assert state["steps"][4] == "pending"
+    assert ("Review", "Needs review", "warning") in state["summary"]
 
 
 def test_active_tab_state_persists_after_export_mode_change() -> None:
@@ -139,15 +139,15 @@ def test_peak_change_clears_export_and_returns_workflow_to_export_ready() -> Non
 
     state = app.derive_single_workflow_state("demo.xlsx", app.SAFE_PNG_EXPORT_MODE, _excel_ready())
 
-    assert state["steps"][4] == "ready"
-    assert ("Export", "Ready to generate", "neutral") in state["summary"]
+    assert state["steps"][4] == "pending"
+    assert ("Export", "Not ready", "neutral") in state["summary"]
 
 
-def test_single_processed_result_peak_summary_uses_suggested_not_no_results() -> None:
+def test_single_processed_result_peak_summary_requires_explicit_confirmation() -> None:
     state = _single_ready_state()
 
     review_chip = next(item for item in state["summary"] if item[0] == "Review")
-    assert review_chip == ("Review", "Ready", "success")
+    assert review_chip == ("Review", "Needs review", "warning")
 
 
 def test_single_confirmed_peak_summary_uses_release_status_wording() -> None:

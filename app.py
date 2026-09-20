@@ -230,6 +230,10 @@ SINGLE_SOURCE_CLEAR_REQUEST_KEY = "tmc_single_source_clear_requested"
 BATCH_SOURCE_CLEAR_REQUEST_KEY = "tmc_batch_source_clear_requested"
 BATCH_MAPPING_PRESET_CLEAR_REQUEST_KEY = "tmc_batch_mapping_preset_clear_requested"
 UPLOAD_WIDGET_REVISION_SUFFIX = "__revision"
+SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY = "tmc_confirmed_peak_selection_source"
+BATCH_CONFIRMED_PEAKS_STATE_KEY = "tmc_batch_confirmed_peaks"
+BATCH_DRAFT_PEAKS_STATE_KEY = "tmc_batch_draft_peaks"
+BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY = "tmc_batch_peak_selection_source"
 WORKFLOW_EXPORT_METADATA_FIELDS = (
     "project_name",
     "tmc_id",
@@ -738,7 +742,7 @@ def _clear_batch_source_uploads() -> None:
     )
     st.session_state["tmc_batch_stale"] = True
     st.session_state["tmc_batch_export_stale"] = True
-    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    _clear_batch_review_state()
     st.session_state.pop("tmc_batch_export_result", None)
 
 
@@ -750,7 +754,7 @@ def _clear_batch_mapping_preset_upload() -> None:
     )
     st.session_state["tmc_batch_stale"] = True
     st.session_state["tmc_batch_export_stale"] = True
-    st.session_state["tmc_batch_confirmed_peaks"] = {}
+    _clear_batch_review_state()
     st.session_state.pop("tmc_batch_preset_name", None)
     st.session_state.pop("tmc_batch_export_result", None)
 
@@ -1008,7 +1012,9 @@ def _single_workflow_revisions(
             peak_windows=peak_windows,
             movement_code_scheme=movement_code_scheme,
         ),
-        review_decision=review_decision_fingerprint(confirmed_peaks),
+        review_decision=review_decision_fingerprint(
+            _peak_value_payload(confirmed_peaks) if _peak_values_complete(confirmed_peaks) else None
+        ),
         export_config=export_config_fingerprint(
             _workflow_export_payload(
                 setup,
@@ -1053,7 +1059,7 @@ def _batch_workflow_revisions(
             peak_windows=peak_windows,
             movement_code_scheme=movement_code_scheme,
         ),
-        review_decision=review_decision_fingerprint(confirmed_peaks),
+        review_decision=review_decision_fingerprint(_batch_review_decision_payload(confirmed_peaks)),
         export_config=export_config_fingerprint(
             _workflow_export_payload(
                 setup,
@@ -1079,9 +1085,16 @@ def _clear_single_review_state() -> None:
         "tmc_confirmed_am_peak_end",
         "tmc_confirmed_pm_peak_start",
         "tmc_confirmed_pm_peak_end",
+        SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY,
         "tmc_loaded_confirmed_peaks",
     ):
         st.session_state.pop(key, None)
+
+
+def _clear_batch_review_state() -> None:
+    st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = {}
+    st.session_state[BATCH_DRAFT_PEAKS_STATE_KEY] = {}
+    st.session_state[BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY] = {}
 
 
 def _apply_workflow_transition(mode: str, transition: WorkflowTransition) -> None:
@@ -1106,9 +1119,9 @@ def _apply_workflow_transition(mode: str, transition: WorkflowTransition) -> Non
     if transition.analysis_invalidated:
         if has_analysis:
             st.session_state["tmc_batch_stale"] = True
-        st.session_state["tmc_batch_confirmed_peaks"] = {}
+        _clear_batch_review_state()
     elif transition.review_invalidated:
-        st.session_state["tmc_batch_confirmed_peaks"] = {}
+        _clear_batch_review_state()
     if transition.analysis_invalidated or transition.review_invalidated or transition.export_invalidated:
         if has_analysis or has_export:
             st.session_state["tmc_batch_export_stale"] = True
@@ -2804,53 +2817,104 @@ def _suggested_peaks_from_result(result: object | None) -> dict[str, str]:
     }
 
 
+_PEAK_VALUE_KEYS = (
+    "am_peak_start",
+    "am_peak_end",
+    "pm_peak_start",
+    "pm_peak_end",
+)
+
+
+def _peak_values_complete(values: dict[str, object] | None) -> bool:
+    values = values or {}
+    return all(str(values.get(key) or "").strip() for key in _PEAK_VALUE_KEYS)
+
+
+def _peak_value_payload(values: dict[str, object] | None) -> dict[str, str]:
+    values = values or {}
+    return {key: str(values.get(key) or "") for key in _PEAK_VALUE_KEYS}
+
+
+def _peak_range_from_label(value: object) -> tuple[str, str]:
+    parts = hourly_interval_label_parts(value)
+    return parts if parts is not None else ("", "")
+
+
+def _single_draft_peak_state(result: object | None = None) -> dict[str, object]:
+    """Return suggested, draft, confirmed, and effective Single Peak values."""
+
+    result = _processed_result_from_state() if result is None else result
+    suggested = _suggested_peaks_from_result(result)
+    confirmed_state = _confirmed_peaks_from_state()
+    confirmed = _peak_value_payload(confirmed_state)
+    draft = dict(suggested)
+    confirmed_am_label = _peak_range_label(confirmed, "am_peak_start", "am_peak_end")
+    confirmed_pm_label = _peak_range_label(confirmed, "pm_peak_start", "pm_peak_end")
+    for period, widget_key, confirmed_label in (
+        ("am", "am_peak_period_select", confirmed_am_label),
+        ("pm", "pm_peak_period_select", confirmed_pm_label),
+    ):
+        label = st.session_state.get(widget_key) or confirmed_label
+        start, end = _peak_range_from_label(label)
+        if start and end:
+            draft[f"{period}_peak_start"] = start
+            draft[f"{period}_peak_end"] = end
+    confirmed_ready = _peak_values_complete(confirmed)
+    effective = dict(confirmed if confirmed_ready else suggested)
+    return {
+        "suggested": suggested,
+        "draft": draft,
+        "confirmed": confirmed,
+        "confirmed_source": str(confirmed_state.get("peak_selection_source") or ""),
+        "effective": effective,
+        "confirmed_ready": confirmed_ready,
+    }
+
+
 def _single_effective_peak_state(result: object | None = None) -> dict[str, object]:
+    """Return effective Peak values while making explicit review readiness distinct."""
+
     result = _processed_result_from_state() if result is None else result
     if result is None:
         return {
             "ready": False,
             "source": "",
-            "summary_text": "ยังไม่มีผลประมวลผล",
+            "summary_text": "No analysis result",
             "summary_kind": "neutral",
+            "suggested": {},
+            "draft": {},
+            "confirmed": {},
             "values": {},
         }
 
-    suggested = _suggested_peaks_from_result(result)
-    confirmed = _confirmed_peaks_from_state()
-    values = dict(suggested)
-    for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end"):
-        if confirmed.get(key):
-            values[key] = str(confirmed[key])
-    ready = all(values.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end"))
-    if not ready:
+    review_state = _single_draft_peak_state(result)
+    suggested = dict(review_state["suggested"])
+    draft = dict(review_state["draft"])
+    confirmed = dict(review_state["confirmed"])
+    confirmed_source = str(review_state.get("confirmed_source") or "")
+    values = dict(review_state["effective"])
+    ready = bool(review_state["confirmed_ready"])
+    if not _peak_values_complete(values):
         return {
             "ready": False,
             "source": "",
-            "summary_text": "ขาด AM/PM Peak",
+            "summary_text": "Missing AM/PM Peak",
             "summary_kind": "warning",
+            "suggested": suggested,
+            "draft": draft,
+            "confirmed": confirmed,
             "values": values,
         }
 
-    suggested_am = f"{suggested.get('am_peak_start', '')}-{suggested.get('am_peak_end', '')}".strip("-")
-    suggested_pm = f"{suggested.get('pm_peak_start', '')}-{suggested.get('pm_peak_end', '')}".strip("-")
-    effective_am = f"{values.get('am_peak_start', '')}-{values.get('am_peak_end', '')}".strip("-")
-    effective_pm = f"{values.get('pm_peak_start', '')}-{values.get('pm_peak_end', '')}".strip("-")
-    user_adjusted = bool(confirmed) and (effective_am != suggested_am or effective_pm != suggested_pm)
-    loaded_peaks = bool(st.session_state.get("tmc_loaded_confirmed_peaks"))
-    if user_adjusted:
-        source = PEAK_SELECTION_USER_CONFIRMED
-        summary_text = "กำหนดแล้ว"
-    elif loaded_peaks:
-        source = str(confirmed.get("peak_selection_source") or PEAK_SELECTION_USER_CONFIRMED)
-        summary_text = "กำหนดแล้ว"
-    else:
-        source = PEAK_SELECTION_AUTO
-        summary_text = "ใช้ค่าแนะนำ"
+    source = confirmed_source or PEAK_SELECTION_USER_CONFIRMED if ready else PEAK_SELECTION_AUTO
     return {
-        "ready": True,
+        "ready": ready,
         "source": source,
-        "summary_text": summary_text,
-        "summary_kind": "success",
+        "summary_text": "Peak Review confirmed" if ready else "Peak Review confirmation required",
+        "summary_kind": "success" if ready else "warning",
+        "suggested": suggested,
+        "draft": draft,
+        "confirmed": confirmed,
         "values": values,
     }
 
@@ -3076,7 +3140,7 @@ def derive_batch_workflow_state(
     successful_items = list(batch_analysis.successful_items) if batch_analysis else []
     successful_count = len(successful_items)
     confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
-    peaks_ready = bool(successful_items) and confirmed_count == successful_count
+    peaks_ready = bool(successful_items) and reviewed_peak_values_complete(batch_analysis)
 
     steps = ["pending"] * 5
     if uploaded_count:
@@ -3281,6 +3345,8 @@ def _mark_processed_outputs_stale_for_pce_change() -> None:
         "tmc_confirmed_am_peak_end",
         "tmc_confirmed_pm_peak_start",
         "tmc_confirmed_pm_peak_end",
+        SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY,
+        "tmc_loaded_confirmed_peaks",
     ]:
         st.session_state.pop(stale_key, None)
 
@@ -3366,9 +3432,36 @@ def _confirmed_peaks_from_state() -> dict[str, str]:
     }.items():
         if st.session_state.get(state_key):
             confirmed[peak_key] = st.session_state[state_key]
+    state_source = st.session_state.get(SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY)
+    if state_source:
+        confirmed["peak_selection_source"] = str(state_source)
     if confirmed:
         confirmed.setdefault("peak_selection_source", PEAK_SELECTION_USER_CONFIRMED)
     return confirmed
+
+
+def _confirm_single_peak_review(
+    am_peak: tuple[object, object],
+    pm_peak: tuple[object, object],
+) -> bool:
+    """Persist one explicit Single Peak Review decision and return whether values changed."""
+
+    current = {
+        "am_peak_start": str(am_peak[0] or ""),
+        "am_peak_end": str(am_peak[1] or ""),
+        "pm_peak_start": str(pm_peak[0] or ""),
+        "pm_peak_end": str(pm_peak[1] or ""),
+    }
+    if not _peak_values_complete(current):
+        return False
+
+    previous = _peak_value_payload(_confirmed_peaks_from_state())
+    changed = previous != current
+    for key, value in current.items():
+        st.session_state[f"tmc_confirmed_{key}"] = value
+    st.session_state[SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY] = PEAK_SELECTION_USER_CONFIRMED
+    st.session_state.pop("tmc_loaded_confirmed_peaks", None)
+    return changed
 
 
 def _workflow_peak_windows_from_setup(setup: dict[str, object]) -> dict[str, tuple[object, object]]:
@@ -4243,6 +4336,46 @@ def _stable_batch_confirmed_peaks(
     }
 
 
+def _batch_review_decision_payload(
+    confirmed_peaks: dict[str, dict[str, str]] | None,
+) -> dict[str, dict[str, str]]:
+    """Keep only complete per-file confirmations in the semantic revision."""
+
+    payload: dict[str, dict[str, str]] = {}
+    for folder, values in (confirmed_peaks or {}).items():
+        values = values or {}
+        am_peak = str(values.get("AM") or "")
+        pm_peak = str(values.get("PM") or "")
+        if am_peak and pm_peak:
+            payload[str(folder)] = {"AM": am_peak, "PM": pm_peak}
+    return payload
+
+
+def _confirm_batch_peak_review(folder_name: str, am_peak: str, pm_peak: str) -> bool:
+    """Persist one explicit per-file Batch Peak Review decision."""
+
+    folder_name = str(folder_name or "")
+    am_peak = str(am_peak or "")
+    pm_peak = str(pm_peak or "")
+    if not folder_name or not am_peak or not pm_peak:
+        return False
+
+    confirmed = st.session_state.setdefault(BATCH_CONFIRMED_PEAKS_STATE_KEY, {})
+    previous = dict(confirmed.get(folder_name) or {})
+    changed = previous.get("AM", "") != am_peak or previous.get("PM", "") != pm_peak
+    confirmed[folder_name] = {"AM": am_peak, "PM": pm_peak}
+    sources = st.session_state.setdefault(BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY, {})
+    sources[folder_name] = "user_confirmed_batch"
+
+    analysis = st.session_state.get("tmc_batch_analysis_result")
+    for item in list(getattr(analysis, "items", []) or []):
+        if str(getattr(item, "folder_name", "")) == folder_name:
+            item.confirmed_AM_peak = am_peak
+            item.confirmed_PM_peak = pm_peak
+            break
+    return changed
+
+
 def _sync_batch_workflow_from_state(
     *,
     batch_uploads: list[object] | tuple[object, ...] | None,
@@ -4265,15 +4398,13 @@ def _sync_batch_workflow_from_state(
         setup=setup,
         export_mode=export_mode,
         confirmed_peaks=_stable_batch_confirmed_peaks(
-            st.session_state.get("tmc_batch_confirmed_peaks") or {},
+            st.session_state.get(BATCH_CONFIRMED_PEAKS_STATE_KEY) or {},
             batch_analysis,
         ),
         analysis_present=analysis_present,
     )
     successful_items = list(getattr(batch_analysis, "successful_items", []) or []) if batch_analysis else []
-    review_ready = bool(successful_items) and all(
-        item.confirmed_AM_peak and item.confirmed_PM_peak for item in successful_items
-    )
+    review_ready = bool(successful_items) and reviewed_peak_values_complete(batch_analysis)
     readiness = WorkflowReadiness(
         source=bool(batch_uploads),
         mapping=mapping_preset is not None,
@@ -4359,11 +4490,17 @@ def _sync_batch_analysis_metadata_from_state() -> None:
         item.notes = batch_item.notes or item.notes
         old_to_new_folders[old_folder] = item.folder_name
 
-    confirmed = st.session_state.get("tmc_batch_confirmed_peaks") or {}
+    confirmed = st.session_state.get(BATCH_CONFIRMED_PEAKS_STATE_KEY) or {}
     remapped_confirmed = {}
     for old_folder, values in confirmed.items():
         remapped_confirmed[old_to_new_folders.get(str(old_folder), str(old_folder))] = values
-    st.session_state["tmc_batch_confirmed_peaks"] = remapped_confirmed
+    st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = remapped_confirmed
+    for state_key in (BATCH_DRAFT_PEAKS_STATE_KEY, BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY):
+        values = st.session_state.get(state_key) or {}
+        st.session_state[state_key] = {
+            old_to_new_folders.get(str(old_folder), str(old_folder)): value
+            for old_folder, value in values.items()
+        }
     selected_review_file = str(st.session_state.get("tmc_batch_selected_review_file") or "")
     if selected_review_file in old_to_new_folders:
         st.session_state["tmc_batch_selected_review_file"] = old_to_new_folders[selected_review_file]
@@ -4985,7 +5122,9 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault("tmc_batch_file_metadata_editor_version", 0)
     st.session_state.setdefault("tmc_batch_analysis_result", None)
     st.session_state.setdefault("tmc_batch_selected_review_file", "")
-    st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+    st.session_state.setdefault(BATCH_CONFIRMED_PEAKS_STATE_KEY, {})
+    st.session_state.setdefault(BATCH_DRAFT_PEAKS_STATE_KEY, {})
+    st.session_state.setdefault(BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY, {})
     st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", None)
     _ensure_pce_factor_state()
@@ -5671,7 +5810,7 @@ def _run_streamlit_app() -> None:
             metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
             shared_setup=setup,
             export_mode=batch_export_mode,
-            confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+            confirmed_peaks=st.session_state.get(BATCH_CONFIRMED_PEAKS_STATE_KEY) or {},
         )
         batch_export_stale = _mark_batch_export_stale_if_inputs_changed(batch_export_signature)
 
@@ -5979,10 +6118,9 @@ def _run_streamlit_app() -> None:
                 st.session_state["tmc_batch_export_stale"] = False
                 st.session_state.pop("tmc_batch_export_result", None)
                 st.session_state["tmc_batch_review_version"] = int(st.session_state.get("tmc_batch_review_version", 0) or 0) + 1
-                st.session_state["tmc_batch_confirmed_peaks"] = {
-                    item.folder_name: {"AM": item.confirmed_AM_peak, "PM": item.confirmed_PM_peak}
-                    for item in batch_analysis.successful_items
-                }
+                st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = {}
+                st.session_state[BATCH_DRAFT_PEAKS_STATE_KEY] = {}
+                st.session_state[BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY] = {}
                 analyzed_batch_revisions = _batch_workflow_revisions(
                     uploads=batch_uploads,
                     mapping_preset=loaded_batch_preset,
@@ -5994,7 +6132,7 @@ def _run_streamlit_app() -> None:
                     setup=setup,
                     export_mode=batch_export_mode,
                     confirmed_peaks=_stable_batch_confirmed_peaks(
-                        st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                        st.session_state.get(BATCH_CONFIRMED_PEAKS_STATE_KEY) or {},
                         batch_analysis,
                     ),
                     analysis_present=True,
@@ -6006,11 +6144,7 @@ def _run_streamlit_app() -> None:
                         source=bool(batch_uploads),
                         mapping=loaded_batch_preset is not None,
                         analysis=True,
-                        review=bool(batch_analysis.successful_items)
-                        and all(
-                            item.confirmed_AM_peak and item.confirmed_PM_peak
-                            for item in batch_analysis.successful_items
-                        ),
+                        review=bool(batch_analysis.successful_items) and reviewed_peak_values_complete(batch_analysis),
                         export=False,
                     ),
                 )
@@ -6019,7 +6153,7 @@ def _run_streamlit_app() -> None:
 
         if active_tab == "Review":
             if batch_analysis:
-                batch_confirmed_peaks = st.session_state.setdefault("tmc_batch_confirmed_peaks", {})
+                batch_confirmed_peaks = st.session_state.setdefault(BATCH_CONFIRMED_PEAKS_STATE_KEY, {})
                 batch_review_version = int(st.session_state.get("tmc_batch_review_version", 0) or 0)
                 for item in batch_analysis.successful_items:
                     stored = batch_confirmed_peaks.get(item.folder_name, {})
@@ -6086,8 +6220,10 @@ def _run_streamlit_app() -> None:
                     peak_cols = st.columns(2)
                     if option_labels:
                         stored = batch_confirmed_peaks.setdefault(selected_item.folder_name, {"AM": selected_item.confirmed_AM_peak, "PM": selected_item.confirmed_PM_peak})
-                        am_default = stored.get("AM") or selected_item.confirmed_AM_peak
-                        pm_default = stored.get("PM") or selected_item.confirmed_PM_peak
+                        batch_draft_peaks = st.session_state.setdefault(BATCH_DRAFT_PEAKS_STATE_KEY, {})
+                        draft = batch_draft_peaks.get(selected_item.folder_name, {})
+                        am_default = draft.get("AM") or stored.get("AM") or selected_item.suggested_AM_peak
+                        pm_default = draft.get("PM") or stored.get("PM") or selected_item.suggested_PM_peak
                         for value in [am_default, pm_default]:
                             if value and value not in option_labels:
                                 option_labels.insert(0, value)
@@ -6100,6 +6236,9 @@ def _run_streamlit_app() -> None:
                                 index=option_labels.index(am_default) if am_default in option_labels else 0,
                                 key=f"batch_review_am_{batch_review_version}_{selected_item.folder_name}",
                             )
+                            draft_am = selected_am
+                            selected_am = selected_am if stored.get("AM") == selected_am else ""
+                            st.caption("Draft only — confirm this file to apply the selected AM Peak.")
                             _render_status_chip("กำหนดแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
                             _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                         with peak_cols[1]:
@@ -6110,21 +6249,28 @@ def _run_streamlit_app() -> None:
                                 index=option_labels.index(pm_default) if pm_default in option_labels else 0,
                                 key=f"batch_review_pm_{batch_review_version}_{selected_item.folder_name}",
                             )
+                            draft_pm = selected_pm
+                            selected_pm = selected_pm if stored.get("PM") == selected_pm else ""
+                            st.caption("Draft only — confirm this file to apply the selected PM Peak.")
                             _render_status_chip("กำหนดแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
                             _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
-                        review_changed = stored.get("AM") != selected_am or stored.get("PM") != selected_pm
-                        batch_confirmed_peaks[selected_item.folder_name] = {"AM": selected_am, "PM": selected_pm}
-                        selected_item.confirmed_AM_peak = selected_am
-                        selected_item.confirmed_PM_peak = selected_pm
-                        review_transition = _sync_batch_workflow_from_state(
-                            batch_uploads=batch_uploads,
-                            mapping_preset=loaded_batch_preset,
-                            movement_code_scheme=batch_mapping_scheme,
-                            metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
-                            export_mode=batch_export_mode,
+                        batch_draft_peaks[selected_item.folder_name] = {"AM": draft_am, "PM": draft_pm}
+                        confirm_review = st.button(
+                            "Confirm Peak Review",
+                            type="primary",
+                            disabled=not (draft_am and draft_pm),
+                            key=f"batch_confirm_peak_review_{batch_review_version}_{selected_item.folder_name}",
                         )
-                        if review_changed and not review_transition.export_invalidated:
-                            _mark_batch_export_stale_now()
+                        if confirm_review:
+                            _confirm_batch_peak_review(selected_item.folder_name, draft_am, draft_pm)
+                            _sync_batch_workflow_from_state(
+                                batch_uploads=batch_uploads,
+                                mapping_preset=loaded_batch_preset,
+                                movement_code_scheme=batch_mapping_scheme,
+                                metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                                export_mode=batch_export_mode,
+                            )
+                            _flash_and_rerun("Peak Review confirmed for this file.")
                     else:
                         _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak ของไฟล์นี้", "warning")
                 if batch_analysis.has_failures:
@@ -6156,7 +6302,7 @@ def _run_streamlit_app() -> None:
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             no_successful_files = not batch_analysis or not batch_analysis.successful_items
-            peaks_ready = bool(batch_analysis and reviewed_peak_values_complete(batch_analysis))
+            peaks_ready = bool(batch_analysis and batch_analysis.successful_items) and reviewed_peak_values_complete(batch_analysis)
             output_stems_valid = all(str(row.get("output_stem", "")).strip() for row in st.session_state.get("tmc_batch_file_metadata_table") or [])
             v2_batch_template_mode_blocked = (
                 _is_v2_scheme(batch_mapping_scheme)
@@ -6192,7 +6338,7 @@ def _run_streamlit_app() -> None:
                 set_active_tab("Export")
                 block_reason = batch_zip_generation_block_reason(
                     has_successful_files=bool(batch_analysis.successful_items),
-                    peaks_ready=reviewed_peak_values_complete(batch_analysis),
+                    peaks_ready=bool(batch_analysis.successful_items) and reviewed_peak_values_complete(batch_analysis),
                     batch_stale=bool(st.session_state.get("tmc_batch_stale")),
                 )
                 if block_reason:
@@ -6215,7 +6361,7 @@ def _run_streamlit_app() -> None:
                     metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
                     shared_setup=setup,
                     export_mode=batch_export_mode,
-                    confirmed_peaks=st.session_state.get("tmc_batch_confirmed_peaks") or {},
+                    confirmed_peaks=st.session_state.get(BATCH_CONFIRMED_PEAKS_STATE_KEY) or {},
                 )
                 set_active_tab("Export")
                 _flash_and_rerun("สร้าง Batch ZIP เสร็จแล้ว")
@@ -6452,27 +6598,44 @@ def _run_streamlit_app() -> None:
                         pm_peak_label = st.selectbox("ช่วงที่กำหนด PM", option_labels, index=pm_index, key="pm_peak_period_select")
                     confirmed_am_start, confirmed_am_end = _selected_interval(interval_options, am_peak_label)
                     confirmed_pm_start, confirmed_pm_end = _selected_interval(interval_options, pm_peak_label)
-                    previous_confirmed = (
-                        st.session_state.get("tmc_confirmed_am_peak_start"),
-                        st.session_state.get("tmc_confirmed_am_peak_end"),
-                        st.session_state.get("tmc_confirmed_pm_peak_start"),
-                        st.session_state.get("tmc_confirmed_pm_peak_end"),
+                    draft_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
+                    previous_confirmed_state = _peak_value_payload(_confirmed_peaks_from_state())
+                    if _peak_values_complete(previous_confirmed_state):
+                        _render_alert(
+                            "Draft Peak changes are not applied until you press Confirm Peak Review.",
+                            "warning"
+                            if draft_confirmed
+                            != (
+                                previous_confirmed_state.get("am_peak_start"),
+                                previous_confirmed_state.get("am_peak_end"),
+                                previous_confirmed_state.get("pm_peak_start"),
+                                previous_confirmed_state.get("pm_peak_end"),
+                            )
+                            else "info",
+                        )
+                    else:
+                        _render_alert("Suggested Peaks are drafts until you press Confirm Peak Review.", "info")
+                    confirm_review = st.button(
+                        "Confirm Peak Review",
+                        type="primary",
+                        disabled=not all(draft_confirmed),
+                        key="confirm_single_peak_review",
                     )
-                    current_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
-                    st.session_state["tmc_confirmed_am_peak_start"] = confirmed_am_start
-                    st.session_state["tmc_confirmed_am_peak_end"] = confirmed_am_end
-                    st.session_state["tmc_confirmed_pm_peak_start"] = confirmed_pm_start
-                    st.session_state["tmc_confirmed_pm_peak_end"] = confirmed_pm_end
-                    review_transition = _sync_single_workflow_from_state(
-                        source_bytes=file_bytes if uploaded_file is not None else None,
-                        source_file_name=uploaded_file.name if uploaded_file is not None else None,
-                        export_mode=export_mode,
-                    )
-                    export_invalidated = review_transition.export_invalidated or (
-                        previous_confirmed != current_confirmed and _clear_single_export()
-                    )
-                    if export_invalidated:
-                        _flash_and_rerun("Peak เปลี่ยนแปลงแล้ว กรุณาสร้างรายงานใหม่")
+                    if confirm_review:
+                        _confirm_single_peak_review(
+                            (confirmed_am_start, confirmed_am_end),
+                            (confirmed_pm_start, confirmed_pm_end),
+                        )
+                        _sync_single_workflow_from_state(
+                            source_bytes=file_bytes if uploaded_file is not None else None,
+                            source_file_name=uploaded_file.name if uploaded_file is not None else None,
+                            export_mode=export_mode,
+                        )
+                        _flash_and_rerun("Peak Review confirmed. Analysis remains current.")
+                    confirmed_am_start = previous_confirmed_state.get("am_peak_start", "")
+                    confirmed_am_end = previous_confirmed_state.get("am_peak_end", "")
+                    confirmed_pm_start = previous_confirmed_state.get("pm_peak_start", "")
+                    confirmed_pm_end = previous_confirmed_state.get("pm_peak_end", "")
                     confirmed_am_label = f"{confirmed_am_start}-{confirmed_am_end}" if confirmed_am_start and confirmed_am_end else ""
                     confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
                     _render_metric_strip(
