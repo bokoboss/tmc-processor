@@ -12,9 +12,10 @@ This package records the UX-3 implementation and qualification evidence. It does
 - Authoritative remote: 'https://github.com/bokoboss/tmc-processor'
 - Branch: 'codex/ux-3-explicit-peak-review'
 - Baseline 'main' / 'origin/main': 'aabc6a65c478a8bc6e86e247f3ab30272d2d0849'
-- Implementation commit: 'eb918ec4cfbb157269e191bf71da927e7dc3aba8'
-- Final implementation HEAD for this validation record: 'eb918ec4cfbb157269e191bf71da927e7dc3aba8'
-- Working tree at implementation validation: clean before this evidence document was added
+- Implementation commit: 'e9aa8dcf1b15da24bba3b6ffc5f6e6bb89f73327'
+- Final implementation HEAD for this validation record: 'e9aa8dcf1b15da24bba3b6ffc5f6e6bb89f73327'
+- PR/evidence branch HEAD before this metadata follow-up: 'efd113aa666ee8e744d5795e3b9fd107b1d9a9f8'
+- Working tree: clean after the committed evidence updates
 - Qualified runtime: 'C:\MyRD\tmc-processor-public\.venv\Scripts\python.exe' — Python 3.12.10
 - Python 3.14 was not used.
 
@@ -38,7 +39,7 @@ Additional qualification commands included direct protected-workbook Batch analy
 
 ## Changed files and diff summary
 
-Commit 'eb918ec' changed seven files: 'app.py' (+345/-107), 'src/tmc_processor/batch.py' (+20), the existing Batch/effective-export/setup/workflow tests, and new 'tests/test_explicit_peak_review.py' (216 lines). The implementation keeps the existing peak mathematics, mapping model, QC model, export surface, Project Session schema, and WorkflowState authority.
+Commit 'e9aa8dc' changed seven files: 'app.py' (+345/-107), 'src/tmc_processor/batch.py' (+20), the existing Batch/effective-export/setup/workflow tests, and new 'tests/test_explicit_peak_review.py' (216 lines). The implementation keeps the existing peak mathematics, mapping model, QC model, export surface, Project Session schema, and WorkflowState authority.
 
 ## Implementation summary
 
@@ -149,9 +150,12 @@ Native Excel COM/template behavior was therefore not executable on this machine 
 
 ## PR and CI
 
-- Pull request: pending push/open operation at the time this evidence file was authored.
-- Required PR body marker: 'Closes #6'.
-- GitHub CI status/run: pending PR creation.
+- Pull request: [#19](https://github.com/bokoboss/tmc-processor/pull/19), open and non-draft; no merge performed.
+- PR head: 'efd113aa666ee8e744d5795e3b9fd107b1d9a9f8'.
+- Required PR body marker: 'Closes #6' — present.
+- GitHub workflow: [CI run 35508116658](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658) — completed successfully.
+- [pytest (Python 3.10)](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658/job/106071237253) — success.
+- [pytest (Python 3.12)](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658/job/106071237243) — success.
 
 ## Known limitations and scope
 
