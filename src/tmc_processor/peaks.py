@@ -18,6 +18,7 @@ from .time_utils import minutes_to_time, time_to_minutes
 
 PEAK_SELECTION_AUTO = "auto_suggested"
 PEAK_SELECTION_USER_CONFIRMED = "user_confirmed"
+PEAK_SELECTION_USER_CONFIRMED_BATCH = "user_confirmed_batch"
 PEAK_SELECTION_TEMPLATE_DEFAULT = "template_default"
 
 PEAK_SETUP_KEYS = {
