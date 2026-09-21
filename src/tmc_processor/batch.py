@@ -27,6 +27,7 @@ from .mapping_preset import (
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, setup_with_metadata
 from .movement_scheme import MOVEMENT_SCHEME_V1, MOVEMENT_SCHEME_V2, normalize_movement_code_scheme
 from .pipeline import ProcessingResult, process_tmc, process_tmc_dry_run_v2
+from .peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED_BATCH
 from .session import build_project_session, session_to_json_bytes
 from .summaries import hourly_movement_pcu, vehicle_composition_report
 from .time_utils import hourly_interval_options
@@ -695,6 +696,7 @@ def _process_one_file(
     generated_at: str,
     use_template_report_layout: bool,
     use_excel_com_native_charts: bool,
+    peak_selection_source: str = PEAK_SELECTION_USER_CONFIRMED_BATCH,
     confirmed_peak_periods: dict[str, tuple[str, str]] | None = None,
     suggested_am_peak: str = "",
     suggested_pm_peak: str = "",
@@ -730,7 +732,7 @@ def _process_one_file(
         confirmed_periods = confirmed_peak_periods
     confirmed_setup = {
         **per_file_setup,
-        "peak_selection_source": "user_confirmed_batch",
+        "peak_selection_source": peak_selection_source,
     }
     if "AM" in confirmed_periods:
         confirmed_setup["am_peak_start"], confirmed_setup["am_peak_end"] = confirmed_periods["AM"]
@@ -883,6 +885,7 @@ def _process_one_file_v2(
     export_mode: str,
     generated_at: str,
     confirmed_peak_periods: dict[str, tuple[str, str]],
+    peak_selection_source: str = PEAK_SELECTION_USER_CONFIRMED_BATCH,
     suggested_am_peak: str = "",
     suggested_pm_peak: str = "",
 ) -> tuple[BatchSummaryRow, _BatchFileArtifacts, list[dict[str, str]]]:
@@ -895,7 +898,7 @@ def _process_one_file_v2(
         **setup,
         "movement_code_scheme": MOVEMENT_SCHEME_V2,
         "survey_date_text": item.survey_date_text or str(setup.get("survey_date_text", "") or ""),
-        "peak_selection_source": "user_confirmed_batch",
+        "peak_selection_source": peak_selection_source,
     }
     if "AM" in confirmed_peak_periods:
         per_file_setup["am_peak_start"], per_file_setup["am_peak_end"] = confirmed_peak_periods["AM"]
@@ -1220,6 +1223,7 @@ def generate_batch_zip_from_reviewed_peaks(
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,
     use_excel_com_native_charts: bool = False,
+    peak_selection_source: str = PEAK_SELECTION_USER_CONFIRMED_BATCH,
 ) -> BatchResult:
     """Generate the final Batch ZIP using reviewed per-file peak selections."""
 
@@ -1316,6 +1320,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     peak_windows=peak_windows,
                     export_mode=export_mode,
                     generated_at=analysis.generated_at,
+                    peak_selection_source=peak_selection_source,
                     confirmed_peak_periods=confirmed_periods,
                     suggested_am_peak=item.suggested_AM_peak,
                     suggested_pm_peak=item.suggested_PM_peak,
@@ -1333,6 +1338,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     generated_at=analysis.generated_at,
                     use_template_report_layout=use_template_report_layout,
                     use_excel_com_native_charts=use_excel_com_native_charts,
+                    peak_selection_source=peak_selection_source,
                     confirmed_peak_periods=confirmed_periods,
                     suggested_am_peak=item.suggested_AM_peak,
                     suggested_pm_peak=item.suggested_PM_peak,
@@ -1423,4 +1429,5 @@ def process_batch_files(
         export_mode=export_mode,
         use_template_report_layout=use_template_report_layout,
         use_excel_com_native_charts=use_excel_com_native_charts,
+        peak_selection_source=PEAK_SELECTION_AUTO,
     )

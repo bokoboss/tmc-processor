@@ -34,7 +34,14 @@ from .movement_scheme import (
     parse_approach_movement_code,
 )
 from .pcu import pce_factor_traceability_frame
-from .peaks import PEAK_SELECTION_USER_CONFIRMED, confirmed_peak_periods_from_setup, confirmed_peak_phf, peak_periods_from_frame, resolve_effective_peak_periods
+from .peaks import (
+    PEAK_SELECTION_USER_CONFIRMED,
+    PEAK_SELECTION_USER_CONFIRMED_BATCH,
+    confirmed_peak_periods_from_setup,
+    confirmed_peak_phf,
+    peak_periods_from_frame,
+    resolve_effective_peak_periods,
+)
 from .report_template import (
     DEFAULT_TEMPLATE_MAP_PATH,
     DEFAULT_TEMPLATE_PATH,
@@ -240,9 +247,10 @@ def _peak_value(row: pd.Series | None, column: str) -> Any:
 
 def _resolved_peaks_for_export(setup: dict[str, Any], normalized: pd.DataFrame, peaks: pd.DataFrame) -> pd.DataFrame:
     setup_periods = confirmed_peak_periods_from_setup(setup)
+    selection_source = str(setup.get("peak_selection_source") or "").casefold()
     selected_periods = (
         setup_periods
-        if str(setup.get("peak_selection_source") or "").casefold() == PEAK_SELECTION_USER_CONFIRMED
+        if selection_source in {PEAK_SELECTION_USER_CONFIRMED, PEAK_SELECTION_USER_CONFIRMED_BATCH}
         else {}
     )
     periods, source = resolve_effective_peak_periods(
@@ -255,7 +263,7 @@ def _resolved_peaks_for_export(setup: dict[str, Any], normalized: pd.DataFrame, 
             normalized,
             peak_periods=periods,
             peak_mode=str(setup.get("peak_mode") or DEFAULT_PEAK_MODE),
-            peak_selection_source=source,
+            peak_selection_source=selection_source if selected_periods else source,
         )
     return peaks
 
