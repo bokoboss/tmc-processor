@@ -13,8 +13,9 @@ This package records the UX-3 implementation and qualification evidence. It does
 - Branch: 'codex/ux-3-explicit-peak-review'
 - Baseline 'main' / 'origin/main': 'aabc6a65c478a8bc6e86e247f3ab30272d2d0849'
 - Implementation commit: 'e9aa8dcf1b15da24bba3b6ffc5f6e6bb89f73327'
-- Final implementation HEAD for this validation record: 'e9aa8dcf1b15da24bba3b6ffc5f6e6bb89f73327'
-- PR/evidence branch HEAD before this metadata follow-up: 'efd113aa666ee8e744d5795e3b9fd107b1d9a9f8'
+- Remediation commit: '171988230b00776247fd499ef6e8e884d7aa887b'
+- Final source validation HEAD for this record: '171988230b00776247fd499ef6e8e884d7aa887b'
+- Previous PR HEAD before this focused remediation: 'ce31d3d1fbd086bea9d36462c137e4d62176eedf'
 - Working tree: clean after the committed evidence updates
 - Qualified runtime: 'C:\MyRD\tmc-processor-public\.venv\Scripts\python.exe' — Python 3.12.10
 - Python 3.14 was not used.
@@ -39,7 +40,7 @@ Additional qualification commands included direct protected-workbook Batch analy
 
 ## Changed files and diff summary
 
-Commit 'e9aa8dc' changed seven files: 'app.py' (+345/-107), 'src/tmc_processor/batch.py' (+20), the existing Batch/effective-export/setup/workflow tests, and new 'tests/test_explicit_peak_review.py' (216 lines). The implementation keeps the existing peak mathematics, mapping model, QC model, export surface, Project Session schema, and WorkflowState authority.
+Commit 'e9aa8dc' changed seven files: 'app.py' (+345/-107), 'src/tmc_processor/batch.py' (+20), the existing Batch/effective-export/setup/workflow tests, and new 'tests/test_explicit_peak_review.py' (216 lines). Remediation commit '1719882' changed only 'src/tmc_processor/peaks.py', 'src/tmc_processor/exporter.py', 'src/tmc_processor/batch.py', and 'tests/test_batch.py'. The implementation keeps the existing peak mathematics, mapping model, QC model, export surface, Project Session schema, and WorkflowState authority.
 
 ## Implementation summary
 
@@ -52,6 +53,19 @@ Single and Batch now separate:
 Single confirmation stores AM/PM values and 'peak_selection_source=user_confirmed'. Draft edits do not change confirmed values, effective export values, review fingerprints, or export state. A changed explicit confirmation keeps Analysis current, keeps Review ready, and invalidates the existing export. Reconfirming the same values produces no semantic revision churn.
 
 Batch 'analyze_batch_files()' now leaves successful items at blank confirmed AM/PM values. The Review screen stores per-file drafts and requires an explicit per-file confirmation; no bulk confirm, exception-first queue, or QC-driven automatic acceptance was added. The legacy one-shot 'process_batch_files()' path materializes suggestions only to preserve its pre-review immediate-export API contract; the interactive analysis path remains unconfirmed.
+
+## Reviewer remediation — Batch provenance
+
+The reviewer identified that the compatibility path 'process_batch_files()' materialized Suggested Peaks and then routed them through the reviewed export path with 'peak_selection_source=user_confirmed_batch'. That could falsely claim a human confirmation.
+
+The focused remediation preserves the immediate-export API while passing the existing automatic provenance convention through the one-shot path:
+
+- Explicit interactive Batch confirmation and the default reviewed export use 'user_confirmed_batch' (named 'PEAK_SELECTION_USER_CONFIRMED_BATCH').
+- Legacy automatic one-shot export uses 'auto_suggested' (the existing 'PEAK_SELECTION_AUTO' value).
+- Workbook 'Export_Metadata', Project Session 'peaks', and per-file export summary text now retain the correct source for both paths.
+- The shared exporter recognizes the established Batch explicit value so explicit reviewed Peak periods and provenance are preserved.
+
+No Peak mathematics, WorkflowState architecture, Suggested -> Draft -> Confirmed behavior, UX-4, or UX-5 behavior was changed.
 
 Source, Mapping, PCE, and peak-window semantic changes continue to use the existing WorkflowState invalidation seams. PCE invalidation also clears single confirmed Peak state. Batch review state is cleared on source/mapping/analysis invalidation and remapped with output-stem metadata changes.
 
@@ -89,8 +103,8 @@ Existing workflow contract and adapter tests remain green. Explicit UX-3 tests v
 ## Test and static results
 
 - Baseline: 334 passed.
-- Focused UX-3 command: 130 passed, 2 existing openpyxl drawing warnings.
-- Full suite: **343 passed, 11 warnings** in 3:42.02 on Python 3.12.10.
+- Focused UX-3/remediation command: **131 passed, 2 existing openpyxl drawing warnings**.
+- Full suite: **344 passed, 11 warnings** in 2:53.76 on Python 3.12.10.
 - 'compileall -q app.py src': passed.
 - 'git diff --check': passed. Git emitted only the repository’s existing LF/CRLF normalization warnings for tracked Python files.
 
@@ -151,11 +165,11 @@ Native Excel COM/template behavior was therefore not executable on this machine 
 ## PR and CI
 
 - Pull request: [#19](https://github.com/bokoboss/tmc-processor/pull/19), open and non-draft; no merge performed.
-- PR head: 'efd113aa666ee8e744d5795e3b9fd107b1d9a9f8'.
+- Remediation PR head for this CI record: '171988230b00776247fd499ef6e8e884d7aa887b'.
 - Required PR body marker: 'Closes #6' — present.
-- GitHub workflow: [CI run 35508116658](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658) — completed successfully.
-- [pytest (Python 3.10)](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658/job/106071237253) — success.
-- [pytest (Python 3.12)](https://github.com/bokoboss/tmc-processor/actions/runs/35508116658/job/106071237243) — success.
+- GitHub workflow: [CI run 35615750782](https://github.com/bokoboss/tmc-processor/actions/runs/35615750782) — completed successfully.
+- [pytest (Python 3.10)](https://github.com/bokoboss/tmc-processor/actions/runs/35615750782/job/106385887165) — success.
+- [pytest (Python 3.12)](https://github.com/bokoboss/tmc-processor/actions/runs/35615750782/job/106385887408) — success.
 
 ## Known limitations and scope
 
