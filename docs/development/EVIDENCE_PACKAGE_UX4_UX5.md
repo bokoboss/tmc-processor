@@ -12,7 +12,8 @@ This package records the bounded UX-4/UX-5 implementation cycle. It does not aut
 - Authoritative remote: `https://github.com/bokoboss/tmc-processor`
 - Branch: `codex/ux-4-5-export-batch-closure`
 - Baseline main/origin SHA: `c342c4b9460c2718da50debf8b344895ee6f07f7`
-- Final HEAD: `b1b30bb214f66eb766eabb78e2c3149815f0f33e`
+- Implementation validation HEAD: `b1b30bb214f66eb766eabb78e2c3149815f0f33e`
+- Evidence package commit: `fb4139e348de7f37a58d1d8b6b5a64e0fccbeb25`
 - Qualified runtime: `C:\MyRD\tmc-processor-public\.venv\Scripts\python.exe` — Python 3.12.10
 - Python 3.14 was not used.
 
@@ -64,7 +65,7 @@ The existing Batch, explicit Peak Review, effective export, UI helper, dual-sche
 - Full pytest: `353 passed, 11 warnings` in 2:56. The warnings are existing openpyxl DrawingML warnings.
 - Compile: `.venv\Scripts\python.exe -m compileall -q app.py src` passed.
 - `git diff --check` passed.
-- Final working tree was clean at `b1b30bb214f66eb766eabb78e2c3149815f0f33e`.
+- Final implementation working tree was clean at `b1b30bb214f66eb766eabb78e2c3149815f0f33e`; the evidence package was then committed separately.
 
 ## Focused real-workbook UAT
 
@@ -100,6 +101,6 @@ Safe PNG runtime was qualified in Single and Batch UAT. Native Excel COM/templat
 
 ## PR and CI
 
-- Pull request: pending creation after final validation.
+- Pull request: [#20](https://github.com/bokoboss/tmc-processor/pull/20), opened against `main`.
 - Required PR body markers: `Closes #7` and `Closes #8`.
-- GitHub CI: pending PR creation.
+- GitHub CI: [run 35732150244](https://github.com/bokoboss/tmc-processor/actions/runs/35732150244) passed; both Python 3.10 and Python 3.12 jobs completed successfully.
