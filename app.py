@@ -22,6 +22,7 @@ from tmc_processor.batch import (
     BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH,
     BatchItem,
     analyze_batch_files,
+    batch_review_state,
     batch_analysis_qc_rows,
     batch_folder_name,
     batch_change_invalidates,
@@ -33,8 +34,12 @@ from tmc_processor.batch import (
     batch_selected_file_preview,
     batch_zip_generation_block_reason,
     batch_zip_contents_preview,
+    bulk_accept_clean_files,
+    eligible_clean_batch_items,
+    exclude_batch_item,
     generate_batch_zip_from_reviewed_peaks,
     reviewed_peak_values_complete,
+    restore_batch_item,
     safe_output_stem,
     unique_safe_output_stems,
 )
@@ -109,7 +114,7 @@ from tmc_processor.pcu import (
     pce_factors_equal,
     validate_pce_factors,
 )
-from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED
+from tmc_processor.peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED, PEAK_SELECTION_USER_CONFIRMED_BATCH
 from tmc_processor.pipeline import process_tmc, process_tmc_dry_run_v2
 from tmc_processor.movement_scheme import (
     APPROACH_MOVEMENT_CODES,
@@ -122,7 +127,14 @@ from tmc_processor.movement_scheme import (
     normalize_movement_code_scheme,
 )
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
-from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook_com
+from tmc_processor.exporter import (
+    EXCEL_TEMPLATE_EXPORT_MODE as EXPORTER_EXCEL_TEMPLATE_EXPORT_MODE,
+    SAFE_PNG_EXPORT_MODE as EXPORTER_SAFE_PNG_EXPORT_MODE,
+    STANDARD_REPORT_EXPORT_MODE,
+    export_v2_generated_workbook,
+    export_v2_template_workbook_com,
+    standard_report_export_decision,
+)
 from tmc_processor.session import (
     PROJECT_SESSION_MIME,
     ProjectSessionError,
@@ -234,6 +246,9 @@ SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY = "tmc_confirmed_peak_selection_source"
 BATCH_CONFIRMED_PEAKS_STATE_KEY = "tmc_batch_confirmed_peaks"
 BATCH_DRAFT_PEAKS_STATE_KEY = "tmc_batch_draft_peaks"
 BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY = "tmc_batch_peak_selection_source"
+BATCH_DISPOSITION_STATE_KEY = "tmc_batch_file_dispositions"
+EXPORT_PREFERENCE_STANDARD = STANDARD_REPORT_EXPORT_MODE
+EXPORT_PREFERENCE_ADVANCED = "Advanced export options"
 WORKFLOW_EXPORT_METADATA_FIELDS = (
     "project_name",
     "tmc_id",
@@ -1041,6 +1056,7 @@ def _batch_workflow_revisions(
     export_mode: str | None,
     confirmed_peaks: dict[str, dict[str, str]] | None,
     analysis_present: bool,
+    dispositions: dict[str, dict[str, str]] | None = None,
 ) -> WorkflowRevisions:
     content_revisions = tuple(source_fingerprint(file.getvalue()) for file in uploads or [])
     source = semantic_fingerprint(content_revisions) if content_revisions else None
@@ -1059,7 +1075,9 @@ def _batch_workflow_revisions(
             peak_windows=peak_windows,
             movement_code_scheme=movement_code_scheme,
         ),
-        review_decision=review_decision_fingerprint(_batch_review_decision_payload(confirmed_peaks)),
+        review_decision=review_decision_fingerprint(
+            _batch_review_decision_payload(confirmed_peaks, dispositions or _batch_dispositions_from_state())
+        ),
         export_config=export_config_fingerprint(
             _workflow_export_payload(
                 setup,
@@ -1095,6 +1113,73 @@ def _clear_batch_review_state() -> None:
     st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = {}
     st.session_state[BATCH_DRAFT_PEAKS_STATE_KEY] = {}
     st.session_state[BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY] = {}
+    st.session_state[BATCH_DISPOSITION_STATE_KEY] = {}
+
+
+def _batch_dispositions_from_state() -> dict[str, dict[str, str]]:
+    return {
+        str(folder): dict(values or {})
+        for folder, values in (st.session_state.get(BATCH_DISPOSITION_STATE_KEY) or {}).items()
+    }
+
+
+def _sync_batch_dispositions_to_analysis() -> None:
+    analysis = st.session_state.get("tmc_batch_analysis_result")
+    dispositions = _batch_dispositions_from_state()
+    for item in list(getattr(analysis, "items", []) or []):
+        values = dispositions.get(str(item.folder_name), {})
+        if values.get("disposition") == "excluded":
+            item.disposition = "excluded"
+            item.review_state = "excluded"
+            item.exclusion_reason = str(values.get("reason") or "Excluded by operator.")
+        elif getattr(item, "disposition", "") == "excluded":
+            restore_batch_item(item)
+
+
+def _exclude_batch_file(folder_name: str, reason: str) -> bool:
+    analysis = st.session_state.get("tmc_batch_analysis_result")
+    item = next(
+        (candidate for candidate in list(getattr(analysis, "items", []) or []) if str(candidate.folder_name) == str(folder_name)),
+        None,
+    )
+    if item is None or item.status != "success":
+        return False
+    previous = batch_review_state(item)
+    exclude_batch_item(item, reason)
+    st.session_state.setdefault(BATCH_DISPOSITION_STATE_KEY, {})[str(folder_name)] = {
+        "disposition": "excluded",
+        "reason": item.exclusion_reason,
+    }
+    changed = previous != "excluded"
+    if changed:
+        _mark_batch_export_stale_now()
+    return changed
+
+
+def _restore_batch_file(folder_name: str) -> bool:
+    analysis = st.session_state.get("tmc_batch_analysis_result")
+    item = next(
+        (candidate for candidate in list(getattr(analysis, "items", []) or []) if str(candidate.folder_name) == str(folder_name)),
+        None,
+    )
+    if item is None or getattr(item, "disposition", "") != "excluded":
+        return False
+    restore_batch_item(item)
+    st.session_state.setdefault(BATCH_DISPOSITION_STATE_KEY, {}).pop(str(folder_name), None)
+    _mark_batch_export_stale_now()
+    return True
+
+
+def _bulk_accept_clean_batch_files() -> list[str]:
+    analysis = st.session_state.get("tmc_batch_analysis_result")
+    accepted = eligible_clean_batch_items(analysis)
+    accepted_names: list[str] = []
+    for item in accepted:
+        if _confirm_batch_peak_review(item.folder_name, item.suggested_AM_peak, item.suggested_PM_peak):
+            accepted_names.append(item.file_name)
+    if accepted_names:
+        _mark_batch_export_stale_now()
+    return accepted_names
 
 
 def _apply_workflow_transition(mode: str, transition: WorkflowTransition) -> None:
@@ -3285,6 +3370,24 @@ def _default_batch_export_mode(excel_com_status: ExcelComStatus, movement_code_s
     return BATCH_SAFE_PNG_EXPORT_LABEL if _is_v2_scheme(movement_code_scheme) or not excel_com_status.available else BATCH_EXCEL_TEMPLATE_EXPORT_LABEL
 
 
+def _standard_report_decision(
+    excel_com_status: ExcelComStatus,
+    *,
+    template_compatible: bool = True,
+) -> object:
+    """Resolve the normal report outcome without exposing backend terminology."""
+
+    return standard_report_export_decision(
+        excel_com_available=bool(getattr(excel_com_status, "available", False)),
+        template_compatible=template_compatible,
+        availability_detail=str(getattr(excel_com_status, "reason", "") or ""),
+    )
+
+
+def _standard_report_backend_mode(decision: object) -> str:
+    return EXCEL_TEMPLATE_EXPORT_MODE if bool(getattr(decision, "use_template_report_layout", False)) else SAFE_PNG_EXPORT_MODE
+
+
 def _coerce_export_mode(value: str | None, options: list[str], fallback: str) -> str:
     if value in options:
         return str(value)
@@ -4338,6 +4441,7 @@ def _stable_batch_confirmed_peaks(
 
 def _batch_review_decision_payload(
     confirmed_peaks: dict[str, dict[str, str]] | None,
+    dispositions: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Keep only complete per-file confirmations in the semantic revision."""
 
@@ -4348,6 +4452,12 @@ def _batch_review_decision_payload(
         pm_peak = str(values.get("PM") or "")
         if am_peak and pm_peak:
             payload[str(folder)] = {"AM": am_peak, "PM": pm_peak}
+    for folder, values in (dispositions or {}).items():
+        if str((values or {}).get("disposition") or "").casefold() == "excluded":
+            payload[str(folder)] = {
+                "disposition": "excluded",
+                "reason": str((values or {}).get("reason") or ""),
+            }
     return payload
 
 
@@ -4372,6 +4482,8 @@ def _confirm_batch_peak_review(folder_name: str, am_peak: str, pm_peak: str) -> 
         if str(getattr(item, "folder_name", "")) == folder_name:
             item.confirmed_AM_peak = am_peak
             item.confirmed_PM_peak = pm_peak
+            item.review_state = "confirmed"
+            item.peak_selection_source = PEAK_SELECTION_USER_CONFIRMED_BATCH
             break
     return changed
 
@@ -4495,12 +4607,13 @@ def _sync_batch_analysis_metadata_from_state() -> None:
     for old_folder, values in confirmed.items():
         remapped_confirmed[old_to_new_folders.get(str(old_folder), str(old_folder))] = values
     st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = remapped_confirmed
-    for state_key in (BATCH_DRAFT_PEAKS_STATE_KEY, BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY):
+    for state_key in (BATCH_DRAFT_PEAKS_STATE_KEY, BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY, BATCH_DISPOSITION_STATE_KEY):
         values = st.session_state.get(state_key) or {}
         st.session_state[state_key] = {
             old_to_new_folders.get(str(old_folder), str(old_folder)): value
             for old_folder, value in values.items()
         }
+    _sync_batch_dispositions_to_analysis()
     selected_review_file = str(st.session_state.get("tmc_batch_selected_review_file") or "")
     if selected_review_file in old_to_new_folders:
         st.session_state["tmc_batch_selected_review_file"] = old_to_new_folders[selected_review_file]
@@ -4582,6 +4695,8 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                     "output_stem": item.output_stem,
                     "movement_code_scheme": getattr(item, "movement_code_scheme", MOVEMENT_SCHEME_V1),
                     "status": item.status,
+                    "review_state": batch_review_state(item),
+                    "disposition_reason": getattr(item, "exclusion_reason", ""),
                     "mapping_status": item.mapping_status,
                     "AM suggested": item.suggested_AM_peak,
                     "PM suggested": item.suggested_PM_peak,
@@ -4604,6 +4719,8 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
                 "output_stem": row.output_stem,
                 "movement_code_scheme": getattr(row, "movement_code_scheme", MOVEMENT_SCHEME_V1),
                 "status": row.status,
+                "review_state": getattr(row, "review_state", "") or batch_review_state(row),
+                "disposition_reason": getattr(row, "disposition_reason", ""),
                 "mapping_status": "",
                 "AM suggested": row.suggested_AM_peak,
                 "PM suggested": row.suggested_PM_peak,
@@ -4625,7 +4742,7 @@ def _batch_status_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
 def _batch_status_display_frame(batch_analysis, batch_result=None) -> pd.DataFrame:
     display = _batch_status_frame(batch_analysis, batch_result)
     if not display.empty:
-        for column in ("status", "mapping_status", "export_status"):
+        for column in ("status", "review_state", "mapping_status", "export_status"):
             if column in display.columns:
                 display[column] = display[column].map(_display_status_label)
         display = _format_display_columns(display)
@@ -4659,6 +4776,8 @@ def _batch_peak_review_display_frame(batch_analysis) -> pd.DataFrame:
         "file_name",
         "survey_date_text",
         "status",
+        "review_state",
+        "disposition_reason",
         "AM suggested",
         "PM suggested",
         "AM confirmed",
@@ -4698,6 +4817,9 @@ def _batch_qc_rows_for_ui(batch_analysis, batch_result=None) -> pd.DataFrame:
 def _display_status_label(value: object) -> str:
     text = str(value or "").strip()
     labels = {
+        "needs_review": "Needs review",
+        "confirmed": "Confirmed",
+        "excluded": "Excluded",
         "success": "สำเร็จ",
         "failed": "ไม่สำเร็จ",
         "error": "ผิดพลาด",
@@ -4786,6 +4908,7 @@ def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
             "total_files": 0,
             "successful_files": 0,
             "failed_files": 0,
+            "excluded_files": 0,
             "QC_errors": 0,
             "QC_warnings": 0,
             "QC_info": 0,
@@ -4801,6 +4924,9 @@ def _batch_summary_counts(status_frame: pd.DataFrame) -> dict[str, int]:
         "total_files": int(len(status_frame)),
         "successful_files": int((statuses == "success").sum()),
         "failed_files": int((statuses == "failed").sum()),
+        "excluded_files": int(
+            ((statuses == "excluded") | (status_frame.get("review_state", pd.Series(index=status_frame.index)).astype(str).str.casefold() == "excluded")).sum()
+        ),
         "QC_errors": _sum_column("QC errors"),
         "QC_warnings": _sum_column("QC warnings"),
         "QC_info": _sum_column("QC info"),
@@ -5125,6 +5251,7 @@ def _run_streamlit_app() -> None:
     st.session_state.setdefault(BATCH_CONFIRMED_PEAKS_STATE_KEY, {})
     st.session_state.setdefault(BATCH_DRAFT_PEAKS_STATE_KEY, {})
     st.session_state.setdefault(BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY, {})
+    st.session_state.setdefault(BATCH_DISPOSITION_STATE_KEY, {})
     st.session_state.setdefault("tmc_batch_export_result", None)
     st.session_state.setdefault("tmc_batch_export_mode", None)
     _ensure_pce_factor_state()
@@ -6121,6 +6248,7 @@ def _run_streamlit_app() -> None:
                 st.session_state[BATCH_CONFIRMED_PEAKS_STATE_KEY] = {}
                 st.session_state[BATCH_DRAFT_PEAKS_STATE_KEY] = {}
                 st.session_state[BATCH_CONFIRMED_PEAK_SOURCE_STATE_KEY] = {}
+                st.session_state[BATCH_DISPOSITION_STATE_KEY] = {}
                 analyzed_batch_revisions = _batch_workflow_revisions(
                     uploads=batch_uploads,
                     mapping_preset=loaded_batch_preset,
@@ -6160,7 +6288,9 @@ def _run_streamlit_app() -> None:
                     item.confirmed_AM_peak = stored.get("AM", item.confirmed_AM_peak)
                     item.confirmed_PM_peak = stored.get("PM", item.confirmed_PM_peak)
                 successful_items = batch_analysis.successful_items
-                confirmed_count = sum(1 for item in successful_items if item.confirmed_AM_peak and item.confirmed_PM_peak)
+                _sync_batch_dispositions_to_analysis()
+                confirmed_count = sum(1 for item in successful_items if batch_review_state(item) == "confirmed")
+                excluded_count = sum(1 for item in successful_items if batch_review_state(item) == "excluded")
                 successful_count = len(successful_items)
                 status_items = [
                     ("ไฟล์ทั้งหมด", f"{len(batch_analysis.items):,}", "ไฟล์", ""),
@@ -6168,11 +6298,56 @@ def _run_streamlit_app() -> None:
                     ("ไฟล์ไม่สำเร็จ", f"{sum(1 for item in batch_analysis.items if item.status == 'failed'):,}", "ไฟล์", "ไม่ต้องกำหนด Peak"),
                 ]
                 _render_metric_strip(status_items, columns=3)
-                if successful_count and confirmed_count == successful_count:
+                if excluded_count:
+                    _render_alert(f"{excluded_count} successful file(s) intentionally excluded from Batch export.", "info")
+                if successful_count and confirmed_count + excluded_count == successful_count:
                     _render_alert("กำหนด Peak ครบแล้ว พร้อมส่งออก Batch", "success")
                 elif successful_count:
                     _render_alert("ยังมีไฟล์ที่ต้องกำหนด Peak", "warning")
-                st.dataframe(_batch_peak_review_display_frame(batch_analysis), width="stretch", hide_index=True)
+                review_filter = st.radio(
+                    "Batch review queue",
+                    options=["Needs review", "All files"],
+                    index=0,
+                    horizontal=True,
+                    key="tmc_batch_review_filter",
+                    help="Needs review keeps unresolved and failed files visible while confirmed files stay out of the default queue.",
+                )
+                queue_frame = _batch_status_frame(batch_analysis)
+                if review_filter == "Needs review" and not queue_frame.empty:
+                    queue_frame = queue_frame[queue_frame["review_state"].isin(["needs_review", "failed"])]
+                queue_columns = [
+                    "file_name",
+                    "survey_date_text",
+                    "status",
+                    "review_state",
+                    "AM suggested",
+                    "PM suggested",
+                    "AM confirmed",
+                    "PM confirmed",
+                    "QC errors",
+                    "QC warnings",
+                    "QC info",
+                    "disposition_reason",
+                ]
+                st.dataframe(queue_frame[[column for column in queue_columns if column in queue_frame.columns]], width="stretch", hide_index=True)
+                eligible_count = len(eligible_clean_batch_items(batch_analysis))
+                if eligible_count:
+                    st.caption(f"{eligible_count} clean file(s) eligible for explicit bulk acceptance. QC info does not block eligibility.")
+                if st.button(
+                    "Accept suggested Peaks for clean files",
+                    type="primary",
+                    disabled=eligible_count == 0,
+                    key="tmc_batch_bulk_accept_clean",
+                ):
+                    accepted_names = _bulk_accept_clean_batch_files()
+                    _sync_batch_workflow_from_state(
+                        batch_uploads=batch_uploads,
+                        mapping_preset=loaded_batch_preset,
+                        movement_code_scheme=batch_mapping_scheme,
+                        metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
+                        export_mode=batch_export_mode,
+                    )
+                    _flash_and_rerun(f"Accepted suggested Peaks for {len(accepted_names)} clean file(s).")
 
                 if successful_items:
                     review_labels = {f"{item.file_name} ({item.survey_date_text or 'no date'})": item.folder_name for item in successful_items}
@@ -6209,6 +6384,22 @@ def _run_streamlit_app() -> None:
                             columns=3,
                         )
                     _render_section_header("กราฟ PCU รายชั่วโมง", "ใช้ตรวจรูปแบบปริมาณจราจรก่อนกำหนดช่วง Peak")
+                    if getattr(selected_item, "disposition", "") == "excluded":
+                        if st.button("Restore file to Needs review", key=f"restore_batch_file_{selected_item.folder_name}"):
+                            _restore_batch_file(selected_item.folder_name)
+                            _flash_and_rerun("File restored to Needs review.")
+                    else:
+                        exclusion_reason = st.text_input(
+                            "Exclusion reason (required for intentional exclusion)",
+                            key=f"batch_exclusion_reason_{selected_item.folder_name}",
+                        )
+                        if st.button(
+                            "Exclude selected file",
+                            disabled=not exclusion_reason.strip(),
+                            key=f"exclude_batch_file_{selected_item.folder_name}",
+                        ):
+                            _exclude_batch_file(selected_item.folder_name, exclusion_reason.strip())
+                            _flash_and_rerun("File excluded from Batch export.")
                     _render_hourly_pcu_line_chart(
                         selected_item.hourly_movement_pcu,
                         preview["confirmed_AM_peak"] or preview["suggested_AM_peak"] or "",
@@ -6282,23 +6473,48 @@ def _run_streamlit_app() -> None:
             _render_section_header("ส่งออก Batch", "สร้าง Batch ZIP พร้อมรายงานรายไฟล์และ batch_summary.xlsx")
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
             previous_batch_export_mode = st.session_state.get("tmc_batch_export_mode", batch_export_mode)
-            selected_batch_export_mode = st.radio(
-                "โหมดส่งออก Batch",
-                options=batch_export_options,
-                index=batch_export_options.index(
-                    _coerce_export_mode(
-                        previous_batch_export_mode,
-                        batch_export_options,
-                        _default_batch_export_mode(excel_com_status, batch_mapping_scheme),
-                    )
-                ),
-                key="tmc_batch_export_mode_control",
+            batch_export_preference = st.radio(
+                "Batch report outcome",
+                options=[EXPORT_PREFERENCE_STANDARD, EXPORT_PREFERENCE_ADVANCED],
+                index=0 if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD else 1,
                 horizontal=True,
-                help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",
+                key="tmc_batch_export_preference_control",
+                help="Standard report selects native Excel Template when compatible and otherwise uses Safe PNG.",
             )
-            if apply_batch_export_mode_change(selected_batch_export_mode, previous_batch_export_mode):
-                st.rerun()
-            batch_export_mode = selected_batch_export_mode
+            st.session_state["tmc_batch_export_preference"] = batch_export_preference
+            batch_standard_decision = None
+            if batch_export_preference == EXPORT_PREFERENCE_STANDARD:
+                batch_standard_decision = _standard_report_decision(
+                    excel_com_status,
+                    template_compatible=(not _is_v2_scheme(batch_mapping_scheme)),
+                )
+                batch_export_mode = (
+                    BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+                    if batch_standard_decision.use_template_report_layout
+                    else BATCH_SAFE_PNG_EXPORT_MODE
+                )
+                st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {batch_export_mode} selected automatically.")
+                if batch_standard_decision.fallback_notice:
+                    st.warning(batch_standard_decision.fallback_notice)
+            else:
+                with st.expander("Advanced export options", expanded=True):
+                    selected_batch_export_mode = st.radio(
+                        "Backend",
+                        options=batch_export_options,
+                        index=batch_export_options.index(
+                            _coerce_export_mode(
+                                previous_batch_export_mode,
+                                batch_export_options,
+                                _default_batch_export_mode(excel_com_status, batch_mapping_scheme),
+                            )
+                        ),
+                        key="tmc_batch_export_mode_control",
+                        horizontal=True,
+                        help="Explicit backend selection is intended for advanced users and diagnostics.",
+                    )
+                if apply_batch_export_mode_change(selected_batch_export_mode, previous_batch_export_mode):
+                    st.rerun()
+                batch_export_mode = selected_batch_export_mode
             batch_analysis = st.session_state.get("tmc_batch_analysis_result")
             batch_result = st.session_state.get("tmc_batch_export_result")
             no_successful_files = not batch_analysis or not batch_analysis.successful_items
@@ -6458,11 +6674,12 @@ def _run_streamlit_app() -> None:
                         ("ไฟล์ทั้งหมด", f"{counts['total_files']:,}", "ไฟล์", ""),
                         ("สำเร็จ", f"{counts['successful_files']:,}", "ไฟล์", "", "success" if counts["successful_files"] else "รอตรวจ"),
                         ("ล้มเหลว", f"{counts['failed_files']:,}", "ไฟล์", "", "failed" if counts["failed_files"] else "พร้อม"),
+                        ("ถูกยกเว้น", f"{counts['excluded_files']:,}", "ไฟล์", "", "info" if counts["excluded_files"] else "พร้อม"),
                         ("QC ผิดพลาด", f"{counts['QC_errors']:,}", "รายการ", "", "error" if counts["QC_errors"] else "พร้อม"),
                         ("QC เตือน", f"{counts['QC_warnings']:,}", "รายการ", "", "warning" if counts["QC_warnings"] else "พร้อม"),
                         ("QC ข้อมูล", f"{counts['QC_info']:,}", "รายการ", "", "info" if counts["QC_info"] else "พร้อม"),
                     ],
-                    columns=6,
+                    columns=7,
                 )
 
                 _render_section_header("สถานะรายไฟล์", "ตารางตรวจสอบผลวิเคราะห์และความพร้อมส่งออกของแต่ละไฟล์")
@@ -6678,19 +6895,40 @@ def _run_streamlit_app() -> None:
             _render_section_header("ส่งออกรายงาน", "สร้างรายงาน Excel และชุดไฟล์ประกอบสำหรับตรวจสอบย้อนหลัง")
             single_export_options = _single_export_mode_options(excel_com_status)
             previous_export_mode = st.session_state.get("report_export_mode", export_mode)
-            selected_export_mode = st.radio(
-                "โหมดส่งออกรายงาน",
-                options=single_export_options,
-                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, _default_single_export_mode(excel_com_status))),
-                key="report_export_mode_control",
+            standard_decision = None
+            export_preference = st.radio(
+                "Report outcome",
+                options=[EXPORT_PREFERENCE_STANDARD, EXPORT_PREFERENCE_ADVANCED],
+                index=0 if st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD else 1,
+                key="report_export_preference_control",
                 horizontal=True,
-                help="Excel Template Mode รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน. Safe PNG Export Mode ใช้กราฟ PNG แบบคงที่.",
+                help="Standard report selects the validated native Excel Template path when available and uses Safe PNG otherwise.",
             )
-            if apply_single_export_mode_change(selected_export_mode, previous_export_mode):
-                st.rerun()
-            export_mode = selected_export_mode
-            use_template_report_layout = _use_template_layout_for_export(export_mode)
-            use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
+            st.session_state["report_export_preference"] = export_preference
+            if export_preference == EXPORT_PREFERENCE_STANDARD:
+                template_compatible = Path(DEFAULT_TEMPLATE_PATH).exists() and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+                standard_decision = _standard_report_decision(excel_com_status, template_compatible=template_compatible)
+                export_mode = _standard_report_backend_mode(standard_decision)
+                use_template_report_layout = bool(standard_decision.use_template_report_layout)
+                use_excel_com_native_charts = bool(standard_decision.use_excel_com_native_charts)
+                st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {export_mode} selected automatically.")
+                if standard_decision.fallback_notice:
+                    st.warning(standard_decision.fallback_notice)
+            else:
+                with st.expander("Advanced export options", expanded=True):
+                    selected_export_mode = st.radio(
+                        "Backend",
+                        options=single_export_options,
+                        index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, _default_single_export_mode(excel_com_status))),
+                        key="report_export_mode_control",
+                        horizontal=True,
+                        help="Explicit backend selection is intended for advanced users and diagnostics.",
+                    )
+                if apply_single_export_mode_change(selected_export_mode, previous_export_mode):
+                    st.rerun()
+                export_mode = selected_export_mode
+                use_template_report_layout = _use_template_layout_for_export(export_mode)
+                use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
             is_v2_single_result = _is_v2_result(result)
             if pce_results_stale:
                 _render_alert("ผลลัพธ์เดิมไม่ตรงกับค่า PCE ปัจจุบัน ระบบปิดการส่งออกไว้จนกว่าจะประมวลผลใหม่", "warning")
@@ -6812,6 +7050,9 @@ def _run_streamlit_app() -> None:
                                 export_mode=export_mode,
                                 source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
                                 generated_at=export_generated_at,
+                                export_mode_requested=(STANDARD_REPORT_EXPORT_MODE if standard_decision else export_mode),
+                                export_mode_used=export_mode,
+                                export_fallback_notice=getattr(standard_decision, "fallback_notice", "") if standard_decision else "",
                             )
                         for warning in export_warnings:
                             message = str(warning.message)

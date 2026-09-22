@@ -78,6 +78,9 @@ def process_tmc(
     export_mode: str | None = None,
     source_file_name: str | None = None,
     generated_at: str | None = None,
+    export_mode_requested: str | None = None,
+    export_mode_used: str | None = None,
+    export_fallback_notice: str = "",
 ) -> ProcessingResult:
     detected_sheets = detected_sheets or list(raw_sheets)
     movement_code_scheme = str(setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1)
@@ -161,6 +164,9 @@ def process_tmc(
             export_mode=export_mode,
             source_file_name=source_file_name,
             generated_at=generated_at,
+            export_mode_requested=export_mode_requested,
+            export_mode_used=export_mode_used,
+            fallback_notice=export_fallback_notice,
         )
     return ProcessingResult(normalized, qc, hourly, movement, vehicle, peaks, workbook_bytes, selected_pce_factors)
 

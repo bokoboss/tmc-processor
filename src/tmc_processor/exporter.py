@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from io import BytesIO
@@ -109,6 +110,51 @@ V2_TEMPLATE_COM_EXPORT_NOTES = (
     "and preserves Excel-authored charts, drawings, shapes, lines, arrows, formulas, and page layout."
 )
 
+STANDARD_REPORT_EXPORT_MODE = "Standard report — Recommended"
+EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
+SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
+BATCH_SAFE_PNG_EXPORT_MODE = SAFE_PNG_EXPORT_MODE
+
+
+@dataclass(frozen=True)
+class StandardReportExportDecision:
+    """Resolved backend for the operator-facing Standard report choice."""
+
+    requested_mode: str
+    backend_mode: str
+    use_template_report_layout: bool
+    use_excel_com_native_charts: bool
+    fallback_notice: str = ""
+
+
+def standard_report_export_decision(
+    *,
+    excel_com_available: bool,
+    template_compatible: bool,
+    availability_detail: str = "",
+) -> StandardReportExportDecision:
+    """Choose the safest validated backend for the Standard report outcome."""
+
+    if excel_com_available and template_compatible:
+        return StandardReportExportDecision(
+            requested_mode=STANDARD_REPORT_EXPORT_MODE,
+            backend_mode=EXCEL_TEMPLATE_EXPORT_MODE,
+            use_template_report_layout=True,
+            use_excel_com_native_charts=True,
+        )
+
+    detail = str(availability_detail or "").strip()
+    reason = detail or (
+        "Excel COM is unavailable" if not excel_com_available else "the selected Excel template is not compatible"
+    )
+    return StandardReportExportDecision(
+        requested_mode=STANDARD_REPORT_EXPORT_MODE,
+        backend_mode=SAFE_PNG_EXPORT_MODE,
+        use_template_report_layout=False,
+        use_excel_com_native_charts=False,
+        fallback_notice=f"Standard report used Safe PNG fallback: {reason}.",
+    )
+
 
 def _export_metadata_frame(
     setup: dict[str, Any],
@@ -117,6 +163,9 @@ def _export_metadata_frame(
     source_file_name: str | None = None,
     generated_at: datetime | str | None = None,
     template_version: str = TEMPLATE_VERSION,
+    export_mode_requested: str | None = None,
+    export_mode_used: str | None = None,
+    fallback_notice: str = "",
 ) -> pd.DataFrame:
     metadata_values = metadata_cell_values(setup)
     rows = [
@@ -124,6 +173,9 @@ def _export_metadata_frame(
         ("template_version", template_version),
         ("generated_at", generated_timestamp_text(generated_at)),
         ("export_mode", export_mode or ""),
+        ("export_mode_requested", export_mode_requested or export_mode or ""),
+        ("export_mode_used", export_mode_used or export_mode or ""),
+        ("export_fallback_notice", fallback_notice or ""),
         ("source_file_name", Path(str(source_file_name or "")).name),
         ("report_title", metadata_values.get("report_title", "")),
         ("project", metadata_values.get("project", "")),
@@ -149,6 +201,19 @@ def _export_metadata_frame(
     return pd.DataFrame(rows, columns=["field", "value"])
 
 
+def _set_export_metadata(frame: pd.DataFrame, **values: str) -> None:
+    """Update export provenance in-place after runtime backend resolution."""
+
+    if frame.empty or "field" not in frame.columns or "value" not in frame.columns:
+        return
+    for field, value in values.items():
+        matches = frame.index[frame["field"].astype(str) == field]
+        if len(matches):
+            frame.loc[matches[0], "value"] = value
+        else:
+            frame.loc[len(frame)] = {"field": field, "value": value}
+
+
 def template_paths_for_movement_scheme(movement_code_scheme: str) -> tuple[Path, Path]:
     """Return the workbook/map pair for a supported movement-code scheme."""
 
@@ -171,6 +236,8 @@ def _v2_export_metadata_frame(
     excel_template_mode_supported: bool = False,
     native_template_export_supported: bool = False,
     limitation_notes: str = V2_EXPORT_LIMITATION_NOTES,
+    export_mode_requested: str | None = None,
+    fallback_notice: str = "",
 ) -> pd.DataFrame:
     metadata = _export_metadata_frame(
         setup,
@@ -178,6 +245,9 @@ def _v2_export_metadata_frame(
         source_file_name=source_file_name,
         generated_at=generated_at,
         template_version=template_version,
+        export_mode_requested=export_mode_requested,
+        export_mode_used=export_mode,
+        fallback_notice=fallback_notice,
     )
     extra = pd.DataFrame(
         [
@@ -1607,6 +1677,9 @@ def export_workbook(
     source_file_name: str | None = None,
     generated_at: datetime | str | None = None,
     template_version: str = TEMPLATE_VERSION,
+    export_mode_requested: str | None = None,
+    export_mode_used: str | None = None,
+    fallback_notice: str = "",
 ) -> bytes:
     setup = setup_with_metadata(setup)
     if normalize_movement_code_scheme(setup.get("movement_code_scheme")) == MOVEMENT_SCHEME_V2:
@@ -1626,6 +1699,9 @@ def export_workbook(
             source_file_name=source_file_name,
             generated_at=generated_at,
             template_version=template_version,
+            export_mode_requested=export_mode_requested,
+            export_mode_used=export_mode_used,
+            fallback_notice=fallback_notice,
         ),
         "Setup": _setup_frame(setup),
         "PCE_Factors": pce_factor_traceability_frame(pce_factors),
@@ -1658,12 +1734,24 @@ def export_workbook(
                 template_map_path=template_map_path,
             )
         except ExcelComUnavailable as exc:
+            fallback_notice = f"Excel COM unavailable; used Safe PNG fallback: {exc}"
+            _set_export_metadata(
+                sheets["Export_Metadata"],
+                export_mode_used=SAFE_PNG_EXPORT_MODE,
+                export_fallback_notice=fallback_notice,
+            )
             warnings.warn(
                 f"Excel COM unavailable; falling back to safe openpyxl export with PNG charts: {exc}",
                 RuntimeWarning,
                 stacklevel=2,
             )
         except Exception as exc:
+            fallback_notice = f"Excel COM native-chart export failed; used Safe PNG fallback: {exc}"
+            _set_export_metadata(
+                sheets["Export_Metadata"],
+                export_mode_used=SAFE_PNG_EXPORT_MODE,
+                export_fallback_notice=fallback_notice,
+            )
             warnings.warn(
                 f"Excel COM native-chart export failed after COM was available; falling back to safe openpyxl export with PNG charts: {exc}",
                 RuntimeWarning,
@@ -1685,6 +1773,12 @@ def export_workbook(
                 create_excel_tables=create_excel_tables,
             )
         except (OSError, ValueError, KeyError, ReportTemplateUnavailable) as exc:
+            fallback_notice = f"Excel template path was unavailable; used Safe PNG fallback: {exc}"
+            _set_export_metadata(
+                sheets["Export_Metadata"],
+                export_mode_used=SAFE_PNG_EXPORT_MODE,
+                export_fallback_notice=fallback_notice,
+            )
             warnings.warn(
                 f"Template report layout unavailable; falling back to generated report sheet: {exc}",
                 RuntimeWarning,
