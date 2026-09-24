@@ -939,6 +939,15 @@ def apply_single_export_mode_change(selected_mode: str, previous_mode: str | Non
     return True
 
 
+def _apply_standard_single_export_mode(decision: object, previous_mode: str | None) -> tuple[str, bool]:
+    """Persist Standard report's resolved backend through the existing mode adapter."""
+
+    export_mode = _standard_report_backend_mode(decision)
+    st.session_state["report_export_mode_control"] = export_mode
+    changed = apply_single_export_mode_change(export_mode, previous_mode)
+    return export_mode, changed
+
+
 def _clear_single_export() -> bool:
     return st.session_state.pop("tmc_output", None) is not None
 
@@ -1247,6 +1256,19 @@ def apply_batch_export_mode_change(selected_mode: str, previous_mode: str | None
     st.session_state["tmc_batch_export_mode"] = selected_mode
     _mark_batch_export_stale_now()
     return True
+
+
+def _apply_standard_batch_export_mode(decision: object, previous_mode: str | None) -> tuple[str, bool]:
+    """Persist Standard report's resolved Batch backend through the mode adapter."""
+
+    export_mode = (
+        BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+        if bool(getattr(decision, "use_template_report_layout", False))
+        else BATCH_SAFE_PNG_EXPORT_MODE
+    )
+    st.session_state["tmc_batch_export_mode_control"] = export_mode
+    changed = apply_batch_export_mode_change(export_mode, previous_mode)
+    return export_mode, changed
 
 
 def _use_template_layout_for_export(export_mode: str | None) -> bool:
@@ -6488,11 +6510,12 @@ def _run_streamlit_app() -> None:
                     excel_com_status,
                     template_compatible=(not _is_v2_scheme(batch_mapping_scheme)),
                 )
-                batch_export_mode = (
-                    BATCH_EXCEL_TEMPLATE_EXPORT_MODE
-                    if batch_standard_decision.use_template_report_layout
-                    else BATCH_SAFE_PNG_EXPORT_MODE
+                batch_export_mode, standard_batch_mode_changed = _apply_standard_batch_export_mode(
+                    batch_standard_decision,
+                    previous_batch_export_mode,
                 )
+                if standard_batch_mode_changed:
+                    st.rerun()
                 st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {batch_export_mode} selected automatically.")
                 if batch_standard_decision.fallback_notice:
                     st.warning(batch_standard_decision.fallback_notice)
@@ -6908,7 +6931,12 @@ def _run_streamlit_app() -> None:
             if export_preference == EXPORT_PREFERENCE_STANDARD:
                 template_compatible = Path(DEFAULT_TEMPLATE_PATH).exists() and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
                 standard_decision = _standard_report_decision(excel_com_status, template_compatible=template_compatible)
-                export_mode = _standard_report_backend_mode(standard_decision)
+                export_mode, standard_mode_changed = _apply_standard_single_export_mode(
+                    standard_decision,
+                    previous_export_mode,
+                )
+                if standard_mode_changed:
+                    st.rerun()
                 use_template_report_layout = bool(standard_decision.use_template_report_layout)
                 use_excel_com_native_charts = bool(standard_decision.use_excel_com_native_charts)
                 st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {export_mode} selected automatically.")

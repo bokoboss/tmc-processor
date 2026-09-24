@@ -97,6 +97,81 @@ def test_export_metadata_records_requested_used_and_fallback_backend() -> None:
     assert values["export_fallback_notice"] == "COM unavailable"
 
 
+def test_single_standard_transition_updates_authoritative_backend_and_advanced_switch_invalidates() -> None:
+    st.session_state.clear()
+    st.session_state["report_export_mode"] = app.SAFE_PNG_EXPORT_MODE
+    st.session_state["tmc_output"] = {"workbook_bytes": b"safe-png"}
+    decision = app._standard_report_decision(SimpleNamespace(available=True, reason="", detail=""))
+
+    export_mode, changed = app._apply_standard_single_export_mode(decision, app.SAFE_PNG_EXPORT_MODE)
+
+    assert changed is True
+    assert export_mode == app.EXCEL_TEMPLATE_EXPORT_MODE
+    assert st.session_state["report_export_mode"] == app.EXCEL_TEMPLATE_EXPORT_MODE
+    assert st.session_state["report_export_mode_control"] == app.EXCEL_TEMPLATE_EXPORT_MODE
+    assert "tmc_output" not in st.session_state
+
+    st.session_state["tmc_output"] = {"workbook_bytes": b"native-template"}
+    export_mode, changed = app._apply_standard_single_export_mode(decision, export_mode)
+
+    assert changed is False
+    assert export_mode == app.EXCEL_TEMPLATE_EXPORT_MODE
+    assert st.session_state["tmc_output"]["workbook_bytes"] == b"native-template"
+
+    assert app.apply_single_export_mode_change(app.SAFE_PNG_EXPORT_MODE, export_mode) is True
+    assert st.session_state["report_export_mode"] == app.SAFE_PNG_EXPORT_MODE
+    assert "tmc_output" not in st.session_state
+
+
+def test_single_standard_safe_png_fallback_does_not_spuriously_invalidate() -> None:
+    st.session_state.clear()
+    st.session_state["report_export_mode"] = app.SAFE_PNG_EXPORT_MODE
+    st.session_state["tmc_output"] = {"workbook_bytes": b"safe-png"}
+    decision = app._standard_report_decision(SimpleNamespace(available=False, reason="COM unavailable", detail=""))
+
+    export_mode, changed = app._apply_standard_single_export_mode(decision, app.SAFE_PNG_EXPORT_MODE)
+
+    assert changed is False
+    assert export_mode == app.SAFE_PNG_EXPORT_MODE
+    assert st.session_state["report_export_mode"] == app.SAFE_PNG_EXPORT_MODE
+    assert st.session_state["tmc_output"]["workbook_bytes"] == b"safe-png"
+
+
+def test_batch_standard_transition_uses_native_signature_survives_rerun_and_advanced_change_stales_export() -> None:
+    st.session_state.clear()
+    st.session_state["tmc_batch_export_mode"] = app.BATCH_SAFE_PNG_EXPORT_MODE
+    st.session_state["tmc_batch_export_result"] = object()
+    st.session_state["tmc_batch_export_stale"] = False
+    decision = app._standard_report_decision(SimpleNamespace(available=True, reason="", detail=""))
+
+    export_mode, changed = app._apply_standard_batch_export_mode(decision, app.BATCH_SAFE_PNG_EXPORT_MODE)
+
+    assert changed is True
+    assert export_mode == app.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+    assert st.session_state["tmc_batch_export_mode"] == app.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+    assert st.session_state["tmc_batch_export_mode_control"] == app.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+    assert "tmc_batch_export_result" not in st.session_state
+
+    signature = app._batch_export_signature(
+        metadata_rows=[],
+        shared_setup={},
+        export_mode=export_mode,
+        confirmed_peaks={},
+    )
+    st.session_state["tmc_batch_export_result"] = object()
+    st.session_state["tmc_batch_export_stale"] = False
+    st.session_state["tmc_batch_export_signature"] = signature
+
+    assert app._mark_batch_export_stale_if_inputs_changed(signature) is False
+    assert st.session_state["tmc_batch_export_result"] is not None
+    assert st.session_state["tmc_batch_export_mode"] == app.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
+
+    assert app.apply_batch_export_mode_change(app.BATCH_SAFE_PNG_EXPORT_MODE, export_mode) is True
+    assert st.session_state["tmc_batch_export_mode"] == app.BATCH_SAFE_PNG_EXPORT_MODE
+    assert st.session_state["tmc_batch_export_stale"] is True
+    assert "tmc_batch_export_result" not in st.session_state
+
+
 def test_clean_batch_eligibility_ignores_qc_info_but_excludes_warnings_and_errors() -> None:
     clean = _item("clean.xlsx", QC_info=2)
     warning = _item("warning.xlsx", QC_warnings=1)
