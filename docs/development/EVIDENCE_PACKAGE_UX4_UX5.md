@@ -12,8 +12,9 @@ This package records the bounded UX-4/UX-5 implementation cycle. It does not aut
 - Authoritative remote: `https://github.com/bokoboss/tmc-processor`
 - Branch: `codex/ux-4-5-export-batch-closure`
 - Baseline main/origin SHA: `c342c4b9460c2718da50debf8b344895ee6f07f7`
-- Implementation validation HEAD: `b1b30bb214f66eb766eabb78e2c3149815f0f33e`
-- Evidence package commit: `fb4139e348de7f37a58d1d8b6b5a64e0fccbeb25`
+- Previous reviewed HEAD: `8d84161930aa749362b3eb9a78d51fc8cc6ab965`
+- Remediation commit: `3efb7bf7b60c5bd1fe36a9bbec07abf9dbd008f1`
+- Final remediation HEAD: `3efb7bf7b60c5bd1fe36a9bbec07abf9dbd008f1`
 - Qualified runtime: `C:\MyRD\tmc-processor-public\.venv\Scripts\python.exe` — Python 3.12.10
 - Python 3.14 was not used.
 
@@ -33,6 +34,12 @@ Unsupported template paths are not selected by the Standard report decision. Fal
 
 Readiness shows current Analysis, Peak Review confirmation, report readiness, intended report outcome, and fallback/technical details. COM diagnostics remain in the advanced area.
 
+## Reviewer state-sync defect and remediation
+
+The reviewer defect was that Standard report resolved its backend only in a local Export-tab variable. `report_export_mode` and `tmc_batch_export_mode` could therefore retain the previous Advanced value, while Batch export signatures were computed before the Standard decision. A Standard native Excel Batch ZIP could be marked stale on the post-generation rerun, and Advanced controls could display a backend different from the generated artifact.
+
+The remediation routes both Standard decisions through the existing authoritative mode-change adapters. Single persists the resolved labeled backend in `report_export_mode` and its Advanced control key; Batch persists the resolved technical backend in `tmc_batch_export_mode` and its Advanced control key. Effective-mode changes use the existing export invalidation path; resolving Standard to the already-active effective backend does not invalidate. The UI reruns after a Standard transition, so the next Batch signature is computed from the resolved backend. Standard preference, native Excel preference, Safe PNG fallback, export provenance, Peak Review, bulk acceptance, and exclusion/restore behavior remain unchanged.
+
 ## UX-5 outcome
 
 Batch Review now exposes an exception-first queue with file, survey date, analysis status, review state, suggested AM/PM, confirmed AM/PM, QC error/warning/info counts, and disposition reason. `Needs review` is the default view; failed files remain visible. Detailed per-file chart and Peak review remains available.
@@ -49,7 +56,10 @@ Executed during implementation:
 
 ```text
 .venv\Scripts\python.exe -m pytest tests/test_ux4_ux5.py -q
-9 passed
+12 passed
+
+.venv\Scripts\python.exe -m pytest tests/test_ux4_ux5.py tests/test_workflow_state.py tests/test_workflow_contract_adapter.py tests/test_explicit_peak_review.py -q
+72 passed
 
 .venv\Scripts\python.exe -m pytest tests/test_ux4_ux5.py tests/test_explicit_peak_review.py -q
 15 passed
@@ -62,10 +72,10 @@ The existing Batch, explicit Peak Review, effective export, UI helper, dual-sche
 
 ## Final validation
 
-- Full pytest: `353 passed, 11 warnings` in 2:56. The warnings are existing openpyxl DrawingML warnings.
+- Full pytest: `356 passed, 11 warnings` in 3:08. The warnings are existing openpyxl DrawingML warnings.
 - Compile: `.venv\Scripts\python.exe -m compileall -q app.py src` passed.
 - `git diff --check` passed.
-- Final implementation working tree was clean at `b1b30bb214f66eb766eabb78e2c3149815f0f33e`; the evidence package was then committed separately.
+- Final remediation working tree was clean at `3efb7bf7b60c5bd1fe36a9bbec07abf9dbd008f1`; this evidence update is documentation-only.
 
 ## Focused real-workbook UAT
 
@@ -103,4 +113,4 @@ Safe PNG runtime was qualified in Single and Batch UAT. Native Excel COM/templat
 
 - Pull request: [#20](https://github.com/bokoboss/tmc-processor/pull/20), opened against `main`.
 - Required PR body markers: `Closes #7` and `Closes #8`.
-- GitHub CI: [run 35732150244](https://github.com/bokoboss/tmc-processor/actions/runs/35732150244) passed; both Python 3.10 and Python 3.12 jobs completed successfully.
+- GitHub CI for final remediation HEAD: [run 36006632881](https://github.com/bokoboss/tmc-processor/actions/runs/36006632881) passed; both Python 3.10 and Python 3.12 jobs completed successfully.
