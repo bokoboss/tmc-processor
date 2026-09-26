@@ -12,10 +12,11 @@ from typing import Any
 
 SINGLE_CONFIRMED_PEAKS_KEY = "tmc_application_confirmed_peaks"
 SINGLE_DRAFT_PEAKS_KEY = "tmc_application_draft_peaks"
-SINGLE_PEAK_SOURCE_KEY = "tmc_application_peak_source"
+SINGLE_PEAK_SOURCE_KEY = "tmc_confirmed_peak_selection_source"
 BATCH_CONFIRMED_PEAKS_KEY = "tmc_application_batch_confirmed_peaks"
 BATCH_DRAFT_PEAKS_KEY = "tmc_application_batch_draft_peaks"
 BATCH_DISPOSITION_KEY = "tmc_application_batch_dispositions"
+BATCH_PEAK_SOURCE_KEY = "tmc_batch_peak_selection_source"
 EXPORT_BACKEND_KEY = "tmc_application_export_backend"
 
 USER_CONFIRMED = "user_confirmed"
@@ -80,7 +81,7 @@ def confirm_single_peaks(
     state[SINGLE_PEAK_SOURCE_KEY] = USER_CONFIRMED
     for key, value in confirmed.items():
         state[f"tmc_confirmed_{key}"] = value
-    state["tmc_confirmed_peak_source"] = USER_CONFIRMED
+    state["tmc_confirmed_peak_selection_source"] = USER_CONFIRMED
     state.pop("tmc_loaded_confirmed_peaks", None)
     return changed
 
@@ -94,7 +95,7 @@ def clear_single_review_state(state: MutableMapping[str, object]) -> None:
         "tmc_confirmed_am_peak_end",
         "tmc_confirmed_pm_peak_start",
         "tmc_confirmed_pm_peak_end",
-        "tmc_confirmed_peak_source",
+        "tmc_confirmed_peak_selection_source",
         "tmc_loaded_confirmed_peaks",
     ):
         state.pop(key, None)
@@ -144,7 +145,7 @@ def confirm_batch_peak(state: MutableMapping[str, object], folder_name: str, am_
     state[BATCH_CONFIRMED_PEAKS_KEY] = confirmed_map
     state[BATCH_DRAFT_PEAKS_KEY] = draft_map
     state["tmc_batch_confirmed_peaks"] = {**get_batch_peaks(state, "tmc_batch_confirmed_peaks"), name: {"AM": am_peak, "PM": pm_peak}}
-    sources = state.setdefault("tmc_batch_confirmed_peak_sources", {})
+    sources = state.setdefault(BATCH_PEAK_SOURCE_KEY, {})
     if isinstance(sources, dict):
         sources[name] = USER_CONFIRMED_BATCH
     return previous != confirmed
@@ -168,7 +169,7 @@ def clear_batch_review_state(state: MutableMapping[str, object]) -> None:
         BATCH_DISPOSITION_KEY,
         "tmc_batch_confirmed_peaks",
         "tmc_batch_draft_peaks",
-        "tmc_batch_confirmed_peak_sources",
+        BATCH_PEAK_SOURCE_KEY,
         "tmc_batch_file_dispositions",
     ):
         state[key] = {}

@@ -6,12 +6,14 @@ from collections.abc import Mapping
 
 import streamlit as st
 
+from .batch import render_batch_stage
+from .single import render_single_stage
 from tmc_processor.ui.components.mapping import render_mapping_summary
 
 
 def render_mapping_stage(*, context: Mapping[str, object]) -> None:
-    summary = context.get("summary")
-    if isinstance(summary, Mapping):
-        render_mapping_summary(summary)
-    else:
-        st.caption("Define and review the physical movement mapping.")
+    if context.get("is_single_file_mode"):
+        render_single_stage(context=context)
+        return
+    render_batch_stage(context=context)
+    return

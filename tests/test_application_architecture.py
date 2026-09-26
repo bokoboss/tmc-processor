@@ -7,6 +7,7 @@ import importlib
 from pathlib import Path
 
 from tmc_processor.application.state import (
+    BATCH_PEAK_SOURCE_KEY,
     BATCH_DISPOSITION_KEY,
     SINGLE_CONFIRMED_PEAKS_KEY,
     confirm_batch_peak,
@@ -50,7 +51,7 @@ def test_plain_mapping_single_confirmation_preserves_draft_and_source() -> None:
         "pm_peak_start": "17:00",
         "pm_peak_end": "18:00",
     }
-    assert state["tmc_application_peak_source"] == "user_confirmed"
+    assert state["tmc_confirmed_peak_selection_source"] == "user_confirmed"
 
 
 def test_plain_mapping_batch_confirmation_and_exclusion_are_explicit() -> None:
@@ -59,6 +60,62 @@ def test_plain_mapping_batch_confirmation_and_exclusion_are_explicit() -> None:
     assert set_batch_disposition(state, "001_demo", "excluded", "duplicate") is True
     assert get_batch_dispositions(state)["001_demo"] == {"disposition": "excluded", "reason": "duplicate"}
     assert state[BATCH_DISPOSITION_KEY]["001_demo"]["disposition"] == "excluded"
+    assert state[BATCH_PEAK_SOURCE_KEY]["001_demo"] == "user_confirmed_batch"
+
+
+def test_workflow_registry_routes_each_canonical_stage_to_an_owner() -> None:
+    from tmc_processor.ui.workflows import WORKFLOW_STAGE_RENDERERS, render_workflow_stage
+
+    seen: list[str] = []
+    for stage in CANONICAL_WORKFLOW_STAGES:
+        original = WORKFLOW_STAGE_RENDERERS[stage]
+        WORKFLOW_STAGE_RENDERERS[stage] = lambda *, context, _stage=stage: seen.append(_stage)
+        try:
+            render_workflow_stage(stage, context={})
+        finally:
+            WORKFLOW_STAGE_RENDERERS[stage] = original
+    assert seen == list(CANONICAL_WORKFLOW_STAGES)
+
+
+def test_shell_uses_application_services_for_required_orchestration() -> None:
+    shell = (ROOT / "src" / "tmc_processor" / "ui" / "app_shell.py").read_text(encoding="utf-8")
+    for service_name in (
+        "application_analyze_single",
+        "application_analyze_single_dry_run",
+        "application_analyze_batch",
+        "application_export_single_generated",
+        "application_export_single_template_com",
+        "application_export_batch_reviewed",
+    ):
+        assert service_name in shell
+    for direct_name in (
+        "process_tmc(",
+        "process_tmc_dry_run_v2(",
+        "analyze_batch_files(",
+        "generate_batch_zip_from_reviewed_peaks(",
+        "export_v2_generated_workbook(",
+        "export_v2_template_workbook_com(",
+    ):
+        assert direct_name not in shell
+
+
+def test_shell_dispatches_canonical_stages_and_does_not_own_stage_bodies() -> None:
+    shell = (ROOT / "src" / "tmc_processor" / "ui" / "app_shell.py").read_text(encoding="utf-8")
+    assert shell.count("render_workflow_stage(") >= 2
+    for stage in ("Data", "Mapping", "Review", "Export"):
+        assert f'active_tab == "{stage}"' not in shell
+    assert "render_batch_stage" not in shell
+    assert "render_single_stage" not in shell
+
+
+def test_workflow_modules_own_real_mode_specific_stage_implementations() -> None:
+    workflow_root = ROOT / "src" / "tmc_processor" / "ui" / "workflows"
+    assert "render_single_stage" in (workflow_root / "single.py").read_text(encoding="utf-8")
+    assert "render_batch_stage" in (workflow_root / "batch.py").read_text(encoding="utf-8")
+    for name in ("data", "mapping", "analyze", "review", "export"):
+        source = (workflow_root / f"{name}.py").read_text(encoding="utf-8")
+        assert "render_single_stage(context=context)" in source
+        assert "render_batch_stage(context=context)" in source
 
 
 def test_workflow_transition_matrix_is_pure_and_downgrades_only_downstream_stages() -> None:
