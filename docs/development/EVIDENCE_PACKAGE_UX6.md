@@ -8,6 +8,7 @@
 - Baseline: `096132f9a6269e8b91e96f809f3499aaf69d7d8f`
 - Previous reviewed HEAD: `6002577cae824419a3eb24968607413a7d437c6e`
 - Remediation commit: `f65176ff8ca70bc3d54d5634ba852b0432b37414`
+- Evidence update commit: final documentation commit on this branch
 - Objective: architecture-only UX-6 split with no intentional operator-visible redesign.
 
 Canonical workflow preserved: `Data -> Mapping -> Analyze -> Review -> Export`.
@@ -77,8 +78,8 @@ No frontend framework migration, domain-engine redesign, calculation-method chan
 
 - Pull request: [#21](https://github.com/bokoboss/tmc-processor/pull/21)
 - PR body includes `Closes #9`.
-- Superseded pre-remediation workflow: [CI run #93](https://github.com/bokoboss/tmc-processor/actions/runs/36235120662)
-- Final-head workflow: to be recorded after pushing `f65176ff8ca70bc3d54d5634ba852b0432b37414`; Python 3.10 and Python 3.12 jobs remain the release gate.
+- Superseded pre-remediation workflow: [CI run #93](https://github.com/bokoboss/tmc-processor/actions/runs/36235380640) — success.
+- Final remediation workflow: [CI run #94](https://github.com/bokoboss/tmc-processor/actions/runs/36237670279) — success on Python 3.10 and Python 3.12.
 
 ## Known limitations
 
