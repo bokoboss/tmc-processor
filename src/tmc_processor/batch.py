@@ -47,6 +47,8 @@ BATCH_SUMMARY_COLUMNS = [
     "movement_code_scheme",
     "template_version",
     "status",
+    "review_state",
+    "disposition_reason",
     "export_mode_requested",
     "export_mode_used",
     "export_status",
@@ -109,6 +111,8 @@ class BatchSummaryRow:
     movement_code_scheme: str = MOVEMENT_SCHEME_V1
     template_version: str = TEMPLATE_VERSION
     status: str = ""
+    review_state: str = ""
+    disposition_reason: str = ""
     export_mode_requested: str = ""
     export_mode_used: str = ""
     export_status: str = ""
@@ -140,6 +144,10 @@ class BatchResult:
     def has_failures(self) -> bool:
         return any(row.status == "failed" for row in self.summary_rows)
 
+    @property
+    def excluded_files(self) -> list[BatchSummaryRow]:
+        return [row for row in self.summary_rows if row.status == "excluded" or row.review_state == "excluded"]
+
 
 @dataclass
 class BatchAnalysisItem:
@@ -151,6 +159,10 @@ class BatchAnalysisItem:
     folder_name: str
     movement_code_scheme: str = MOVEMENT_SCHEME_V1
     status: str = ""
+    review_state: str = ""
+    disposition: str = ""
+    exclusion_reason: str = ""
+    peak_selection_source: str = ""
     workbook_bytes: bytes = field(default=b"", repr=False)
     mapping: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
     suggested_AM_peak: str = ""
@@ -191,6 +203,70 @@ class BatchAnalysisResult:
     @property
     def has_failures(self) -> bool:
         return any(item.status == "failed" for item in self.items)
+
+    @property
+    def excluded_items(self) -> list[BatchAnalysisItem]:
+        return [item for item in self.successful_items if item.disposition == "excluded"]
+
+
+def batch_review_state(item: BatchAnalysisItem | BatchSummaryRow) -> str:
+    """Return the exception-first review disposition for one Batch file."""
+
+    if str(getattr(item, "status", "")).casefold() == "failed":
+        return "failed"
+    if str(getattr(item, "disposition", "") or getattr(item, "review_state", "")).casefold() == "excluded":
+        return "excluded"
+    if getattr(item, "confirmed_AM_peak", "") and getattr(item, "confirmed_PM_peak", ""):
+        return "confirmed"
+    return "needs_review"
+
+
+def eligible_clean_batch_items(analysis: BatchAnalysisResult | None) -> list[BatchAnalysisItem]:
+    """Return unresolved successful files eligible for explicit bulk acceptance."""
+
+    if analysis is None:
+        return []
+    return [
+        item
+        for item in analysis.successful_items
+        if item.disposition != "excluded"
+        and not item.confirmed_AM_peak
+        and not item.confirmed_PM_peak
+        and item.QC_errors == 0
+        and item.QC_warnings == 0
+        and bool(item.suggested_AM_peak)
+        and bool(item.suggested_PM_peak)
+    ]
+
+
+def bulk_accept_clean_files(analysis: BatchAnalysisResult | None) -> list[BatchAnalysisItem]:
+    """Explicitly confirm eligible clean suggestions with Batch provenance."""
+
+    accepted = eligible_clean_batch_items(analysis)
+    for item in accepted:
+        item.confirmed_AM_peak = item.suggested_AM_peak
+        item.confirmed_PM_peak = item.suggested_PM_peak
+        item.review_state = "confirmed"
+        item.peak_selection_source = PEAK_SELECTION_USER_CONFIRMED_BATCH
+    return accepted
+
+
+def exclude_batch_item(item: BatchAnalysisItem, reason: str = "") -> None:
+    """Record an intentional successful-file exclusion without changing Analysis."""
+
+    if item.status != "success":
+        raise ValueError("Only successfully analyzed files can be excluded.")
+    item.disposition = "excluded"
+    item.review_state = "excluded"
+    item.exclusion_reason = str(reason or "Excluded by operator.")
+
+
+def restore_batch_item(item: BatchAnalysisItem) -> None:
+    """Return an excluded file to the normal review queue."""
+
+    item.disposition = ""
+    item.review_state = ""
+    item.exclusion_reason = ""
 
 
 @dataclass
@@ -575,6 +651,8 @@ def batch_selected_file_preview(item: BatchAnalysisItem | BatchSummaryRow) -> di
         "survey_date_text": item.survey_date_text,
         "output_stem": item.output_stem,
         "status": item.status,
+        "review_state": batch_review_state(item),
+        "disposition_reason": getattr(item, "exclusion_reason", ""),
         "movement_code_scheme": getattr(item, "movement_code_scheme", MOVEMENT_SCHEME_V1),
         "total_vehicles": getattr(item, "total_vehicles", 0.0),
         "total_PCU": getattr(item, "total_PCU", 0.0),
@@ -833,6 +911,7 @@ def _process_one_file(
         movement_code_scheme=MOVEMENT_SCHEME_V1,
         template_version=TEMPLATE_VERSION,
         status="success",
+        review_state="confirmed",
         export_mode_requested=export_mode_requested,
         export_mode_used=export_mode_used,
         export_status="success",
@@ -1006,6 +1085,7 @@ def _process_one_file_v2(
         movement_code_scheme=MOVEMENT_SCHEME_V2,
         template_version="generated_approach_movement_v2",
         status="success",
+        review_state="confirmed",
         export_mode_requested=export_mode_requested,
         export_mode_used=BATCH_SAFE_PNG_EXPORT_MODE,
         export_status="success",
@@ -1195,7 +1275,10 @@ def analyze_batch_files(
 def reviewed_peak_values_complete(analysis: BatchAnalysisResult) -> bool:
     """Return whether all successful analyzed files have confirmed AM/PM peaks."""
 
-    return all(item.confirmed_AM_peak and item.confirmed_PM_peak for item in analysis.successful_items)
+    return all(
+        batch_review_state(item) in {"confirmed", "excluded"}
+        for item in analysis.successful_items
+    )
 
 
 def _confirm_suggested_peaks_for_one_shot(analysis: BatchAnalysisResult) -> BatchAnalysisResult:
@@ -1250,6 +1333,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     movement_code_scheme=movement_code_scheme,
                     template_version=template_version,
                     status="failed",
+                    review_state="failed",
                     export_mode_requested=export_mode_requested,
                     export_mode_used="",
                     export_status="failed",
@@ -1269,6 +1353,31 @@ def generate_batch_zip_from_reviewed_peaks(
             )
             continue
 
+        if item.disposition == "excluded":
+            rows.append(
+                BatchSummaryRow(
+                    file_name=Path(item.file_name).name,
+                    survey_date_text=item.survey_date_text,
+                    output_stem=item.output_stem,
+                    folder_name=item.folder_name,
+                    movement_code_scheme=movement_code_scheme,
+                    template_version=template_version,
+                    status="excluded",
+                    review_state="excluded",
+                    disposition_reason=item.exclusion_reason,
+                    export_mode_requested=export_mode_requested,
+                    export_mode_used="",
+                    export_status="excluded",
+                    export_error="",
+                    suggested_AM_peak=item.suggested_AM_peak,
+                    suggested_PM_peak=item.suggested_PM_peak,
+                    confirmed_AM_peak=item.confirmed_AM_peak,
+                    confirmed_PM_peak=item.confirmed_PM_peak,
+                    notes=item.exclusion_reason or "Excluded by operator.",
+                )
+            )
+            continue
+
         confirmed_periods = _confirmed_periods_from_labels(item.confirmed_AM_peak, item.confirmed_PM_peak)
         if "AM" not in confirmed_periods or "PM" not in confirmed_periods:
             rows.append(
@@ -1280,6 +1389,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     movement_code_scheme=movement_code_scheme,
                     template_version=template_version,
                     status="failed",
+                    review_state="needs_review",
                     export_mode_requested=export_mode_requested,
                     export_mode_used="",
                     export_status="failed",
