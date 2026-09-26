@@ -6,7 +6,9 @@
 - Authoritative local path: `C:\\MyRD\\tmc-processor-public`
 - Branch: `codex/ux-6-application-shell`
 - Previous reviewed HEAD: `d3e30f9b775d32836e39f07f1d07496a79cd7c9e`
-- Remediation commit: final implementation commit on this branch
+- Remediation commit: `9578457bd1d2f80b58d8f15b33693489afd0e4c6` (`UX-6: split workflow stages and bound UI context`)
+- Final functional HEAD: `9578457bd1d2f80b58d8f15b33693489afd0e4c6`
+- Final branch HEAD: evidence-finalization commit after the functional head; docs-only, no code changes.
 - Objective: final architecture-only UX-6 remediation with no intentional operator-visible redesign.
 
 Canonical workflow remains `Data -> Mapping -> Analyze -> Review -> Export`.
@@ -82,7 +84,7 @@ tests/test_application_architecture.py
 
 - Pull request: [#21](https://github.com/bokoboss/tmc-processor/pull/21)
 - Baseline CI #96: [successful](https://github.com/bokoboss/tmc-processor/actions/runs/36238711238), Python 3.10 and 3.12, `369 passed, 11 warnings`, on the previous reviewed head.
-- Final remediation CI: recorded after the final implementation push.
+- Final remediation CI #97: [successful](https://github.com/bokoboss/tmc-processor/actions/runs/36247328112) on `9578457bd1d2f80b58d8f15b33693489afd0e4c6`; Windows Python 3.10 and 3.12 both passed.
 
 ## Known limitations
 
@@ -92,4 +94,4 @@ tests/test_application_architecture.py
 
 ## Classification
 
-READY FOR RE-REVIEW, contingent on final-head CI passing on Windows Python 3.10 and 3.12.
+READY FOR RE-REVIEW.
