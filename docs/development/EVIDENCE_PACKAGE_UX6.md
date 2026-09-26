@@ -79,7 +79,7 @@ No frontend framework migration, domain-engine redesign, calculation-method chan
 - Pull request: [#21](https://github.com/bokoboss/tmc-processor/pull/21)
 - PR body includes `Closes #9`.
 - Superseded pre-remediation workflow: [CI run #93](https://github.com/bokoboss/tmc-processor/actions/runs/36235380640) — success.
-- Final remediation workflow: [CI run #94](https://github.com/bokoboss/tmc-processor/actions/runs/36237670279) — success on Python 3.10 and Python 3.12.
+- Final remediation workflow: [CI run #95](https://github.com/bokoboss/tmc-processor/actions/runs/36238204808) — success on Python 3.10 and Python 3.12 for final head `5e81c988c453a74e2a6a78b34ecb44509c1c48c3`.
 
 ## Known limitations
 
