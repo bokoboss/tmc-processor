@@ -10,6 +10,7 @@ from .data import render_data_stage
 from .export import render_export_stage
 from .mapping import render_mapping_stage
 from .review import render_review_stage
+from tmc_processor.ui.workflow_context import WorkflowContext
 
 WORKFLOW_STAGE_RENDERERS = {
     "Data": render_data_stage,
@@ -20,7 +21,7 @@ WORKFLOW_STAGE_RENDERERS = {
 }
 
 
-def render_workflow_stage(stage: str, *, context: dict[str, object]) -> object:
+def render_workflow_stage(stage: str, *, context: WorkflowContext) -> object:
     """Render one canonical stage through its owning workflow module."""
 
     try:

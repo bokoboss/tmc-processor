@@ -102,6 +102,7 @@ def test_shell_uses_application_services_for_required_orchestration() -> None:
 def test_shell_dispatches_canonical_stages_and_does_not_own_stage_bodies() -> None:
     shell = (ROOT / "src" / "tmc_processor" / "ui" / "app_shell.py").read_text(encoding="utf-8")
     assert shell.count("render_workflow_stage(") >= 2
+    assert "context={**globals(), **locals()}" not in shell
     for stage in ("Data", "Mapping", "Review", "Export"):
         assert f'active_tab == "{stage}"' not in shell
     assert "render_batch_stage" not in shell
@@ -110,12 +111,23 @@ def test_shell_dispatches_canonical_stages_and_does_not_own_stage_bodies() -> No
 
 def test_workflow_modules_own_real_mode_specific_stage_implementations() -> None:
     workflow_root = ROOT / "src" / "tmc_processor" / "ui" / "workflows"
-    assert "render_single_stage" in (workflow_root / "single.py").read_text(encoding="utf-8")
-    assert "render_batch_stage" in (workflow_root / "batch.py").read_text(encoding="utf-8")
-    for name in ("data", "mapping", "analyze", "review", "export"):
-        source = (workflow_root / f"{name}.py").read_text(encoding="utf-8")
-        assert "render_single_stage(context=context)" in source
-        assert "render_batch_stage(context=context)" in source
+    single_source = (workflow_root / "single.py").read_text(encoding="utf-8")
+    batch_source = (workflow_root / "batch.py").read_text(encoding="utf-8")
+    assert "render_single_stage" not in single_source
+    assert "render_batch_stage" not in batch_source
+    assert "active_tab ==" not in single_source
+    assert "active_tab ==" not in batch_source
+    for mode, source in (("single", single_source), ("batch", batch_source)):
+        for stage in ("data", "mapping", "analyze", "review", "export"):
+            assert f"def render_{mode}_{stage}" in source
+    for stage in ("data", "mapping", "analyze", "review", "export"):
+        source = (workflow_root / f"{stage}.py").read_text(encoding="utf-8")
+        assert f"render_single_{stage}(context=context)" in source
+        assert f"render_batch_{stage}(context=context)" in source
+        for other_stage in ("data", "mapping", "analyze", "review", "export"):
+            if other_stage != stage:
+                assert f"render_single_{other_stage}" not in source
+                assert f"render_batch_{other_stage}" not in source
 
 
 def test_workflow_transition_matrix_is_pure_and_downgrades_only_downstream_stages() -> None:
