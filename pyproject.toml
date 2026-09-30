@@ -16,6 +16,9 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+excel-com = [
+  "pywin32>=306; platform_system == 'Windows'",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

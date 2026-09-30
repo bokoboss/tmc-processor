@@ -1315,11 +1315,20 @@ def _native_chart_source_data(
     hourly_values = hourly_rows["Total"].tolist() if "Total" in hourly_rows.columns else []
 
     vehicle_lookup: dict[str, Any] = {}
-    if {"vehicle_class", "à¸ªà¸±à¸”à¸ªà¹ˆà¸§à¸™ (%)"}.issubset(vehicle_composition_for_report.columns):
+    share_column = next(
+        (str(column) for column in vehicle_composition_for_report.columns if "share" in str(column).casefold()),
+        None,
+    )
+    if share_column is None:
+        share_column = next(
+            (str(column) for column in vehicle_composition_for_report.columns if "%" in str(column)),
+            None,
+        )
+    if "vehicle_class" in vehicle_composition_for_report.columns and share_column:
         for _, row in vehicle_composition_for_report.iterrows():
             vehicle_class = str(row["vehicle_class"])
             if vehicle_class != "Total":
-                vehicle_lookup[vehicle_class] = row["à¸ªà¸±à¸”à¸ªà¹ˆà¸§à¸™ (%)"]
+                vehicle_lookup[vehicle_class] = row[share_column]
 
     return {
         "hourly_pcu": {

@@ -10,7 +10,7 @@ import streamlit as st
 def render_peak_card(title: str, period_label: str, pcu: str, source: str) -> None:
     confirmed = source == "user_confirmed"
     kind = "tmc-peak-confirmed" if confirmed else "tmc-peak-suggested"
-    badge = "Confirmed" if confirmed else "Suggested"
+    badge = "ยืนยันแล้ว" if confirmed else "ระบบแนะนำ"
     pcu_text = f"{pcu} PCU" if pcu else "No PCU value"
     st.markdown(
         f'<div class="tmc-card tmc-peak-card {kind}">'

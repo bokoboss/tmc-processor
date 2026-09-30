@@ -205,6 +205,54 @@ def _normalise_time_label(value: Any) -> str:
     return str(value or "").strip().replace(".", ":").lower()
 
 
+def movement_values_by_code(
+    hourly_movement: pd.DataFrame,
+    movement_codes: list[str] | tuple[str, ...],
+    metadata: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Calculate total, AM, and PM PCU for each movement code from hourly data."""
+
+    if hourly_movement.empty or not len(hourly_movement.columns):
+        raise ValueError("Hourly movement data is required for movement diagram values.")
+    time_column = str(hourly_movement.columns[0])
+    labels = [_normalise_time_label(value) for value in hourly_movement[time_column].tolist()]
+    total_rows = [index for index, label in enumerate(labels) if label in {"total", "รวม"}]
+    data_rows = [index for index, label in enumerate(labels) if label and label not in {"total", "รวม"}]
+
+    def number(value: Any) -> float:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return 0.0
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Movement PCU value is not numeric: {value!r}.") from exc
+
+    peaks: dict[str, int] = {}
+    for period in ("am", "pm"):
+        start = _normalise_time_label(metadata.get(f"{period}_peak_start"))
+        matches = [index for index in data_rows if labels[index].startswith(start)]
+        if not start or len(matches) != 1:
+            raise ValueError(f"Effective {period.upper()} Peak must match exactly one hourly movement row.")
+        peaks[period] = matches[0]
+
+    result: dict[str, dict[str, Any]] = {}
+    for code in movement_codes:
+        if code not in hourly_movement.columns:
+            raise ValueError(f"Movement code {code!r} is missing from the hourly movement payload.")
+        values = hourly_movement[code].tolist()
+        total_value = (
+            number(values[total_rows[0]])
+            if len(total_rows) == 1
+            else sum(number(values[index]) for index in data_rows)
+        )
+        result[str(code)] = {
+            "total_12_hour": total_value,
+            "am_peak": number(values[peaks["am"]]),
+            "pm_peak": number(values[peaks["pm"]]),
+        }
+    return result
+
+
 def _excel_value(value: Any) -> Any:
     if value is None:
         return ""

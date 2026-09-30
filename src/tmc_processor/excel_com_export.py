@@ -690,6 +690,18 @@ def _write_support_sheets(workbook, report_data: dict[str, Any]) -> None:
     )
 
 
+def _write_diagram_data_plan(workbook, plan) -> None:
+    """Apply the resolved support formulas without re-reading export fields."""
+    worksheet = _replace_sheet(workbook, plan.diagram_sheet_name)
+    worksheet.Range("A1:D1").Value = (("movement_code", "total_pcu", "pm_peak_pcu", "am_peak_pcu"),)
+    for item in plan.diagram_rows:
+        worksheet.Cells(item.row, 1).Value = item.code
+        worksheet.Cells(item.row, 2).Formula = item.total_formula
+        worksheet.Cells(item.row, 3).Formula = item.pm_formula
+        worksheet.Cells(item.row, 4).Formula = item.am_formula
+    worksheet.Columns.AutoFit()
+
+
 def _write_native_chart_sources(worksheet, template_map: dict[str, Any], chart_source_data: dict[str, Any], guard: _FormulaWriteGuard | None = None) -> None:
     anchors = template_map.get("chart_anchors", {})
     hourly_source = anchors.get("native_hourly_chart_source", {})
@@ -746,6 +758,24 @@ def _try_call_calculation(target: Any, method_name: str, diagnostics: ExcelComEx
         diagnostics.calculation_warnings.append(f"{method_name}: {exc}")
 
 
+def _apply_summary_write_plan(worksheet, plan, guard) -> None:
+    for write in plan.summary_writes:
+        _set_cell(worksheet, write.cell, write.value, guard, write.source, force=write.force)
+
+
+def _apply_peak_formula_bindings(worksheet, plan, diagnostics) -> None:
+    """Apply only the 32 HLOOKUP replacements validated by the shared plan."""
+    for binding in plan.formula_bindings:
+        cell = worksheet.Range(binding.cell)
+        current = _cell_formula_text(cell)
+        if current != binding.old_formula:
+            raise ValueError(f"Unknown native HLOOKUP formula at Summary!{binding.cell}: {current!r}.")
+        cell.Formula = binding.new_formula
+        diagnostics.formula_cells_overwritten.append(
+            f"{binding.cell}: Peak {binding.period.upper()}: {binding.old_formula} -> {binding.new_formula}"
+        )
+
+
 def export_with_excel_com(
     template_path,
     output_path,
@@ -762,6 +792,8 @@ def export_with_excel_com(
     """
 
     global _LAST_EXPORT_DIAGNOSTICS
+
+    from .template_write_plan import resolve_template_write_plan
 
     require_excel_com()
 
@@ -783,6 +815,7 @@ def export_with_excel_com(
         ) from exc
     except OSError as exc:
         raise OSError(f"Unable to prepare Excel COM export workbook at {target}: {exc}") from exc
+    plan = resolve_template_write_plan(source, template_map, report_data, metadata, chart_source_data)
     diagnostics = _build_export_diagnostics(source, template_map)
     _LAST_EXPORT_DIAGNOSTICS = diagnostics
 
@@ -807,19 +840,16 @@ def export_with_excel_com(
             CorruptLoad=0,
         )
 
-        _write_support_sheets(workbook, report_data)
-        summary_name = template_map.get("template_sheet", "Summary")
+        for sheet_name, dataframe in plan.support_sheets:
+            _write_dataframe_sheet(workbook, sheet_name, dataframe)
+        _write_diagram_data_plan(workbook, plan)
+        summary_name = plan.template_sheet
         if not _sheet_exists(workbook, summary_name):
             raise ReportTemplateUnavailable(f"Template sheet not found: {summary_name}")
         summary = workbook.Worksheets(summary_name)
         guard = _FormulaWriteGuard(template_map, diagnostics)
-        _write_metadata(summary, template_map, metadata, guard)
-        _write_effective_peak_label(summary, metadata)
-        _write_movement_formulas(summary, template_map, guard)
-        _write_summary_formulas(summary, template_map, guard)
-        _write_table(summary, template_map.get("hourly_movement_table", {}), report_data.get("hourly_movement_pcu", pd.DataFrame()), guard)
-        _write_table(summary, template_map.get("hourly_vehicle_class_table", {}), report_data.get("hourly_vehicle_class", pd.DataFrame()), guard)
-        _write_native_chart_sources(summary, template_map, chart_source_data, guard)
+        _apply_summary_write_plan(summary, plan, guard)
+        _apply_peak_formula_bindings(summary, plan, diagnostics)
 
         _try_set_calculation(workbook, "ForceFullCalculation", True, diagnostics)
         _try_call_calculation(excel, "CalculateFullRebuild", diagnostics)
