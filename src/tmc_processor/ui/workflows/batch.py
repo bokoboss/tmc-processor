@@ -861,6 +861,9 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 )
 def render_batch_export(*, context: WorkflowContext) -> None:
     """Render the Batch Export stage."""
+    Path = context.operations.Path
+    DEFAULT_TEMPLATE_PATH = context.operations.DEFAULT_TEMPLATE_PATH
+    DEFAULT_TEMPLATE_MAP_PATH = context.operations.DEFAULT_TEMPLATE_MAP_PATH
     BATCH_CONFIRMED_PEAKS_STATE_KEY = context.operations.BATCH_CONFIRMED_PEAKS_STATE_KEY
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE = context.operations.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
     BATCH_PACKAGE_MIME = context.operations.BATCH_PACKAGE_MIME
@@ -947,7 +950,11 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     if batch_export_preference == EXPORT_PREFERENCE_STANDARD:
         batch_standard_decision = _standard_report_decision(
             excel_com_status,
-            template_compatible=(not _is_v2_scheme(batch_mapping_scheme)),
+            template_compatible=(
+                not _is_v2_scheme(batch_mapping_scheme)
+                and Path(DEFAULT_TEMPLATE_PATH).exists()
+                and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+            ),
         )
         batch_export_mode, standard_batch_mode_changed = _apply_standard_batch_export_mode(
             batch_standard_decision,
@@ -990,6 +997,7 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         not v2_batch_template_mode_blocked
         and (
             batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
+            or bool(batch_standard_decision and batch_standard_decision.use_ooxml_native_template)
             or excel_com_status.available
             or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
         )
@@ -1031,7 +1039,12 @@ def render_batch_export(*, context: WorkflowContext) -> None:
                 peak_windows=peak_windows,
                 export_mode=batch_export_mode,
                 use_template_report_layout=_use_template_layout_for_export(batch_export_mode),
-                use_excel_com_native_charts=_use_excel_native_charts_for_export(batch_export_mode, excel_com_status),
+                use_excel_com_native_charts=(
+                    False if batch_standard_decision else _use_excel_native_charts_for_export(batch_export_mode, excel_com_status)
+                ),
+                use_ooxml_native_template=bool(batch_standard_decision and batch_standard_decision.use_ooxml_native_template),
+                export_mode_requested=STANDARD_REPORT_EXPORT_MODE if batch_standard_decision else None,
+                export_fallback_notice=batch_standard_decision.fallback_notice if batch_standard_decision else "",
         )
         st.session_state["tmc_batch_export_result"] = batch_result
         st.session_state["tmc_batch_export_stale"] = False
@@ -1094,6 +1107,15 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         )
         st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
     if batch_result:
+        fallback_rows = [
+            row for row in batch_result.summary_rows
+            if row.export_mode_requested == STANDARD_REPORT_EXPORT_MODE
+            and row.export_mode_used == BATCH_SAFE_PNG_EXPORT_MODE
+            and row.export_status == "success"
+        ]
+        if fallback_rows:
+            reason = next((row.notes for row in fallback_rows if "Confirmed Peak interval is not representable" in row.notes), fallback_rows[0].notes)
+            st.warning(operator_fallback_message(reason))
         _render_section_header("สถานะส่งออกรายไฟล์", "ผลการสร้างรายงานใน Batch ล่าสุด")
         status_display = _batch_status_display_frame(batch_analysis, batch_result)
         status_columns = [

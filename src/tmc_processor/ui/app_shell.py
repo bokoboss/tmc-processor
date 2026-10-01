@@ -132,6 +132,7 @@ from tmc_processor.movement_scheme import (
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
 from tmc_processor.exporter import (
     EXCEL_TEMPLATE_EXPORT_MODE as EXPORTER_EXCEL_TEMPLATE_EXPORT_MODE,
+    PEAK_BINDING_FALLBACK_REASON,
     SAFE_PNG_EXPORT_MODE as EXPORTER_SAFE_PNG_EXPORT_MODE,
     STANDARD_REPORT_EXPORT_MODE,
     export_v2_generated_workbook,
@@ -192,6 +193,7 @@ from tmc_processor.application.services import (
     analyze_batch as application_analyze_batch,
     analyze_single as application_analyze_single,
     analyze_single_dry_run as application_analyze_single_dry_run,
+    assess_standard_peak_binding as application_assess_standard_peak_binding,
     export_batch_reviewed as application_export_batch_reviewed,
     export_single_generated as application_export_single_generated,
     export_single_template_com as application_export_single_template_com,
@@ -3145,7 +3147,12 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     output_ready = st.session_state.get("tmc_output") is not None
     peak_state = _single_effective_peak_state()
     peaks_ready = bool(peak_state["ready"])
-    excel_ready = bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
+    standard_native = (
+        st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD
+        and Path(DEFAULT_TEMPLATE_PATH).exists()
+        and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+    )
+    excel_ready = standard_native or bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
     preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
     mapping_needs_review = bool(uploaded_name and (not mapping_rows or int(preset_info.get("missing", 0) or 0) > 0))
 
@@ -3407,13 +3414,14 @@ def _standard_report_decision(
     excel_com_status: ExcelComStatus,
     *,
     template_compatible: bool = True,
+    fallback_reason: str = "",
 ) -> object:
     """Resolve the normal report outcome without exposing backend terminology."""
 
     return standard_report_export_decision(
         excel_com_available=bool(getattr(excel_com_status, "available", False)),
         template_compatible=template_compatible,
-        availability_detail=str(getattr(excel_com_status, "reason", "") or ""),
+        availability_detail=fallback_reason,
     )
 
 
@@ -5220,6 +5228,7 @@ def _workflow_operations() -> WorkflowOperations:
         MOVEMENT_SCHEME_V2=MOVEMENT_SCHEME_V2,
         MappingPresetError=MappingPresetError,
         PACKAGE_MIME=PACKAGE_MIME,
+        PEAK_BINDING_FALLBACK_REASON=PEAK_BINDING_FALLBACK_REASON,
         PEAK_MODE_OPTIONS=PEAK_MODE_OPTIONS,
         PEAK_SELECTION_AUTO=PEAK_SELECTION_AUTO,
         PM_WINDOW=PM_WINDOW,
@@ -5332,6 +5341,7 @@ def _workflow_operations() -> WorkflowOperations:
         _workflow_state_for_mode=_workflow_state_for_mode,
         application_analyze_batch=application_analyze_batch,
         application_analyze_single=application_analyze_single,
+        application_assess_standard_peak_binding=application_assess_standard_peak_binding,
         application_analyze_single_dry_run=application_analyze_single_dry_run,
         application_export_batch_reviewed=application_export_batch_reviewed,
         apply_batch_export_mode_change=apply_batch_export_mode_change,
@@ -5473,6 +5483,8 @@ def _run_streamlit_app() -> None:
     if active_tab == "Analyze":
         _rehydrate_analyze_setup_widgets()
     single_export_options = _single_export_mode_options(excel_com_status)
+    if st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+        single_export_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
         single_export_options,
@@ -5481,6 +5493,8 @@ def _run_streamlit_app() -> None:
     st.session_state["report_export_mode"] = export_mode
     use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
     batch_export_options = _batch_export_mode_options(excel_com_status)
+    if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+        batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
     st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
         st.session_state.get("tmc_batch_export_mode"),
         batch_export_options,
@@ -5533,6 +5547,12 @@ def _run_streamlit_app() -> None:
             )
             st.session_state["tmc_batch_mapping_code_scheme"] = batch_mapping_scheme
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
+            if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+                batch_export_options = (
+                    [BATCH_SAFE_PNG_EXPORT_MODE]
+                    if _is_v2_scheme(batch_mapping_scheme)
+                    else [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
+                )
             st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
                 st.session_state.get("tmc_batch_export_mode"),
                 batch_export_options,

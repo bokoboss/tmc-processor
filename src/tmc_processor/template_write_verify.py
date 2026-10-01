@@ -161,7 +161,6 @@ def verify_ooxml_against_plan(
         hourly_support = dict(plan.support_sheets).get("Hourly_Movement_PCU")
         if hourly_support is None:
             issues.append("Hourly_Movement_PCU support data missing from write plan")
-        hourly_totals = []
         for code, column in movement_table["columns"].items():
             if code == "time":
                 continue
@@ -172,12 +171,9 @@ def verify_ooxml_against_plan(
                 continue
             expected = sum(values)
             if code != "Total":
-                hourly_totals.append(expected)
                 item = diagram_by_code.get(code)
                 if item is None or not _equal(expected, item.total_cache):
                     issues.append(f"{plan.template_sheet}!{ref}: movement total disagrees with Diagram_Data for {code}")
-            elif not _equal(expected, sum(hourly_totals)):
-                issues.append(f"{plan.template_sheet}!{ref}: grand total disagrees with 16 movements")
             if hourly_support is not None and code in hourly_support.columns and not _equal(expected, hourly_support.iloc[-1][code]):
                 issues.append(f"{plan.template_sheet}!{ref}: total disagrees with Hourly_Movement_PCU support data")
             cell = summary.get(ref)

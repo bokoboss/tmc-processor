@@ -77,11 +77,7 @@ def test_single_standard_export_hides_transport_and_keeps_diagnostics(monkeypatc
     assert "ทดสอบ Excel COM" not in visible
     assert "Excel Template Mode" not in visible
     assert STANDARD_REPORT_TITLE in visible
-    if available:
-        assert FALLBACK_MESSAGE not in visible
-    else:
-        assert FALLBACK_MESSAGE in visible
-        assert SAFE_PNG_TITLE in visible
+    assert FALLBACK_MESSAGE not in visible
 
     diagnostics = "\n".join(
         str(element.value)
@@ -99,8 +95,7 @@ def test_batch_standard_export_uses_product_copy_and_keeps_internal_mode_gate(mo
     assert "Excel COM" not in visible
     assert "RAW_COM_REASON" not in visible
     assert "โหมดส่งออกพร้อม" not in visible
-    assert FALLBACK_MESSAGE in visible
-    assert SAFE_PNG_TITLE in visible
+    assert FALLBACK_MESSAGE not in visible
     assert STANDARD_REPORT_TITLE in visible
     diagnostic_text = "\n".join(
         str(element.value)
@@ -114,14 +109,19 @@ def test_presentation_helpers_do_not_change_standard_or_safe_png_decision() -> N
     ready = ExcelComStatus(available=True, reason="ready")
     unavailable = ExcelComStatus(available=False, reason="RAW_COM_REASON")
     native = app._standard_report_decision(ready)
-    fallback = app._standard_report_decision(unavailable)
+    without_com = app._standard_report_decision(unavailable)
+    fallback = app._standard_report_decision(unavailable, template_compatible=False)
 
     assert native.use_template_report_layout is True
-    assert native.use_excel_com_native_charts is True
+    assert native.use_excel_com_native_charts is False
+    assert native.use_ooxml_native_template is True
     assert native.fallback_notice == ""
+    assert without_com.use_template_report_layout is True
+    assert without_com.use_ooxml_native_template is True
+    assert without_com.fallback_notice == ""
     assert fallback.use_template_report_layout is False
     assert fallback.use_excel_com_native_charts is False
-    assert "RAW_COM_REASON" in fallback.fallback_notice
+    assert "incompatible" in fallback.fallback_notice
     assert operator_fallback_message(native.fallback_notice) == ""
     assert operator_fallback_message(fallback.fallback_notice) == FALLBACK_MESSAGE
     assert operator_report_label(app.EXCEL_TEMPLATE_EXPORT_MODE) == STANDARD_REPORT_TITLE

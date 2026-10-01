@@ -78,6 +78,63 @@ class PeakFormulaRow:
 
 
 @dataclass(frozen=True)
+class PeakBindingMatch:
+    period: str
+    interval: str
+    matched: bool
+    worksheet_row: int | None
+    helper_cell: str | None
+    helper_value: int | None
+
+
+def _match_peak_rows(
+    time_labels: dict[int, Any],
+    hourly_map: dict[str, Any],
+    helper_column: str,
+    metadata: dict[str, Any],
+) -> tuple[PeakBindingMatch, ...]:
+    first, last = int(hourly_map["first_data_row"]), int(hourly_map["last_data_row"])
+    matches: list[PeakBindingMatch] = []
+    for period in ("am", "pm"):
+        start = _normalise_time_label(metadata.get(f"{period}_peak_start"))
+        end = _normalise_time_label(metadata.get(f"{period}_peak_end"))
+        interval = f"{start}-{end}" if start and end else ""
+        rows = [
+            row for row in range(first, last + 1)
+            if interval and _normalise_time_label(time_labels[row]) == interval
+        ]
+        row = rows[0] if len(rows) == 1 else None
+        matches.append(PeakBindingMatch(
+            period, interval, row is not None, row,
+            f"{helper_column}{row}" if row is not None else None,
+            row - int(hourly_map["header_row"]) + 1 if row is not None else None,
+        ))
+    return tuple(matches)
+
+
+def preflight_template_peak_binding(
+    template_path: str | Path,
+    template_map: dict[str, Any],
+    metadata: dict[str, Any],
+) -> tuple[PeakBindingMatch, ...]:
+    """Read the native Summary time rows without changing the workbook."""
+    hourly_map = template_map["hourly_movement_table"]
+    helper_column = str(template_map["movement_diagram_cells"]["movement_value_rows"]["helper_column"])
+    workbook = load_workbook(template_path, read_only=True, data_only=False)
+    try:
+        summary = workbook[str(template_map.get("template_sheet") or "Summary")]
+        if helper_column != "U" or [summary[f"{helper_column}{row}"].value for row in range(9, 23)] != list(range(1, 15)):
+            raise ValueError("Authoritative Summary!U9:U22 helper sequence must be 1..14.")
+        labels = {
+            row: summary[f"{hourly_map['time_column']}{row}"].value
+            for row in range(int(hourly_map["first_data_row"]), int(hourly_map["last_data_row"]) + 1)
+        }
+        return _match_peak_rows(labels, hourly_map, helper_column, metadata)
+    finally:
+        workbook.close()
+
+
+@dataclass(frozen=True)
 class FormulaBinding:
     period: str
     code: str
@@ -266,17 +323,13 @@ def resolve_template_write_plan(
     first, last = int(hourly_map["first_data_row"]), int(hourly_map["last_data_row"])
     time_labels = original_times[first]
     peak_rows: list[PeakFormulaRow] = []
-    for period in ("am", "pm"):
-        start = _normalise_time_label(metadata.get(f"{period}_peak_start"))
-        end = _normalise_time_label(metadata.get(f"{period}_peak_end"))
-        if not start or not end:
-            raise ValueError(f"Effective {period.upper()} Peak interval is required for native formula binding.")
-        interval = f"{start}-{end}"
-        matches = [row for row in range(first, last + 1) if _normalise_time_label(time_labels[row]) == interval]
-        if len(matches) != 1:
-            raise ValueError(f"Effective {period.upper()} Peak {interval!r} must match exactly one Summary time row; found {len(matches)}.")
-        row = matches[0]
-        peak_rows.append(PeakFormulaRow(period, start, end, row, f"{helper_column}{row}", row - int(hourly_map["header_row"]) + 1))
+    for match in _match_peak_rows(time_labels, hourly_map, helper_column, metadata):
+        if not match.interval:
+            raise ValueError(f"Effective {match.period.upper()} Peak interval is required for native formula binding.")
+        if not match.matched or match.worksheet_row is None or match.helper_cell is None or match.helper_value is None:
+            raise ValueError(f"Effective {match.period.upper()} Peak {match.interval!r} must match exactly one Summary time row.")
+        start, end = match.interval.split("-", 1)
+        peak_rows.append(PeakFormulaRow(match.period, start, end, match.worksheet_row, match.helper_cell, match.helper_value))
 
     movement_map = template_map["movement_diagram_cells"]
     movement_columns = [column for key, column in hourly_map["columns"].items() if key not in {"time", "Total"}]

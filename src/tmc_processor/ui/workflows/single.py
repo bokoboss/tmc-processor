@@ -968,11 +968,13 @@ def render_single_export(*, context: WorkflowContext) -> None:
     EXPORT_PREFERENCE_STANDARD = context.operations.EXPORT_PREFERENCE_STANDARD
     MOVEMENT_SCHEME_V2 = context.operations.MOVEMENT_SCHEME_V2
     PACKAGE_MIME = context.operations.PACKAGE_MIME
+    PEAK_BINDING_FALLBACK_REASON = context.operations.PEAK_BINDING_FALLBACK_REASON
     PEAK_SELECTION_AUTO = context.operations.PEAK_SELECTION_AUTO
     PNG_MIME = context.operations.PNG_MIME
     PROJECT_SESSION_MIME = context.operations.PROJECT_SESSION_MIME
     Path = context.operations.Path
     STANDARD_REPORT_EXPORT_MODE = context.operations.STANDARD_REPORT_EXPORT_MODE
+    application_assess_standard_peak_binding = context.operations.application_assess_standard_peak_binding
     TEMPLATE_VERSION = context.operations.TEMPLATE_VERSION
     V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE = context.operations.V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
     _apply_standard_single_export_mode = context.operations._apply_standard_single_export_mode
@@ -1111,8 +1113,25 @@ def render_single_export(*, context: WorkflowContext) -> None:
     )
     st.session_state["report_export_preference"] = export_preference
     if export_preference == EXPORT_PREFERENCE_STANDARD:
-        template_compatible = Path(DEFAULT_TEMPLATE_PATH).exists() and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
-        standard_decision = _standard_report_decision(excel_com_status, template_compatible=template_compatible)
+        template_compatible = (
+            not _is_v2_result(result)
+            and Path(DEFAULT_TEMPLATE_PATH).exists()
+            and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+        )
+        fallback_reason = ""
+        peak_binding = ()
+        if template_compatible and confirmed_ready:
+            try:
+                peak_binding = application_assess_standard_peak_binding(effective_peaks)
+            except (OSError, ValueError, RuntimeError, KeyError):
+                template_compatible = False
+            else:
+                if not all(match.matched for match in peak_binding):
+                    template_compatible = False
+                    fallback_reason = PEAK_BINDING_FALLBACK_REASON
+        standard_decision = _standard_report_decision(
+            excel_com_status, template_compatible=template_compatible, fallback_reason=fallback_reason
+        )
         export_mode, standard_mode_changed = _apply_standard_single_export_mode(
             standard_decision,
             previous_export_mode,
@@ -1162,6 +1181,7 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     "requested": STANDARD_REPORT_EXPORT_MODE if standard_decision else export_mode,
                     "used": export_mode,
                     "fallback": getattr(standard_decision, "fallback_notice", "") if standard_decision else "",
+                    "peak_binding": [vars(match) for match in peak_binding] if standard_decision else [],
                 })
                 _render_excel_com_status(excel_com_status)
 
@@ -1241,6 +1261,7 @@ def render_single_export(*, context: WorkflowContext) -> None:
                         generate_workbook=True,
                         use_template_report_layout=use_template_report_layout,
                         use_excel_com_native_charts=excel_com_enabled,
+                        use_ooxml_native_template=bool(standard_decision and standard_decision.use_ooxml_native_template),
                         export_mode=export_mode,
                         source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
                         generated_at=export_generated_at,
@@ -1250,7 +1271,11 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     )
                 for warning in export_warnings:
                     message = str(warning.message)
-                    if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
+                    if standard_decision and "OOXML native-template export failed" in message:
+                        st.warning(operator_fallback_message(message))
+                        with st.expander("Advanced / Diagnostics — export detail", expanded=False):
+                            st.warning(message)
+                    elif excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
                         st.warning(operator_fallback_message(message))
                         with st.expander("Advanced / Diagnostics — export detail", expanded=False):
                             st.warning(message)

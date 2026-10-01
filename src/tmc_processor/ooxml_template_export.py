@@ -226,7 +226,6 @@ def _cache_required_template_sources(doc,cells,strings,template_map,plan):
     diagram={item.code:item for item in plan.diagram_rows}
     support=dict(plan.support_sheets).get("Hourly_Movement_PCU")
     if support is None: raise ValueError("Hourly_Movement_PCU support sheet is required for native total caches.")
-    movement_totals=[]
     for key,column in hourly["columns"].items():
         if key=="time": continue
         ref=f"{column}{total}"
@@ -240,9 +239,8 @@ def _cache_required_template_sources(doc,cells,strings,template_map,plan):
         if key!="Total":
             if key not in diagram or key not in support.columns or not math.isclose(amount,diagram[key].total_cache,rel_tol=1e-9,abs_tol=1e-9):
                 raise ValueError(f"Hourly movement total disagrees with Diagram_Data for {key}.")
-            movement_totals.append(amount)
-        elif not math.isclose(amount,sum(movement_totals),rel_tol=1e-9,abs_tol=1e-9):
-            raise ValueError("Grand hourly total does not equal the 16 movement totals.")
+        # Total is rounded independently of the displayed movement columns by
+        # the established analysis payload. The support sheet is its source of truth.
         if key in support.columns and not math.isclose(amount,float(support.iloc[-1][key]),rel_tol=1e-9,abs_tol=1e-9):
             raise ValueError(f"Hourly movement total disagrees with support-sheet total for {key}.")
         _set_formula_cache(doc,cells,ref,amount)

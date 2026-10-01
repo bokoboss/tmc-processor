@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import warnings
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkstemp
 from io import BytesIO
 from datetime import datetime, time
 from typing import Any
@@ -114,6 +115,7 @@ STANDARD_REPORT_EXPORT_MODE = "Standard report — Recommended"
 EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
 BATCH_SAFE_PNG_EXPORT_MODE = SAFE_PNG_EXPORT_MODE
+PEAK_BINDING_FALLBACK_REASON = "Confirmed Peak interval is not representable by the current native Excel template."
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class StandardReportExportDecision:
     use_template_report_layout: bool
     use_excel_com_native_charts: bool
     fallback_notice: str = ""
+    use_ooxml_native_template: bool = False
 
 
 def standard_report_export_decision(
@@ -135,18 +138,17 @@ def standard_report_export_decision(
 ) -> StandardReportExportDecision:
     """Choose the safest validated backend for the Standard report outcome."""
 
-    if excel_com_available and template_compatible:
+    if template_compatible:
         return StandardReportExportDecision(
             requested_mode=STANDARD_REPORT_EXPORT_MODE,
             backend_mode=EXCEL_TEMPLATE_EXPORT_MODE,
             use_template_report_layout=True,
-            use_excel_com_native_charts=True,
+            use_excel_com_native_charts=False,
+            use_ooxml_native_template=True,
         )
 
     detail = str(availability_detail or "").strip()
-    reason = detail or (
-        "Excel COM is unavailable" if not excel_com_available else "the selected Excel template is not compatible"
-    )
+    reason = detail or "the selected Excel template is unavailable or incompatible"
     return StandardReportExportDecision(
         requested_mode=STANDARD_REPORT_EXPORT_MODE,
         backend_mode=SAFE_PNG_EXPORT_MODE,
@@ -154,6 +156,18 @@ def standard_report_export_decision(
         use_excel_com_native_charts=False,
         fallback_notice=f"Standard report used Safe PNG fallback: {reason}.",
     )
+
+
+def assess_native_template_peak_binding(
+    metadata: dict[str, Any],
+    template_path: str | Path = DEFAULT_TEMPLATE_PATH,
+    template_map_path: str | Path = DEFAULT_TEMPLATE_MAP_PATH,
+):
+    """Read-only compatibility check using the native write plan's Peak matcher."""
+    from .template_write_plan import preflight_template_peak_binding
+
+    resources = load_report_template_resources(template_path, template_map_path)
+    return preflight_template_peak_binding(resources.template_path, resources.mapping, metadata)
 
 
 def _export_metadata_frame(
@@ -1382,6 +1396,46 @@ def _export_workbook_with_excel_com(
         return output_path.read_bytes()
 
 
+def _export_workbook_with_ooxml(
+    setup: dict[str, Any],
+    sheets: dict[str, pd.DataFrame],
+    hourly_movement: pd.DataFrame,
+    template_path: str | None,
+    template_map_path: str | None,
+) -> bytes:
+    """Transport the existing post-Review v1 payload through the qualified package writer."""
+    from .ooxml_template_export import export_template_ooxml
+    from .template_write_plan import resolve_template_write_plan
+    from .template_write_verify import verify_ooxml_against_plan
+
+    default_template_path, default_template_map_path = template_paths_for_movement_scheme(MOVEMENT_SCHEME_V1)
+    resources = load_report_template_resources(
+        template_path or default_template_path,
+        template_map_path or default_template_map_path,
+    )
+    chart_source_data = _native_chart_source_data(hourly_movement, sheets["Vehicle_Composition_Report"])
+    report_data = {
+        "sheets": sheets,
+        "hourly_movement_pcu": hourly_movement,
+        "hourly_vehicle_class": sheets["Hourly_Vehicle_Class"],
+        "vehicle_composition_report": sheets["Vehicle_Composition_Report"],
+        "diagram_movement_codes": MOVEMENT_CODES,
+        "diagram_data_sheet_name": DIAGRAM_DATA_SHEET_NAME,
+    }
+    plan = resolve_template_write_plan(resources.template_path, resources.mapping, report_data, setup, chart_source_data)
+    file_descriptor, temporary_path = mkstemp(prefix="tmc_report_ooxml_", suffix=".xlsx")
+    os.close(file_descriptor)
+    output_path = Path(temporary_path)
+    try:
+        export_template_ooxml(
+            resources.template_path, output_path, resources.mapping, report_data, setup, chart_source_data
+        )
+        verify_ooxml_against_plan(resources.template_path, output_path, resources.mapping, plan)
+        return output_path.read_bytes()
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
 def export_v2_generated_workbook(
     result: Any,
     setup: dict[str, Any] | None = None,
@@ -1678,6 +1732,7 @@ def export_workbook(
     include_diagram: bool = True,
     use_template_report_layout: bool = False,
     use_excel_com_native_charts: bool = False,
+    use_ooxml_native_template: bool = False,
     template_path: str | None = None,
     template_map_path: str | None = None,
     create_excel_tables: bool = DEFAULT_CREATE_EXCEL_TABLES,
@@ -1730,6 +1785,20 @@ def export_workbook(
         "Report_Text": _report_text(normalized, peaks, vehicle),
     }
     chart_pngs = dict(report_chart_pngs(hourly_movement, vehicle_composition_for_report, setup=setup)) if include_charts else {}
+    if use_ooxml_native_template:
+        try:
+            return _export_workbook_with_ooxml(
+                setup, sheets, hourly_movement, template_path, template_map_path
+            )
+        except (OSError, ValueError, AssertionError, ReportTemplateUnavailable) as exc:
+            fallback_notice = f"OOXML native-template export failed; used Safe PNG fallback: {exc}"
+            _set_export_metadata(
+                sheets["Export_Metadata"],
+                export_mode_used=SAFE_PNG_EXPORT_MODE,
+                export_fallback_notice=fallback_notice,
+            )
+            warnings.warn(fallback_notice, RuntimeWarning, stacklevel=2)
+            use_template_report_layout = False
     if use_excel_com_native_charts:
         try:
             from .excel_com_export import ExcelComUnavailable, require_excel_com

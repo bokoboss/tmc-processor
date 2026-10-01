@@ -1,5 +1,7 @@
 # UX-7 release qualification evidence
 
+**Current routing status (2026-10-01):** The compatible-Peak Standard routing qualification is recorded in the final section below. Statements in earlier sections that Standard routing was unchanged describe the preceding `26eb2333` checkpoint and are superseded by that section. The protected real-workbook waiver and P0 operator UI evidence remain in force.
+
 Finalization date: 2026-10-01 (Asia/Bangkok). Acceptance decision: **ACCEPT WITH DOCUMENTED LIMITATIONS**. The acceptance authority explicitly waived repeating the three protected real-workbook end-to-end runs on this exact UX-7 branch; Issue #10 records the rationale and limitations. The earlier blocked finding below is historical qualification context, not a current gate. Standard routing remains unchanged. No push, PR, merge, tag, or release is authorized by this evidence.
 
 ## Repository and baseline
@@ -162,3 +164,49 @@ Standard routing remains unchanged. Any later routing switch requires a separate
 | `git diff --check` | **PASS** before staging. Staged patch integrity is checked separately during finalization. |
 
 The 13 warnings are openpyxl's known DrawingML read warning. The OOXML exporter does not save through openpyxl; independent package/relationship/chart/drawing preservation tests passed. The final suite includes deterministic post-Review write-plan and negative mutation tests, confirmed/effective Peak propagation and native formula caches, workflow invalidation and session/preset compatibility, Safe PNG, Batch mechanics, and the P0 operator UI assertions. Excel COM execution and fresh protected real-workbook replay were not part of this final run; the latter is explicitly waived for this branch.
+
+## Compatible-Peak Standard routing qualification (2026-10-01)
+
+### Scope and recovered dirty state
+
+The read-only routing audit found that Standard still selected legacy COM when available and Safe PNG when COM was unavailable, while the accepted OOXML native-template exporter was reachable only from qualification code. This gap was on branch `codex/ux-7-release-qualification` at parent HEAD `26eb2333a0e78c67f0c86a2face1e1b9267725c3`. At the start of remediation, `git status --short --branch` showed eight modified files and one untracked routing test. `git diff --stat` showed 143 insertions and 33 deletions across the eight tracked files. The provisional Batch run exposed a confirmed rolling Peak of `08:15-09:15`, which has no exact native `Summary!V10:V21` hourly row. This is an accepted analysis result; the exporter must preserve it.
+
+| Provisional edit | Disposition |
+|---|---|
+| `src/tmc_processor/pipeline.py`; `src/tmc_processor/ui/app_shell.py`; `tests/test_ux4_ux5.py`; `tests/test_ux7_p0_ui_cleanup.py` | Kept the Standard-to-OOXML transport and operator UI assertions. |
+| `src/tmc_processor/batch.py`; `src/tmc_processor/exporter.py`; `src/tmc_processor/ui/workflows/batch.py`; `src/tmc_processor/ui/workflows/single.py`; untracked `tests/test_ux7_standard_ooxml_routing.py` | Adjusted for exact Peak-row preflight, per-item Batch routing, fallback provenance, and production-path tests. |
+| None | Reverted. |
+
+The final change also touches `src/tmc_processor/application/services.py`, `src/tmc_processor/template_write_plan.py`, `src/tmc_processor/template_write_verify.py`, `src/tmc_processor/ooxml_template_export.py`, `src/tmc_processor/ui/components/export.py`, and `src/tmc_processor/ui/workflow_context.py`. There is no template binary/map, Mapping, Analyze, Peak calculation, Safe PNG engine, or Office configuration change. `DEFAULT_PEAK_MODE` remains `fixed_hourly`; `rolling_60min` remains a real supported Peak mode. Issue #23 tracks native-template support for non-hour-aligned rolling Peaks.
+
+### Routing and write contract
+
+The preflight and the native write-plan resolver now use one exact interval matcher. It normalizes the confirmed AM/PM start and end labels, requires each full interval to equal exactly one native Summary time row, and returns period, interval, match status, worksheet row, helper cell, and HLOOKUP-relative helper value. It reads the authoritative template without saving it. `Summary!U9:U22` remains `1..14`; no Peak is rounded, snapped, or substituted. A `rolling_60min` Peak at `08:00-09:00` is eligible because its interval matches `Summary!V11`; a Peak at `08:15-09:15` is ineligible regardless of its originating algorithm.
+
+Single Standard with a compatible authoritative template/map and two representable effective Peaks uses the qualified OOXML native-template writer whether Excel COM is available or not. A nonrepresentable valid Peak or unavailable/incompatible template uses Safe PNG. Explicit Safe PNG still goes directly to Safe PNG. COM remains an optional legacy/Advanced path and is never required by Standard. Expected Peak incompatibility is decided before OOXML invocation; unexpected writer/verifier failures retain their distinct guarded fallback diagnostics. `Export_Metadata` keeps the Standard request, actual used mode, and fallback reason; the normal UI shows concise Thai fallback text, with technical detail confined to Advanced diagnostics.
+
+Batch applies the same decision after each item's explicit Peak confirmation. One eligible item can produce native OOXML while another item with `08:15-09:15` produces Safe PNG in the same ZIP. The requested/used/fallback values are carried into each report, Batch summary row, export summary, and Project Session. Excluded and failed items remain explicit and produce no report. The existing exception-first disposition and filename/package behavior are retained.
+
+An aligned demo Batch run initially reached OOXML but failed a verifier assertion that independently rounded displayed movement columns must add exactly to independently rounded Total. The accepted analysis payload showed a three-PCU difference over 12 hours (`23,956` displayed movement sum versus `23,959` displayed Total). The OOXML writer and verifier now validate each movement against `Diagram_Data` and the support sheet, and validate the Total against the authoritative `Hourly_Movement_PCU` support Total. This removes only the false equality assumption; it does not alter engineering calculations or workbook values. The package writer's protected formulas, cache checks, charts, drawings, relationships, and negative mutation checks remain active.
+
+### Production-path matrix and artifact
+
+`tests/test_ux7_standard_ooxml_routing.py` supplies a deterministic, all-16-movement post-Review payload through the application service and Standard decision. Its focused run passed **10/10**:
+
+| Case | Observed result |
+|---|---|
+| Fixed AM `08:00-09:00`, PM `17:00-18:00`, COM unavailable or available | OOXML native template in both conditions; COM and Safe PNG transports not called. |
+| Confirmed AM `08:15-09:15`, PM `17:00-18:00` | Exact Peak retained; preflight mismatch; Safe PNG used without OOXML/COM attempt; requested Standard/used Safe PNG/fallback metadata present. |
+| Aligned `rolling_60min` interval `08:00-09:00` | Exact native row/helper match; eligible independently of mode name. |
+| Explicit Safe PNG | Safe PNG only. |
+| Template unavailable/incompatible | Standard request retained; Safe PNG fallback. |
+| Forced OOXML transport error | Guarded Safe PNG fallback with a distinct technical reason. |
+| Reviewed Batch: aligned, nonaligned, excluded, invalid input | OOXML/Safe PNG/excluded/failed respectively, with per-item requested/used/reason provenance. |
+
+The production application service, rather than a direct `export_template_ooxml` call, generated [Standard_All_16_Movements_AM07_PM16_OOXML.xlsx](<C:/MyRD/TMC Processor/UX7_Standard_OOXML_Qualification/Standard_All_16_Movements_AM07_PM16_OOXML.xlsx>). It is **119,643 bytes**, SHA-256 `038c2a692f1a6e44c9a360e83d0cdb7175119e235a8de41da6ac53d53e7097a1`. `Export_Metadata` records requested `Standard report — Recommended`, used `Excel Template Mode`, no fallback, effective AM `07:00-08:00`, and PM `16:00-17:00`. The exact preflight matches AM to `Summary!V10`/`U10` (helper 2) and PM to `Summary!V19`/`U19` (helper 11). Package checks found two native charts, 33 shapes, 19 sheets including all support sheets, and `U9:U22 = 1..14`. The production OOXML path ran the complete write-plan/package/formula/cache verifier before returning bytes. The native workbook-generation semantics are the same as the manually accepted OOXML checkpoint; only routing, temporary file transport, and the false rounded-total validation assertion changed. No additional Excel process or manual reopening was used.
+
+### Automated gates and limits
+
+The final full-suite rerun passed **415 tests, 0 failures, 14 warnings**. This exceeds the 405-test UX-7 checkpoint, the 369-test UX-6 baseline, and the historical 257-test baseline. The warnings are the known openpyxl DrawingML read warnings; structural OOXML preservation tests inspect the package directly. The first attempted run was invalidated by this sandbox's Windows ACL handling for Python-created `0700` temporary directories; it recorded `379 passed, 6 failed, 30 setup errors` and was not used as product evidence. The passing run used a process-local pytest launcher that maps only `os.mkdir(..., 0o700)` to `0o777` and a fresh qualification `--basetemp`; repository and Office configuration were unchanged. A direct `compileall` call likewise encountered unwritable sandbox bytecode-cache paths; `.venv\Scripts\python.exe -m compileall -q app.py src` passed with `PYTHONPYCACHEPREFIX` pointed at a writable qualification directory. `git diff --check` passed.
+
+The prior three protected real-workbook replay waiver and missing reusable Mapping/Review fixtures remain as recorded above; no physical directions were inferred. The accepted manual Excel fidelity checkpoint remains evidence for the same OOXML workbook-generation semantics. Issue #23 is the deferred native-template extension for non-hour-aligned rolling Peaks. No Office/Windows repair or configuration was performed. This qualification authorizes one local routing commit for final review, not a push, PR, merge, tag, release, or closure of Issue #10.

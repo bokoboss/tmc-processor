@@ -12,6 +12,7 @@ STANDARD_REPORT_DESCRIPTION = "รายงาน Excel ตามรูปแบ
 SAFE_PNG_TITLE = "รายงานสำรอง"
 SAFE_PNG_DESCRIPTION = "ใช้รูปภาพสำหรับกราฟและแผนผังเพื่อความเข้ากันได้"
 FALLBACK_MESSAGE = "ระบบใช้รูปแบบรายงานสำรองสำหรับการส่งออกครั้งนี้"
+PEAK_FALLBACK_MESSAGE = "ระบบใช้รูปแบบรายงานสำรอง เนื่องจากช่วง Peak ที่ยืนยันไม่ตรงกับช่วงเวลาที่ Excel Template ปัจจุบันรองรับ"
 
 
 def operator_report_label(export_mode: str | None) -> str:
@@ -21,6 +22,8 @@ def operator_report_label(export_mode: str | None) -> str:
 
 
 def operator_fallback_message(technical_notice: str) -> str:
+    if "Confirmed Peak interval is not representable" in technical_notice:
+        return PEAK_FALLBACK_MESSAGE
     return FALLBACK_MESSAGE if technical_notice else ""
 
 
