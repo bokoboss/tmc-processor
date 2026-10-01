@@ -14,7 +14,7 @@ import pandas as pd
 
 from .charts import report_chart_pngs
 from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram, render_v2_movement_diagram_png
-from .exporter import export_v2_generated_workbook
+from .exporter import PEAK_BINDING_FALLBACK_REASON, assess_native_template_peak_binding, export_v2_generated_workbook
 from .export_package import build_export_summary_text
 from .importer import load_detected_sheets
 from .mapping import clean_mapping, validate_mapping_scheme
@@ -501,6 +501,7 @@ def _export_used_from_warnings(requested_mode: str, export_warnings: Iterable[wa
         "Excel COM unavailable",
         "Excel COM native-chart export failed",
         "falling back to safe openpyxl export with PNG charts",
+        "OOXML native-template export failed",
     )
     if requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE and any(
         marker in message for message in messages for marker in fallback_markers
@@ -774,6 +775,9 @@ def _process_one_file(
     generated_at: str,
     use_template_report_layout: bool,
     use_excel_com_native_charts: bool,
+    use_ooxml_native_template: bool = False,
+    export_mode_requested: str | None = None,
+    export_fallback_notice: str = "",
     peak_selection_source: str = PEAK_SELECTION_USER_CONFIRMED_BATCH,
     confirmed_peak_periods: dict[str, tuple[str, str]] | None = None,
     suggested_am_peak: str = "",
@@ -817,6 +821,24 @@ def _process_one_file(
     if "PM" in confirmed_periods:
         confirmed_setup["pm_peak_start"], confirmed_setup["pm_peak_end"] = confirmed_periods["PM"]
 
+    requested_mode = export_mode_requested or _base_export_mode_label(export_mode)
+    item_mode = export_mode
+    item_use_template = use_template_report_layout
+    item_use_ooxml = use_ooxml_native_template
+    item_fallback_notice = export_fallback_notice
+    if item_use_ooxml:
+        try:
+            binding = assess_native_template_peak_binding(confirmed_setup)
+        except (OSError, ValueError, RuntimeError, KeyError):
+            binding = ()
+            item_fallback_notice = "The authoritative Excel template is unavailable or incompatible."
+        if not binding or not all(match.matched for match in binding):
+            item_mode = BATCH_SAFE_PNG_EXPORT_MODE
+            item_use_template = False
+            item_use_ooxml = False
+            if binding:
+                item_fallback_notice = PEAK_BINDING_FALLBACK_REASON
+
     with warnings.catch_warnings(record=True) as export_warnings:
         warnings.simplefilter("always", RuntimeWarning)
         result: ProcessingResult = process_tmc(
@@ -829,18 +851,21 @@ def _process_one_file(
             confirmed_peak_periods=confirmed_periods,
             pce_factors=pce_factors,
             generate_workbook=True,
-            use_template_report_layout=use_template_report_layout,
+            use_template_report_layout=item_use_template,
             use_excel_com_native_charts=use_excel_com_native_charts,
-            export_mode=export_mode,
+            use_ooxml_native_template=item_use_ooxml,
+            export_mode=item_mode,
+            export_mode_requested=requested_mode,
+            export_mode_used=_base_export_mode_label(item_mode),
+            export_fallback_notice=item_fallback_notice,
             source_file_name=item.file_name,
             generated_at=generated_at,
         )
-    export_mode_requested = _base_export_mode_label(export_mode)
-    if export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE and not use_excel_com_native_charts:
+    if _base_export_mode_label(item_mode) == BATCH_EXCEL_TEMPLATE_EXPORT_MODE and not (use_excel_com_native_charts or item_use_ooxml):
         export_mode_used = BATCH_SAFE_PNG_EXPORT_MODE
         export_warning_text = "Excel COM native chart export was not enabled; used Safe PNG Export Mode."
     else:
-        export_mode_used, export_warning_text = _export_used_from_warnings(export_mode, export_warnings)
+        export_mode_used, export_warning_text = _export_used_from_warnings(item_mode, export_warnings)
     hourly_movement = hourly_movement_pcu(result.normalized, active_mapping)
     chart_pngs = dict(
         report_chart_pngs(
@@ -861,11 +886,12 @@ def _process_one_file(
         detected_sheet_names=detected_sheets,
         peak_settings=confirmed_setup,
         export_settings={
-            "use_template_report_layout": use_template_report_layout,
+            "use_template_report_layout": item_use_template,
             "use_excel_com_native_charts": use_excel_com_native_charts,
             "template_version": TEMPLATE_VERSION,
-            "export_mode_requested": export_mode_requested,
+            "export_mode_requested": requested_mode,
             "export_mode_used": export_mode_used,
+            "export_fallback_notice": item_fallback_notice or export_warning_text,
         },
         pce_factors=result.pce_factors,
         source_file_name=Path(item.file_name).name,
@@ -875,7 +901,7 @@ def _process_one_file(
     summary_text = build_export_summary_text(
         setup=confirmed_setup,
         source_file_name=item.file_name,
-        export_mode=export_mode,
+        export_mode=export_mode_used,
         peaks=result.peaks,
         mapping=active_mapping,
         qc=result.qc,
@@ -883,8 +909,9 @@ def _process_one_file(
         pce_factors=result.pce_factors,
         export_settings={
             "template_version": TEMPLATE_VERSION,
-            "export_mode_requested": export_mode_requested,
+            "export_mode_requested": requested_mode,
             "export_mode_used": export_mode_used,
+            "export_fallback_notice": item_fallback_notice or export_warning_text,
             "export_status": "success",
             "export_error": "",
         },
@@ -895,8 +922,9 @@ def _process_one_file(
             summary_text.rstrip(),
             f"survey_date_text: {confirmed_setup.get('survey_date_text', '')}",
             f"output_stem: {output_stem}",
-            f"export_mode_requested: {export_mode_requested}",
+            f"export_mode_requested: {requested_mode}",
             f"export_mode_used: {export_mode_used}",
+            f"export_fallback_notice: {item_fallback_notice or export_warning_text}",
             "export_status: success",
             "export_error: ",
             "",
@@ -912,7 +940,7 @@ def _process_one_file(
         template_version=TEMPLATE_VERSION,
         status="success",
         review_state="confirmed",
-        export_mode_requested=export_mode_requested,
+        export_mode_requested=requested_mode,
         export_mode_used=export_mode_used,
         export_status="success",
         export_error="",
@@ -929,7 +957,8 @@ def _process_one_file(
         QC_info=counts["info"],
         export_file=f"{folder_name}/{output_stem}_report.xlsx",
         generated_report_filename=f"{output_stem}_report.xlsx",
-        notes=item.notes or export_warning_text or "Auto/suggested peaks confirmed by Batch v1.",
+        notes="; ".join(filter(None, (item.notes, item_fallback_notice or export_warning_text)))
+        or "Auto/suggested peaks confirmed by Batch v1.",
     )
     artifact = _BatchFileArtifacts(
         folder_name=folder_name,
@@ -1306,6 +1335,9 @@ def generate_batch_zip_from_reviewed_peaks(
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,
     use_excel_com_native_charts: bool = False,
+    use_ooxml_native_template: bool = False,
+    export_mode_requested: str | None = None,
+    export_fallback_notice: str = "",
     peak_selection_source: str = PEAK_SELECTION_USER_CONFIRMED_BATCH,
 ) -> BatchResult:
     """Generate the final Batch ZIP using reviewed per-file peak selections."""
@@ -1319,8 +1351,8 @@ def generate_batch_zip_from_reviewed_peaks(
     )
     template_version = getattr(analysis, "template_version", "") or _batch_template_version(None, movement_code_scheme)
     setup["movement_code_scheme"] = movement_code_scheme
-    export_mode_requested = _base_export_mode_label(export_mode)
-    if movement_code_scheme == MOVEMENT_SCHEME_V2 and export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
+    requested_mode = export_mode_requested or _base_export_mode_label(export_mode)
+    if movement_code_scheme == MOVEMENT_SCHEME_V2 and _base_export_mode_label(export_mode) == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
         raise ValueError(BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH)
     for item in analysis.items:
         if item.status != "success":
@@ -1334,7 +1366,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     template_version=template_version,
                     status="failed",
                     review_state="failed",
-                    export_mode_requested=export_mode_requested,
+                    export_mode_requested=requested_mode,
                     export_mode_used="",
                     export_status="failed",
                     export_error=item.notes,
@@ -1365,7 +1397,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     status="excluded",
                     review_state="excluded",
                     disposition_reason=item.exclusion_reason,
-                    export_mode_requested=export_mode_requested,
+                    export_mode_requested=requested_mode,
                     export_mode_used="",
                     export_status="excluded",
                     export_error="",
@@ -1390,7 +1422,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     template_version=template_version,
                     status="failed",
                     review_state="needs_review",
-                    export_mode_requested=export_mode_requested,
+                    export_mode_requested=requested_mode,
                     export_mode_used="",
                     export_status="failed",
                     export_error="Confirmed AM/PM peak is missing.",
@@ -1448,6 +1480,9 @@ def generate_batch_zip_from_reviewed_peaks(
                     generated_at=analysis.generated_at,
                     use_template_report_layout=use_template_report_layout,
                     use_excel_com_native_charts=use_excel_com_native_charts,
+                    use_ooxml_native_template=use_ooxml_native_template,
+                    export_mode_requested=requested_mode,
+                    export_fallback_notice=export_fallback_notice,
                     peak_selection_source=peak_selection_source,
                     confirmed_peak_periods=confirmed_periods,
                     suggested_am_peak=item.suggested_AM_peak,
@@ -1466,7 +1501,7 @@ def generate_batch_zip_from_reviewed_peaks(
                     movement_code_scheme=movement_code_scheme,
                     template_version=template_version,
                     status="failed",
-                    export_mode_requested=export_mode_requested,
+                    export_mode_requested=requested_mode,
                     export_mode_used="",
                     export_status="failed",
                     export_error=str(exc),

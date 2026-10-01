@@ -175,6 +175,7 @@
       }
     },
     "movement_value_rows": {
+      "helper_column": "U",
       "total_12_hour": {
         "helper_row": 22
       },

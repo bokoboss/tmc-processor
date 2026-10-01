@@ -443,10 +443,12 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     at.run(timeout=90)
     assert at.session_state["active_workflow_tab"] == "Review"
 
-    confirm_review = _button_by_label(at, "Confirm Peak Review")
+    assert any("ช่วง Peak ที่ระบบแนะนำยังเป็นค่าร่าง" in item.value for item in at.markdown)
+    confirm_review = _button_by_label(at, "ยืนยันช่วง Peak")
     assert confirm_review.disabled is False
     confirm_review.click()
     at.run(timeout=60)
+    assert any("ยืนยันช่วง Peak แล้ว" in item.value for item in at.markdown)
 
     _button_by_label(at, "Data").click()
     at.run(timeout=60)

@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from tmc_processor.ui.workflow_context import WorkflowContext
+from tmc_processor.ui.components.export import (
+    SAFE_PNG_DESCRIPTION,
+    SAFE_PNG_TITLE,
+    STANDARD_REPORT_DESCRIPTION,
+    STANDARD_REPORT_TITLE,
+    operator_fallback_message,
+)
 
 import streamlit as st
 
@@ -772,22 +779,20 @@ def render_single_review(*, context: WorkflowContext) -> None:
             draft_confirmed = (confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end)
             previous_confirmed_state = _peak_value_payload(_confirmed_peaks_from_state())
             if _peak_values_complete(previous_confirmed_state):
+                draft_changed = draft_confirmed != (
+                    previous_confirmed_state.get("am_peak_start"),
+                    previous_confirmed_state.get("am_peak_end"),
+                    previous_confirmed_state.get("pm_peak_start"),
+                    previous_confirmed_state.get("pm_peak_end"),
+                )
                 _render_alert(
-                    "Draft Peak changes are not applied until you press Confirm Peak Review.",
-                    "warning"
-                    if draft_confirmed
-                    != (
-                        previous_confirmed_state.get("am_peak_start"),
-                        previous_confirmed_state.get("am_peak_end"),
-                        previous_confirmed_state.get("pm_peak_start"),
-                        previous_confirmed_state.get("pm_peak_end"),
-                    )
-                    else "info",
+                    "มีการเปลี่ยนช่วง Peak แต่ยังไม่ได้ยืนยัน" if draft_changed else "ยืนยันช่วง Peak แล้ว",
+                    "warning" if draft_changed else "success",
                 )
             else:
-                _render_alert("Suggested Peaks are drafts until you press Confirm Peak Review.", "info")
+                _render_alert("ช่วง Peak ที่ระบบแนะนำยังเป็นค่าร่าง กรุณาตรวจสอบและยืนยันก่อนส่งออก", "info")
             confirm_review = st.button(
-                "Confirm Peak Review",
+                "ยืนยันช่วง Peak",
                 type="primary",
                 disabled=not all(draft_confirmed),
                 key="confirm_single_peak_review",
@@ -802,7 +807,7 @@ def render_single_review(*, context: WorkflowContext) -> None:
                     source_file_name=uploaded_file.name if uploaded_file is not None else None,
                     export_mode=export_mode,
                 )
-                _flash_and_rerun("Peak Review confirmed. Analysis remains current.")
+                _flash_and_rerun("ยืนยันช่วง Peak แล้ว")
             confirmed_am_start = previous_confirmed_state.get("am_peak_start", "")
             confirmed_am_end = previous_confirmed_state.get("am_peak_end", "")
             confirmed_pm_start = previous_confirmed_state.get("pm_peak_start", "")
@@ -811,8 +816,8 @@ def render_single_review(*, context: WorkflowContext) -> None:
             confirmed_pm_label = f"{confirmed_pm_start}-{confirmed_pm_end}" if confirmed_pm_start and confirmed_pm_end else ""
             _render_metric_strip(
                 [
-                    ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
-                    ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่กำหนด", "กำหนดแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
+                    ("AM Peak", confirmed_am_label or "-", "", "ช่วงที่กำหนด", "ยืนยันแล้ว" if confirmed_am_label else "รอตรวจสอบ"),
+                    ("PM Peak", confirmed_pm_label or "-", "", "ช่วงที่กำหนด", "ยืนยันแล้ว" if confirmed_pm_label else "รอตรวจสอบ"),
                     ("AM PCU", _interval_total_pcu(hourly_movement, confirmed_am_label) or am_pcu or "-", "PCU", "Peak PCU"),
                     ("PM PCU", _interval_total_pcu(hourly_movement, confirmed_pm_label) or pm_pcu or "-", "PCU", "Peak PCU"),
                 ],
@@ -963,11 +968,13 @@ def render_single_export(*, context: WorkflowContext) -> None:
     EXPORT_PREFERENCE_STANDARD = context.operations.EXPORT_PREFERENCE_STANDARD
     MOVEMENT_SCHEME_V2 = context.operations.MOVEMENT_SCHEME_V2
     PACKAGE_MIME = context.operations.PACKAGE_MIME
+    PEAK_BINDING_FALLBACK_REASON = context.operations.PEAK_BINDING_FALLBACK_REASON
     PEAK_SELECTION_AUTO = context.operations.PEAK_SELECTION_AUTO
     PNG_MIME = context.operations.PNG_MIME
     PROJECT_SESSION_MIME = context.operations.PROJECT_SESSION_MIME
     Path = context.operations.Path
     STANDARD_REPORT_EXPORT_MODE = context.operations.STANDARD_REPORT_EXPORT_MODE
+    application_assess_standard_peak_binding = context.operations.application_assess_standard_peak_binding
     TEMPLATE_VERSION = context.operations.TEMPLATE_VERSION
     V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE = context.operations.V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
     _apply_standard_single_export_mode = context.operations._apply_standard_single_export_mode
@@ -1096,17 +1103,35 @@ def render_single_export(*, context: WorkflowContext) -> None:
     previous_export_mode = st.session_state.get("report_export_mode", export_mode)
     standard_decision = None
     export_preference = st.radio(
-        "Report outcome",
+        "รูปแบบรายงาน",
         options=[EXPORT_PREFERENCE_STANDARD, EXPORT_PREFERENCE_ADVANCED],
         index=0 if st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD else 1,
         key="report_export_preference_control",
         horizontal=True,
-        help="Standard report selects the validated native Excel Template path when available and uses Safe PNG otherwise.",
+        format_func=lambda option: STANDARD_REPORT_TITLE if option == EXPORT_PREFERENCE_STANDARD else "Advanced / Diagnostics",
+        help="เลือกรายงานมาตรฐาน หรือเปิดตัวเลือกขั้นสูงเมื่อต้องการตรวจสอบรายละเอียด",
     )
     st.session_state["report_export_preference"] = export_preference
     if export_preference == EXPORT_PREFERENCE_STANDARD:
-        template_compatible = Path(DEFAULT_TEMPLATE_PATH).exists() and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
-        standard_decision = _standard_report_decision(excel_com_status, template_compatible=template_compatible)
+        template_compatible = (
+            not _is_v2_result(result)
+            and Path(DEFAULT_TEMPLATE_PATH).exists()
+            and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+        )
+        fallback_reason = ""
+        peak_binding = ()
+        if template_compatible and confirmed_ready:
+            try:
+                peak_binding = application_assess_standard_peak_binding(effective_peaks)
+            except (OSError, ValueError, RuntimeError, KeyError):
+                template_compatible = False
+            else:
+                if not all(match.matched for match in peak_binding):
+                    template_compatible = False
+                    fallback_reason = PEAK_BINDING_FALLBACK_REASON
+        standard_decision = _standard_report_decision(
+            excel_com_status, template_compatible=template_compatible, fallback_reason=fallback_reason
+        )
         export_mode, standard_mode_changed = _apply_standard_single_export_mode(
             standard_decision,
             previous_export_mode,
@@ -1115,9 +1140,9 @@ def render_single_export(*, context: WorkflowContext) -> None:
             st.rerun()
         use_template_report_layout = bool(standard_decision.use_template_report_layout)
         use_excel_com_native_charts = bool(standard_decision.use_excel_com_native_charts)
-        st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {export_mode} selected automatically.")
+        st.info(STANDARD_REPORT_TITLE if use_template_report_layout else SAFE_PNG_TITLE)
         if standard_decision.fallback_notice:
-            st.warning(standard_decision.fallback_notice)
+            st.warning(operator_fallback_message(standard_decision.fallback_notice))
     else:
         with st.expander("Advanced export options", expanded=True):
             selected_export_mode = st.radio(
@@ -1143,28 +1168,21 @@ def render_single_export(*, context: WorkflowContext) -> None:
     export_status_col, readiness_col = st.columns([0.9, 1.1])
     with export_status_col:
         with st.container(border=True):
-            _render_section_header("โหมดส่งออก", "เลือกวิธีสร้างรายงานจากหน้านี้")
+            _render_section_header("รูปแบบรายงาน", "รูปแบบที่จะได้รับจากการส่งออกครั้งนี้")
             if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-success"><strong>Excel Template Mode</strong> · แนะนำสำหรับรายงานฉบับใช้งานจริง</div>', unsafe_allow_html=True)
-                if is_v2_single_result:
-                    st.caption(
-                        "Excel Template Mode สำหรับ approach_movement ใช้ Excel COM เพื่อรักษากราฟและ diagram จาก template"
-                        if use_excel_com_native_charts
-                        else V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
-                    )
-                else:
-                    st.caption("เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน")
+                st.markdown(f"**{STANDARD_REPORT_TITLE}**")
+                st.caption(STANDARD_REPORT_DESCRIPTION)
             else:
-                st.markdown('<div class="tmc-mode-note tmc-mode-note-warning"><strong>Safe PNG Export Mode</strong> · โหมดสำรอง</div>', unsafe_allow_html=True)
-                st.caption("โหมดสำรอง เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้")
+                st.markdown(f"**{SAFE_PNG_TITLE}**")
+                st.caption(SAFE_PNG_DESCRIPTION)
 
-            if excel_com_status.available:
-                version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
-                _render_alert(f"Excel COM พร้อมใช้งาน: {version_text}", "success")
-            else:
-                _render_alert(f"Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG: {excel_com_status.reason}", "warning")
-            st.caption("ใช้ปุ่มทดสอบ Excel COM ใน sidebar หากต้องการตรวจสถานะใหม่")
-            with st.expander("รายละเอียด Excel COM", expanded=False):
+            with st.expander("Advanced / Diagnostics", expanded=False):
+                st.write({
+                    "requested": STANDARD_REPORT_EXPORT_MODE if standard_decision else export_mode,
+                    "used": export_mode,
+                    "fallback": getattr(standard_decision, "fallback_notice", "") if standard_decision else "",
+                    "peak_binding": [vars(match) for match in peak_binding] if standard_decision else [],
+                })
                 _render_excel_com_status(excel_com_status)
 
     with readiness_col:
@@ -1178,13 +1196,6 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     ("Mapping พร้อมใช้งาน", bool(st.session_state.get("mapping_table")), ""),
                     ("ประมวลผลแล้ว", result is not None, "ค่า PCE เปลี่ยน กรุณาประมวลผลใหม่" if pce_results_stale else ""),
                     ("กำหนดช่วงเร่งด่วน AM/PM แล้ว", confirmed_ready, str(export_peak_state.get("summary_text") or "")),
-                    (
-                        "Excel COM พร้อมใช้งาน",
-                        bool(excel_com_status.available) if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else True,
-                        V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
-                        if is_v2_single_result and export_mode == EXCEL_TEMPLATE_EXPORT_MODE and not excel_com_status.available
-                        else ("จำเป็นสำหรับ Excel Template Mode" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "ไม่จำเป็นในโหมดสำรอง"),
-                    ),
                 ]
             )
 
@@ -1194,10 +1205,9 @@ def render_single_export(*, context: WorkflowContext) -> None:
         export_excel_com_status = probe_excel_com() if excel_com_requested else None
         excel_com_enabled = bool(export_excel_com_status and export_excel_com_status.available)
         if excel_com_requested and export_excel_com_status is not None and not export_excel_com_status.available:
-            st.warning(
-                "Excel COM ไม่พร้อมใช้งาน ระบบจะใช้โหมดสำรองแบบ PNG "
-                f"สาเหตุ: {export_excel_com_status.reason}. {export_excel_com_status.detail}"
-            )
+            st.warning(operator_fallback_message(export_excel_com_status.reason))
+            with st.expander("Advanced / Diagnostics — export detail", expanded=False):
+                _render_excel_com_status(export_excel_com_status)
 
         confirmed_setup = {
             **setup,
@@ -1251,6 +1261,7 @@ def render_single_export(*, context: WorkflowContext) -> None:
                         generate_workbook=True,
                         use_template_report_layout=use_template_report_layout,
                         use_excel_com_native_charts=excel_com_enabled,
+                        use_ooxml_native_template=bool(standard_decision and standard_decision.use_ooxml_native_template),
                         export_mode=export_mode,
                         source_file_name=uploaded_file.name if uploaded_file is not None else st.session_state.get("tmc_loaded_source_file_name", ""),
                         generated_at=export_generated_at,
@@ -1260,10 +1271,18 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     )
                 for warning in export_warnings:
                     message = str(warning.message)
-                    if excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
-                        st.warning(f"Excel COM ส่งออก Native Chart ไม่สำเร็จ ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                    if standard_decision and "OOXML native-template export failed" in message:
+                        st.warning(operator_fallback_message(message))
+                        with st.expander("Advanced / Diagnostics — export detail", expanded=False):
+                            st.warning(message)
+                    elif excel_com_requested and "Excel COM native-chart export failed after COM was available" in message:
+                        st.warning(operator_fallback_message(message))
+                        with st.expander("Advanced / Diagnostics — export detail", expanded=False):
+                            st.warning(message)
                     elif excel_com_requested and "Excel COM unavailable" in message:
-                        st.warning(f"Excel COM ไม่พร้อมใช้งาน ระบบใช้โหมดสำรองแบบ PNG ({message})")
+                        st.warning(operator_fallback_message(message))
+                        with st.expander("Advanced / Diagnostics — export detail", expanded=False):
+                            st.warning(message)
             if not confirmed_result.workbook_bytes:
                 st.error("ส่งออกเสร็จแล้ว แต่ไฟล์ Excel ที่สร้างไม่มีข้อมูล")
             else:

@@ -51,22 +51,23 @@ def test_standard_report_prefers_native_template_when_available_and_compatible()
     assert decision.requested_mode == STANDARD_REPORT_EXPORT_MODE
     assert decision.backend_mode == EXCEL_TEMPLATE_EXPORT_MODE
     assert decision.use_template_report_layout is True
-    assert decision.use_excel_com_native_charts is True
+    assert decision.use_excel_com_native_charts is False
+    assert decision.use_ooxml_native_template is True
     assert decision.fallback_notice == ""
 
 
-def test_standard_report_selects_safe_png_with_clear_fallback_when_com_is_unavailable() -> None:
+def test_standard_report_uses_native_template_when_com_is_unavailable() -> None:
     decision = standard_report_export_decision(
         excel_com_available=False,
         template_compatible=True,
         availability_detail="Excel COM is unavailable",
     )
 
-    assert decision.backend_mode == SAFE_PNG_EXPORT_MODE
-    assert decision.use_template_report_layout is False
+    assert decision.backend_mode == EXCEL_TEMPLATE_EXPORT_MODE
+    assert decision.use_template_report_layout is True
     assert decision.use_excel_com_native_charts is False
-    assert "Safe PNG" in decision.fallback_notice
-    assert "Excel COM is unavailable" in decision.fallback_notice
+    assert decision.use_ooxml_native_template is True
+    assert decision.fallback_notice == ""
 
 
 def test_standard_report_does_not_attempt_an_unsupported_template_path() -> None:
@@ -79,6 +80,7 @@ def test_standard_report_does_not_attempt_an_unsupported_template_path() -> None
     assert decision.backend_mode == SAFE_PNG_EXPORT_MODE
     assert decision.use_template_report_layout is False
     assert decision.use_excel_com_native_charts is False
+    assert decision.use_ooxml_native_template is False
     assert "not compatible" in decision.fallback_notice
 
 
@@ -127,7 +129,10 @@ def test_single_standard_safe_png_fallback_does_not_spuriously_invalidate() -> N
     st.session_state.clear()
     st.session_state["report_export_mode"] = app.SAFE_PNG_EXPORT_MODE
     st.session_state["tmc_output"] = {"workbook_bytes": b"safe-png"}
-    decision = app._standard_report_decision(SimpleNamespace(available=False, reason="COM unavailable", detail=""))
+    decision = app._standard_report_decision(
+        SimpleNamespace(available=False, reason="COM unavailable", detail=""),
+        template_compatible=False,
+    )
 
     export_mode, changed = app._apply_standard_single_export_mode(decision, app.SAFE_PNG_EXPORT_MODE)
 

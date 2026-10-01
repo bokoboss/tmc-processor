@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from tmc_processor.ui.workflow_context import WorkflowContext
+from tmc_processor.ui.components.export import (
+    SAFE_PNG_DESCRIPTION,
+    STANDARD_REPORT_DESCRIPTION,
+    STANDARD_REPORT_TITLE,
+    operator_fallback_message,
+    operator_report_label,
+)
 
 import streamlit as st
 
@@ -712,8 +719,8 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                     )
                     draft_am = selected_am
                     selected_am = selected_am if stored.get("AM") == selected_am else ""
-                    st.caption("Draft only — confirm this file to apply the selected AM Peak.")
-                    _render_status_chip("กำหนดแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
+                    st.caption("ยืนยันช่วง AM Peak แล้ว" if selected_am else "ช่วง AM Peak นี้ยังเป็นค่าร่าง กรุณายืนยันก่อนนำไปใช้")
+                    _render_status_chip("ยืนยันแล้ว" if selected_am else "รอตรวจสอบ", "success" if selected_am else "warning")
                     _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                 with peak_cols[1]:
                     _render_peak_card("PM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_PM_peak"] or "", "", "auto_suggested")
@@ -725,12 +732,12 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                     )
                     draft_pm = selected_pm
                     selected_pm = selected_pm if stored.get("PM") == selected_pm else ""
-                    st.caption("Draft only — confirm this file to apply the selected PM Peak.")
-                    _render_status_chip("กำหนดแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
+                    st.caption("ยืนยันช่วง PM Peak แล้ว" if selected_pm else "ช่วง PM Peak นี้ยังเป็นค่าร่าง กรุณายืนยันก่อนนำไปใช้")
+                    _render_status_chip("ยืนยันแล้ว" if selected_pm else "รอตรวจสอบ", "success" if selected_pm else "warning")
                     _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
                 batch_draft_peaks[selected_item.folder_name] = {"AM": draft_am, "PM": draft_pm}
                 confirm_review = st.button(
-                    "Confirm Peak Review",
+                    "ยืนยันช่วง Peak",
                     type="primary",
                     disabled=not (draft_am and draft_pm),
                     key=f"batch_confirm_peak_review_{batch_review_version}_{selected_item.folder_name}",
@@ -744,7 +751,7 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                         metadata_rows=st.session_state.get("tmc_batch_file_metadata_table") or [],
                         export_mode=batch_export_mode,
                     )
-                    _flash_and_rerun("Peak Review confirmed for this file.")
+                    _flash_and_rerun("ยืนยันช่วง Peak ของไฟล์นี้แล้ว")
             else:
                 _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak ของไฟล์นี้", "warning")
         if batch_analysis.has_failures:
@@ -854,6 +861,9 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 )
 def render_batch_export(*, context: WorkflowContext) -> None:
     """Render the Batch Export stage."""
+    Path = context.operations.Path
+    DEFAULT_TEMPLATE_PATH = context.operations.DEFAULT_TEMPLATE_PATH
+    DEFAULT_TEMPLATE_MAP_PATH = context.operations.DEFAULT_TEMPLATE_MAP_PATH
     BATCH_CONFIRMED_PEAKS_STATE_KEY = context.operations.BATCH_CONFIRMED_PEAKS_STATE_KEY
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE = context.operations.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
     BATCH_PACKAGE_MIME = context.operations.BATCH_PACKAGE_MIME
@@ -927,19 +937,24 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
     previous_batch_export_mode = st.session_state.get("tmc_batch_export_mode", batch_export_mode)
     batch_export_preference = st.radio(
-        "Batch report outcome",
+        "รูปแบบรายงาน Batch",
         options=[EXPORT_PREFERENCE_STANDARD, EXPORT_PREFERENCE_ADVANCED],
         index=0 if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD else 1,
         horizontal=True,
         key="tmc_batch_export_preference_control",
-        help="Standard report selects native Excel Template when compatible and otherwise uses Safe PNG.",
+        format_func=lambda option: STANDARD_REPORT_TITLE if option == EXPORT_PREFERENCE_STANDARD else "Advanced / Diagnostics",
+        help="เลือกรายงานมาตรฐาน หรือเปิดตัวเลือกขั้นสูงเมื่อต้องการตรวจสอบรายละเอียด",
     )
     st.session_state["tmc_batch_export_preference"] = batch_export_preference
     batch_standard_decision = None
     if batch_export_preference == EXPORT_PREFERENCE_STANDARD:
         batch_standard_decision = _standard_report_decision(
             excel_com_status,
-            template_compatible=(not _is_v2_scheme(batch_mapping_scheme)),
+            template_compatible=(
+                not _is_v2_scheme(batch_mapping_scheme)
+                and Path(DEFAULT_TEMPLATE_PATH).exists()
+                and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+            ),
         )
         batch_export_mode, standard_batch_mode_changed = _apply_standard_batch_export_mode(
             batch_standard_decision,
@@ -947,9 +962,9 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         )
         if standard_batch_mode_changed:
             st.rerun()
-        st.info(f"{STANDARD_REPORT_EXPORT_MODE}: {batch_export_mode} selected automatically.")
+        st.info(operator_report_label(batch_export_mode))
         if batch_standard_decision.fallback_notice:
-            st.warning(batch_standard_decision.fallback_notice)
+            st.warning(operator_fallback_message(batch_standard_decision.fallback_notice))
     else:
         with st.expander("Advanced export options", expanded=True):
             selected_batch_export_mode = st.radio(
@@ -982,6 +997,7 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         not v2_batch_template_mode_blocked
         and (
             batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
+            or bool(batch_standard_decision and batch_standard_decision.use_ooxml_native_template)
             or excel_com_status.available
             or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
         )
@@ -1023,7 +1039,12 @@ def render_batch_export(*, context: WorkflowContext) -> None:
                 peak_windows=peak_windows,
                 export_mode=batch_export_mode,
                 use_template_report_layout=_use_template_layout_for_export(batch_export_mode),
-                use_excel_com_native_charts=_use_excel_native_charts_for_export(batch_export_mode, excel_com_status),
+                use_excel_com_native_charts=(
+                    False if batch_standard_decision else _use_excel_native_charts_for_export(batch_export_mode, excel_com_status)
+                ),
+                use_ooxml_native_template=bool(batch_standard_decision and batch_standard_decision.use_ooxml_native_template),
+                export_mode_requested=STANDARD_REPORT_EXPORT_MODE if batch_standard_decision else None,
+                export_fallback_notice=batch_standard_decision.fallback_notice if batch_standard_decision else "",
         )
         st.session_state["tmc_batch_export_result"] = batch_result
         st.session_state["tmc_batch_export_stale"] = False
@@ -1039,20 +1060,24 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     batch_export_left, batch_export_right = st.columns([0.95, 1.05])
     with batch_export_left:
         with st.container(border=True):
-            _render_section_header("โหมดส่งออก", "สถานะโหมดที่เลือกสำหรับ Batch")
-            _render_status_chip(batch_export_mode, "success" if export_mode_ready else "warning")
+            _render_section_header("รูปแบบรายงาน", "รูปแบบที่จะได้รับจากการส่งออก Batch")
+            _render_status_chip(operator_report_label(batch_export_mode), "success" if export_mode_ready else "warning")
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
-                _render_alert(
-                    "Excel Template Mode: เหมาะสำหรับรายงานฉบับใช้งานจริง รักษา Native Chart และรูปแบบ Excel Template เมื่อ Excel COM พร้อมใช้งาน",
-                    "info",
-                )
+                st.caption(STANDARD_REPORT_DESCRIPTION)
             else:
-                _render_alert(
-                    "Safe PNG Export Mode: โหมดสำรอง เหมาะสำหรับตรวจร่างหรือกรณี Excel COM ใช้งานไม่ได้",
-                    "info",
-                )
+                st.caption(SAFE_PNG_DESCRIPTION)
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) and len(batch_uploads or []) > 10:
-                _render_alert("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานด้วย Excel Template Mode อาจใช้เวลานานขึ้น", "warning")
+                _render_alert("มีไฟล์มากกว่า 10 ไฟล์ การสร้างรายงานมาตรฐานอาจใช้เวลานานขึ้น", "warning")
+            with st.expander("Advanced / Diagnostics", expanded=False):
+                st.write({
+                    "requested": STANDARD_REPORT_EXPORT_MODE if batch_standard_decision else batch_export_mode,
+                    "used": batch_export_mode,
+                    "fallback": getattr(batch_standard_decision, "fallback_notice", "") if batch_standard_decision else "",
+                    "excel_com_available": bool(excel_com_status.available),
+                    "excel_version": excel_com_status.version,
+                    "excel_com_reason": excel_com_status.reason,
+                    "excel_com_detail": excel_com_status.detail,
+                })
 
     with batch_export_right:
         with st.container(border=True):
@@ -1064,7 +1089,6 @@ def render_batch_export(*, context: WorkflowContext) -> None:
                     ("Batch Analysis วิเคราะห์แล้ว", bool(batch_analysis and not batch_stale), ""),
                     ("กำหนด Peak ของไฟล์ที่สำเร็จแล้ว", peaks_ready, ""),
                     ("output_stem ใช้งานได้", output_stems_valid, "ใช้เป็นชื่อโฟลเดอร์และชื่อรายงาน"),
-                    ("โหมดส่งออกพร้อม", export_mode_ready, ""),
                 ]
             )
     with st.expander("ตัวอย่างไฟล์ใน Batch ZIP", expanded=False):
@@ -1083,6 +1107,15 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         )
         st.caption("Batch ZIP ไม่รวม raw input Excel files และไม่รวม local file paths")
     if batch_result:
+        fallback_rows = [
+            row for row in batch_result.summary_rows
+            if row.export_mode_requested == STANDARD_REPORT_EXPORT_MODE
+            and row.export_mode_used == BATCH_SAFE_PNG_EXPORT_MODE
+            and row.export_status == "success"
+        ]
+        if fallback_rows:
+            reason = next((row.notes for row in fallback_rows if "Confirmed Peak interval is not representable" in row.notes), fallback_rows[0].notes)
+            st.warning(operator_fallback_message(reason))
         _render_section_header("สถานะส่งออกรายไฟล์", "ผลการสร้างรายงานใน Batch ล่าสุด")
         status_display = _batch_status_display_frame(batch_analysis, batch_result)
         status_columns = [

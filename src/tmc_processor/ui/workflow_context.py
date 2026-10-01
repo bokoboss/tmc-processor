@@ -38,6 +38,7 @@ class WorkflowOperations:
     MOVEMENT_SCHEME_V2: Any = None
     MappingPresetError: Any = None
     PACKAGE_MIME: Any = None
+    PEAK_BINDING_FALLBACK_REASON: Any = None
     PEAK_MODE_OPTIONS: Any = None
     PEAK_SELECTION_AUTO: Any = None
     PM_WINDOW: Any = None
@@ -151,6 +152,7 @@ class WorkflowOperations:
     application_analyze_batch: Any = None
     application_analyze_single: Any = None
     application_analyze_single_dry_run: Any = None
+    application_assess_standard_peak_binding: Any = None
     application_export_batch_reviewed: Any = None
     apply_batch_export_mode_change: Any = None
     apply_mapping_preset_to_detected_sheets: Any = None

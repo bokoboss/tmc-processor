@@ -132,6 +132,7 @@ from tmc_processor.movement_scheme import (
 from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
 from tmc_processor.exporter import (
     EXCEL_TEMPLATE_EXPORT_MODE as EXPORTER_EXCEL_TEMPLATE_EXPORT_MODE,
+    PEAK_BINDING_FALLBACK_REASON,
     SAFE_PNG_EXPORT_MODE as EXPORTER_SAFE_PNG_EXPORT_MODE,
     STANDARD_REPORT_EXPORT_MODE,
     export_v2_generated_workbook,
@@ -192,11 +193,13 @@ from tmc_processor.application.services import (
     analyze_batch as application_analyze_batch,
     analyze_single as application_analyze_single,
     analyze_single_dry_run as application_analyze_single_dry_run,
+    assess_standard_peak_binding as application_assess_standard_peak_binding,
     export_batch_reviewed as application_export_batch_reviewed,
     export_single_generated as application_export_single_generated,
     export_single_template_com as application_export_single_template_com,
 )
 from tmc_processor.ui.components.peak import render_peak_card as render_peak_card_component
+from tmc_processor.ui.components.export import operator_report_label
 from tmc_processor.ui.components.qc import render_qc_summary as render_qc_summary_component
 from tmc_processor.ui.components.status import render_readiness_checklist as render_readiness_checklist_component
 from tmc_processor.ui.workflows import (
@@ -2812,20 +2815,13 @@ def _render_top_status_bar(
         mapping_value = "พร้อมใช้งาน" if mapping_ready else "ยังไม่พร้อม"
         mapping_note = "Mapping Preset ใช้ร่วมกันทุกไฟล์" if batch_mapping_ready else "เปิด Mapping Preset"
 
-    excel_value = "Excel COM พร้อม" if getattr(excel_com_status, "available", False) else "โหมดสำรอง PNG"
-    excel_note = (
-        f"Excel {excel_com_status.version}"
-        if getattr(excel_com_status, "available", False) and getattr(excel_com_status, "version", "")
-        else (str(getattr(excel_com_status, "reason", "")) or "COM unavailable")
-    )
-    export_note = export_mode or "รอเลือกโหมดส่งออก"
+    export_note = operator_report_label(export_mode)
 
     html = (
         '<div class="tmc-topbar">'
         + _topbar_item("โหมดงาน", mode_value, export_note)
         + _topbar_item("ไฟล์สำรวจ", source_value, source_note)
         + _topbar_item("Mapping", mapping_value, mapping_note)
-        + _topbar_item("เครื่องมือส่งออก", excel_value, excel_note)
         + _topbar_item("เวอร์ชัน", f"App v{APP_VERSION}", f"Template {TEMPLATE_VERSION}")
         + "</div>"
     )
@@ -2878,7 +2874,6 @@ def _render_status_cards(
     confirmed = _confirmed_peaks_from_state()
     processed = "tmc_processed" in st.session_state
     output_ready = "tmc_output" in st.session_state
-    excel_ready = bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
 
     raw_status = "โหลดแล้ว" if uploaded_name else "ยังไม่ได้โหลด"
     session_status = "โหลดแล้ว" if st.session_state.get("tmc_loaded_project_session") else "ยังไม่ได้โหลด"
@@ -2887,7 +2882,7 @@ def _render_status_cards(
     peak_status = "กำหนดแล้ว" if all(
         confirmed.get(key) for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end")
     ) else ("ต้องตรวจสอบ" if processed else "ยังไม่ได้โหลด")
-    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "กำหนดแล้ว" and excel_ready) else "ยังไม่ได้โหลด"
+    export_status = "พร้อมใช้งาน" if output_ready or (processed and peak_status == "กำหนดแล้ว") else "ยังไม่ได้โหลด"
 
     card_items = [
         ("ไฟล์สำรวจ", raw_status, uploaded_name or ""),
@@ -2895,7 +2890,7 @@ def _render_status_cards(
         ("การกำหนดทิศทาง", mapping_status, f"{mapping_rows:,} แถว" if mapping_rows else ""),
         ("การประมวลผล", processing_status, "พร้อมตรวจสอบกราฟ" if processed else ""),
         ("ช่วงเร่งด่วน", peak_status, ""),
-        ("ความพร้อมส่งออก", export_status, "Excel COM" if export_mode == EXCEL_TEMPLATE_EXPORT_MODE else "PNG fallback"),
+        ("ความพร้อมส่งออก", export_status, operator_report_label(export_mode)),
     ]
     st.markdown(
         '<div class="tmc-status-grid">'
@@ -3152,7 +3147,12 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     output_ready = st.session_state.get("tmc_output") is not None
     peak_state = _single_effective_peak_state()
     peaks_ready = bool(peak_state["ready"])
-    excel_ready = bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
+    standard_native = (
+        st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD
+        and Path(DEFAULT_TEMPLATE_PATH).exists()
+        and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+    )
+    excel_ready = standard_native or bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
     preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
     mapping_needs_review = bool(uploaded_name and (not mapping_rows or int(preset_info.get("missing", 0) or 0) > 0))
 
@@ -3414,13 +3414,14 @@ def _standard_report_decision(
     excel_com_status: ExcelComStatus,
     *,
     template_compatible: bool = True,
+    fallback_reason: str = "",
 ) -> object:
     """Resolve the normal report outcome without exposing backend terminology."""
 
     return standard_report_export_decision(
         excel_com_available=bool(getattr(excel_com_status, "available", False)),
         template_compatible=template_compatible,
-        availability_detail=str(getattr(excel_com_status, "reason", "") or ""),
+        availability_detail=fallback_reason,
     )
 
 
@@ -5227,6 +5228,7 @@ def _workflow_operations() -> WorkflowOperations:
         MOVEMENT_SCHEME_V2=MOVEMENT_SCHEME_V2,
         MappingPresetError=MappingPresetError,
         PACKAGE_MIME=PACKAGE_MIME,
+        PEAK_BINDING_FALLBACK_REASON=PEAK_BINDING_FALLBACK_REASON,
         PEAK_MODE_OPTIONS=PEAK_MODE_OPTIONS,
         PEAK_SELECTION_AUTO=PEAK_SELECTION_AUTO,
         PM_WINDOW=PM_WINDOW,
@@ -5339,6 +5341,7 @@ def _workflow_operations() -> WorkflowOperations:
         _workflow_state_for_mode=_workflow_state_for_mode,
         application_analyze_batch=application_analyze_batch,
         application_analyze_single=application_analyze_single,
+        application_assess_standard_peak_binding=application_assess_standard_peak_binding,
         application_analyze_single_dry_run=application_analyze_single_dry_run,
         application_export_batch_reviewed=application_export_batch_reviewed,
         apply_batch_export_mode_change=apply_batch_export_mode_change,
@@ -5480,6 +5483,8 @@ def _run_streamlit_app() -> None:
     if active_tab == "Analyze":
         _rehydrate_analyze_setup_widgets()
     single_export_options = _single_export_mode_options(excel_com_status)
+    if st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+        single_export_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
         single_export_options,
@@ -5488,6 +5493,8 @@ def _run_streamlit_app() -> None:
     st.session_state["report_export_mode"] = export_mode
     use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
     batch_export_options = _batch_export_mode_options(excel_com_status)
+    if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+        batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
     st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
         st.session_state.get("tmc_batch_export_mode"),
         batch_export_options,
@@ -5511,23 +5518,12 @@ def _run_streamlit_app() -> None:
             )
         else:
             use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
-        _render_sidebar_section("Engine status")
-        previous_excel_com_available = bool(excel_com_status.available)
-        if st.button("ทดสอบ Excel COM", key="test_excel_com"):
-            excel_com_status = _probe_excel_com_for_ui(force=True)
-            if bool(excel_com_status.available) != previous_excel_com_available:
-                st.rerun()
-
-        if excel_com_status.available:
-            version_text = f"Excel version: {excel_com_status.version}" if excel_com_status.version else "พร้อมใช้งาน"
-            _render_sidebar_badge("Excel COM พร้อมใช้งาน", version_text, ready=True)
-        else:
-            detail = f"{excel_com_status.reason}"
-            if excel_com_status.detail:
-                detail = f"{detail} · {excel_com_status.detail}"
-            _render_sidebar_badge("Excel COM ไม่พร้อมใช้งาน", "ระบบจะใช้โหมดสำรองแบบ PNG", ready=False)
-            st.caption(detail)
-        with st.expander("รายละเอียด Excel COM", expanded=False):
+        with st.expander("Advanced / Diagnostics", expanded=False):
+            previous_excel_com_available = bool(excel_com_status.available)
+            if st.button("ทดสอบ Excel COM", key="test_excel_com"):
+                excel_com_status = _probe_excel_com_for_ui(force=True)
+                if bool(excel_com_status.available) != previous_excel_com_available:
+                    st.rerun()
             _render_excel_com_status(excel_com_status)
         _render_version_stamp()
 
@@ -5551,6 +5547,12 @@ def _run_streamlit_app() -> None:
             )
             st.session_state["tmc_batch_mapping_code_scheme"] = batch_mapping_scheme
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
+            if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
+                batch_export_options = (
+                    [BATCH_SAFE_PNG_EXPORT_MODE]
+                    if _is_v2_scheme(batch_mapping_scheme)
+                    else [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
+                )
             st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
                 st.session_state.get("tmc_batch_export_mode"),
                 batch_export_options,

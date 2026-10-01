@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from tmc_processor.batch import analyze_batch_files, generate_batch_zip_from_reviewed_peaks
-from tmc_processor.exporter import export_v2_generated_workbook, export_v2_template_workbook_com
+from tmc_processor.exporter import assess_native_template_peak_binding, export_v2_generated_workbook, export_v2_template_workbook_com
 from tmc_processor.pipeline import process_tmc, process_tmc_dry_run_v2
 
 
@@ -24,6 +24,10 @@ def analyze_single(source: Any = None, mapping: Any = None, setup: dict[str, Any
 def analyze_single_dry_run(source: Any = None, mapping: Any = None, setup: dict[str, Any] | None = None, **kwargs: Any) -> Any:
     source = kwargs.pop("raw_sheets", source)
     return process_tmc_dry_run_v2(raw_sheets=source, mapping=mapping, setup=dict(setup or {}), **kwargs)
+
+
+def assess_standard_peak_binding(metadata: dict[str, Any]) -> Any:
+    return assess_native_template_peak_binding(metadata)
 
 
 def analyze_batch(sources: Sequence[Any], **kwargs: Any) -> Any:
