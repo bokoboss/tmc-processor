@@ -274,11 +274,11 @@ def test_streamlit_apptest_keeps_analysis_actions_in_analyze_stage(monkeypatch) 
 
     _button_by_label(single, "Mapping").click()
     single.run(timeout=30)
-    assert "Analyze TMC" not in [button.label for button in single.button]
+    assert "วิเคราะห์ TMC" not in [button.label for button in single.button]
 
     _button_by_label(single, "Analyze").click()
     single.run(timeout=30)
-    assert "Analyze TMC" in [button.label for button in single.button]
+    assert "วิเคราะห์ TMC" in [button.label for button in single.button]
 
     batch = AppTest.from_function(_run_app_for_apptest, default_timeout=20)
     batch.run(timeout=30)
@@ -442,7 +442,7 @@ def test_streamlit_apptest_setup_values_survive_processing_and_export(monkeypatc
     assert analyze_button.disabled is False
     analyze_button.click()
     at.run(timeout=60)
-    analyze_action = _button_by_label(at, "Analyze TMC")
+    analyze_action = _button_by_label(at, "วิเคราะห์ TMC")
     assert analyze_action.disabled is False
     analyze_action.click()
     at.run(timeout=90)

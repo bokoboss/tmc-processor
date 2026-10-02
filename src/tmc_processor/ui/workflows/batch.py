@@ -47,7 +47,7 @@ def render_batch_data(*, context: WorkflowContext) -> None:
     safe_output_stem = context.operations.safe_output_stem
     setup_cols = context.setup_cols
 
-    _render_section_header("Data Batch", "Set shared metadata and inspect the uploaded workbook inventory.")
+    _render_section_header("ข้อมูล Batch", "กรอกข้อมูลร่วมและตรวจรายการไฟล์ที่อัปโหลด")
     if batch_stale:
         _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
 
@@ -76,7 +76,7 @@ def render_batch_data(*, context: WorkflowContext) -> None:
         with st.container(border=True):
             _render_section_header("ไฟล์ที่อัปโหลด", "ตรวจจำนวนไฟล์และชื่อไฟล์ก่อนวิเคราะห์ Batch")
             if not batch_metadata_rows:
-                _render_action_hint("Upload Batch workbooks in the Data stage above.")
+                _render_action_hint("อัปโหลดไฟล์ Batch ในขั้น Data ด้านบน")
             else:
                 _render_metric_strip(
                     [
@@ -176,7 +176,7 @@ def render_batch_mapping(*, context: WorkflowContext) -> None:
 
     _render_section_header(
         "Mapping Batch",
-        "Apply and validate one Mapping Preset for every uploaded workbook.",
+        "ใช้ Mapping Preset เดียวกับทุกไฟล์และตรวจความเข้ากันได้",
     )
     preset_rows = _mapping_preset_rows_frame(loaded_batch_preset)
     preset_code_column = "output_movement_code" if "output_movement_code" in preset_rows else "movement_code"
@@ -201,11 +201,11 @@ def render_batch_mapping(*, context: WorkflowContext) -> None:
         _render_mapping_scheme_status(batch_mapping_scheme)
 
     if not batch_uploads:
-        _render_action_hint("Upload Batch workbooks in the Data stage before checking Mapping.")
+        _render_action_hint("อัปโหลดไฟล์ Batch ในขั้น Data ก่อนตรวจ Mapping")
     if not loaded_batch_preset:
         _render_action_hint("เปิด Mapping Preset เพื่อใช้กับไฟล์ Batch")
 
-    _render_section_header("Mapping readiness", "Resolve Mapping blockers before moving to Analyze.")
+    _render_section_header("ความพร้อม Mapping", "ตรวจไฟล์ต้นทางและ Mapping Preset")
     _render_readiness_checklist(
         [
             ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
@@ -215,8 +215,6 @@ def render_batch_mapping(*, context: WorkflowContext) -> None:
     if mapping_ready:
         if batch_process_block_reason:
             _render_alert(batch_process_block_reason, "warning")
-        else:
-            _render_action_hint("When Mapping is ready, go to Analyze to run Analyze Batch.")
 
     with st.expander("สถานะ Sheet matching รายไฟล์", expanded=False):
         _render_action_hint("ตรวจว่า Sheet ในแต่ละไฟล์ตรงกับ Mapping Preset แค่ไหน")
@@ -342,9 +340,9 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
     setup = context.setup
     uploaded_ready = context.uploaded_ready
 
-    _render_section_header("Analyze Batch", "Configure shared analysis settings and run Analyze Batch.")
+    _render_section_header("วิเคราะห์ Batch", "กำหนดค่าร่วมก่อนวิเคราะห์ทุกไฟล์")
     with st.container(border=True):
-        _render_section_header("Analysis settings", "These settings apply to every uploaded Batch workbook.")
+        _render_section_header("ค่าการวิเคราะห์", "ใช้กับทุกไฟล์ใน Batch")
         peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
         if peak_mode_default not in PEAK_MODE_OPTIONS:
             peak_mode_default = DEFAULT_PEAK_MODE
@@ -588,9 +586,7 @@ def render_batch_review(*, context: WorkflowContext) -> None:
         _render_metric_strip(status_items, columns=3)
         if excluded_count:
             _render_alert(f"{excluded_count} successful file(s) intentionally excluded from Batch export.", "info")
-        if successful_count and confirmed_count + excluded_count == successful_count:
-            _render_alert("ยืนยันช่วง Peak ครบแล้ว", "success")
-        elif successful_count:
+        if successful_count and confirmed_count + excluded_count < successful_count:
             _render_alert("ยังมีไฟล์ที่ต้องกำหนด Peak", "warning")
         review_filter = st.radio(
             "Batch review queue",
@@ -765,7 +761,7 @@ def render_batch_review(*, context: WorkflowContext) -> None:
     status_frame = _batch_status_frame(batch_analysis, batch_result)
     if batch_analysis and batch_stale:
         _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
-    elif batch_analysis and batch_export_stale:
+    elif batch_analysis and batch_export_stale and st.session_state.get("tmc_batch_export_signature"):
         _render_alert("ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่", "warning")
 
     if not batch_analysis:
@@ -988,7 +984,7 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     )
     if batch_stale:
         _render_alert("ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่", "warning")
-    elif batch_export_stale:
+    elif batch_export_stale and st.session_state.get("tmc_batch_export_signature"):
         _render_alert("ข้อมูลส่งออกมีการเปลี่ยนแปลง กรุณาสร้าง Batch ZIP ใหม่", "warning")
     block_reason = batch_zip_generation_block_reason(
         has_successful_files=not no_successful_files,
@@ -1002,7 +998,8 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         block_reason = BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH
     if not export_mode_ready and not block_reason:
         block_reason = "โหมดส่งออกยังไม่พร้อม"
-    _render_action_hint(block_reason or "พร้อมสร้าง Batch ZIP")
+    if block_reason:
+        _render_action_hint(block_reason)
     generate_batch = st.button("Generate Batch ZIP", type="primary", disabled=generate_disabled, key="generate_batch_zip")
     if generate_batch and batch_analysis:
         set_active_tab("Export")

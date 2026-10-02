@@ -1010,6 +1010,71 @@ def _workflow_state_for_mode(mode: str) -> WorkflowState | None:
     return state if isinstance(state, WorkflowState) else None
 
 
+def _workflow_stage_statuses(state: WorkflowState) -> dict[str, str]:
+    """Describe the stored engineering readiness without persisting UI labels."""
+
+    ready = state.readiness
+    analysis_stale = bool(st.session_state.get(
+        "tmc_pce_results_stale" if state.mode == WORKFLOW_SINGLE_MODE else "tmc_batch_stale"
+    ))
+    export_stale = bool(st.session_state.get("tmc_batch_export_stale")) if state.mode == WORKFLOW_BATCH_MODE else False
+    prior_batch_export = bool(st.session_state.get("tmc_batch_export_signature")) if state.mode == WORKFLOW_BATCH_MODE else False
+    analysis_ready = ready.analysis and not analysis_stale
+    review_ready = ready.review and analysis_ready
+    export_ready = ready.export and review_ready and not export_stale
+    return {
+        "Data": "พร้อม" if ready.source else "ต้องอัปโหลด",
+        "Mapping": "พร้อม" if ready.source and ready.mapping else ("ต้องดำเนินการ" if ready.source else "ยังไม่เริ่ม"),
+        "Analyze": "เสร็จแล้ว" if analysis_ready else (
+            "ต้องวิเคราะห์ใหม่" if analysis_stale else "พร้อมวิเคราะห์" if ready.mapping else "ยังไม่เริ่ม"
+        ),
+        "Review": "เสร็จแล้ว" if review_ready else (
+            "ต้องยืนยัน Peak" if analysis_ready else "ยังไม่เริ่ม"
+        ),
+        "Export": "เสร็จแล้ว" if export_ready else (
+            "ต้องสร้างใหม่" if export_stale and prior_batch_export and review_ready else
+            "พร้อมสร้าง" if review_ready else "ยังไม่เริ่ม"
+        ),
+    }
+
+
+def _render_workflow_stage_statuses(mode: str) -> None:
+    state = _workflow_state_for_mode(mode)
+    if state is None:
+        return
+    statuses = _workflow_stage_statuses(state)
+    st.caption("สถานะขั้นตอน · " + "  |  ".join(f"{stage}: {statuses[stage]}" for stage in CANONICAL_WORKFLOW_STAGES))
+
+
+def _render_next_stage_cta(mode: str, active_stage: str) -> None:
+    next_stage = {"Data": "Mapping", "Mapping": "Analyze", "Analyze": "Review", "Review": "Export"}.get(active_stage)
+    state = _workflow_state_for_mode(mode)
+    if next_stage is None or state is None:
+        return
+    ready = state.readiness
+    analysis_current = ready.analysis and not bool(st.session_state.get(
+        "tmc_pce_results_stale" if mode == WORKFLOW_SINGLE_MODE else "tmc_batch_stale"
+    ))
+    can_continue = {
+        "Data": ready.source,
+        "Mapping": ready.source and ready.mapping,
+        "Analyze": analysis_current,
+        "Review": analysis_current and ready.review,
+    }[active_stage]
+    if can_continue:
+        if st.button(f"ไปขั้น {next_stage}", key=f"next_stage_{active_stage.lower()}"):
+            set_active_tab(next_stage)
+            st.rerun()
+    else:
+        requirement = {
+            "Data": "อัปโหลดไฟล์ต้นทางก่อน",
+            "Mapping": "ตรวจไฟล์ต้นทางและ Mapping ให้พร้อมก่อน",
+            "Analyze": "วิเคราะห์ข้อมูลให้เสร็จก่อน",
+            "Review": "ยืนยันช่วง Peak ให้ครบก่อน",
+        }[active_stage]
+        st.caption(f"ขั้นถัดไป: {next_stage} · {requirement}")
+
+
 def _store_workflow_state(state: WorkflowState) -> None:
     states = st.session_state.get(WORKFLOW_STATE_KEY)
     states = dict(states) if isinstance(states, dict) else {}
@@ -3696,8 +3761,6 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
 
 
 def _render_project_session_section(uploaded_name: str | None, uploaded_size: int | None, *, compact: bool = False) -> None:
-    st.subheader("Project Session")
-
     project_upload = st.file_uploader(
         "เปิด Project Session",
         type=["json"],
@@ -3771,7 +3834,7 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
     session_filename = safe_project_session_filename(filename_seed)
     st.session_state["tmc_project_session_filename"] = session_filename
     st.download_button(
-        "ดาวน์โหลด Project Session",
+        "บันทึก Project Session",
         data=download_buffer(session_bytes),
         file_name=session_filename,
         mime=PROJECT_SESSION_MIME,
@@ -3780,6 +3843,17 @@ def _render_project_session_section(uploaded_name: str | None, uploaded_size: in
     )
     if not compact:
         st.caption("Project Session บันทึกเฉพาะค่าตั้งค่าและข้อมูลไฟล์ต้นทาง ไม่รวมเนื้อหา Excel ต้นฉบับ")
+
+
+def _render_batch_project_session_unavailable() -> None:
+    st.caption("Project Session ปัจจุบันรองรับงานไฟล์เดียว; ยังบันทึกรายการไฟล์และ Mapping Preset ของ Batch ไม่ได้")
+    st.file_uploader(
+        "เปิด Project Session",
+        type=["json"],
+        key="project_session_upload_batch_disabled",
+        disabled=True,
+    )
+    st.button("บันทึก Project Session", key="download_project_session_batch_disabled", disabled=True)
 
 
 def _ordered_mapping_frame(mapping: pd.DataFrame) -> pd.DataFrame:
@@ -5417,7 +5491,7 @@ def _run_streamlit_app() -> None:
 
     with st.sidebar:
         _render_sidebar_brand()
-        _render_sidebar_section("Work mode")
+        _render_sidebar_section("โหมดงาน")
         work_mode = st.radio(
             "เลือกโหมดการทำงาน",
             options=work_mode_options,
@@ -5425,8 +5499,7 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
-        _render_sidebar_section("Workspace utilities")
-        st.caption("Primary source and mapping actions live in their workflow stages.")
+        _render_sidebar_section("โครงการ")
 
     _render_app_header()
     active_tab = render_workflow_navigation()
@@ -5509,13 +5582,13 @@ def _run_streamlit_app() -> None:
 
     with st.sidebar:
         if is_single_file_mode:
-            _render_sidebar_section("Project session")
             _render_project_session_section(
                 uploaded_file.name if uploaded_file is not None else None,
                 len(file_bytes) if uploaded_file is not None else None,
                 compact=True,
             )
         else:
+            _render_batch_project_session_unavailable()
             use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
         with st.expander("Advanced / Diagnostics", expanded=False):
             previous_excel_com_available = bool(excel_com_status.available)
@@ -5676,8 +5749,7 @@ def _run_streamlit_app() -> None:
     }
     mapping = pd.DataFrame(st.session_state.get("mapping_table") or [])
 
-
-
+    stage_status_slot = st.empty()
 
     if not is_single_file_mode:
         batch_workflow_state = _workflow_state_for_mode(WORKFLOW_BATCH_MODE)
@@ -5802,6 +5874,11 @@ def _run_streamlit_app() -> None:
                 west_road=west_road,
             ),
         )
+
+    mode = WORKFLOW_SINGLE_MODE if is_single_file_mode else WORKFLOW_BATCH_MODE
+    with stage_status_slot:
+        _render_workflow_stage_statuses(mode)
+    _render_next_stage_cta(mode, active_tab)
 
     
 

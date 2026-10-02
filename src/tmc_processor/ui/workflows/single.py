@@ -26,9 +26,9 @@ def render_single_data(*, context: WorkflowContext) -> None:
     setup_right = context.setup_right
     uploaded_file = context.uploaded_file
 
-    _render_section_header("Data", "Upload the source workbook and enter project/report setup.")
+    _render_section_header("ข้อมูล", "อัปโหลดไฟล์ TMC และกรอกข้อมูลโครงการ")
     if uploaded_file is None:
-        _render_action_hint("Start by uploading a TMC Excel workbook above.")
+        _render_action_hint("เริ่มจากอัปโหลดไฟล์ TMC Excel ด้านบน")
     else:
         detected_sheets = context.detected_sheet_names or []
         with st.container(border=True):
@@ -179,12 +179,12 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
 
     _render_section_header(
         "Mapping",
-        "Map detected source sheets to movement directions. Analysis is performed in Analyze.",
+        "จับคู่ Sheet ต้นทางกับทิศทาง movement ก่อนวิเคราะห์",
     )
     if uploaded_file is None:
         _render_empty_state(
             "ยังไม่มีไฟล์สำรวจ",
-            "Start from the Data stage and upload a TMC Excel workbook.",
+            "อัปโหลดไฟล์ TMC Excel ในขั้น Data ก่อน",
         )
     elif not detected_sheet_names:
         _render_alert('ไม่พบ Sheet ทิศทางจากไฟล์สำรวจ ควรมีชื่อ Sheet เช่น "ทิศ 1", "ทิศ 2", หรือ "ทิศ 2+3"', "warning")
@@ -500,7 +500,7 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
     validate_mapping_scheme = context.operations.validate_mapping_scheme
     workflow_state = context.workflow_state
 
-    _render_section_header("Analyze", "Configure analysis settings, review blockers, and run Analyze TMC.")
+    _render_section_header("วิเคราะห์", "กำหนดค่าการวิเคราะห์และตรวจสิ่งที่ต้องแก้ก่อนเริ่ม")
     mapping_scheme = _current_mapping_scheme()
     scheme_validation_issues = validate_mapping_scheme(mapping, mapping_scheme)
     mapping_issues = _single_file_mapping_issues(detected_sheet_names, mapping, mapping_scheme)
@@ -514,13 +514,10 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
         [
             ("Source workbook", uploaded_file is not None, uploaded_file.name if uploaded_file is not None else "Upload in Data"),
             ("Mapping", mapping_issues.empty and not scheme_validation_issues and not process_block_reason, "Ready" if mapping_issues.empty and not scheme_validation_issues and not process_block_reason else "Fix Mapping first"),
-            ("Analysis result", analysis_ready and not analysis_stale, "Re-analysis required" if analysis_stale else "Not analyzed" if not analysis_ready else "Ready"),
         ]
     )
     if analysis_stale:
-        _render_alert("Analysis is stale. Update the settings below and run Analyze TMC again.", "warning")
-    elif workflow_state and workflow_state.readiness.analysis:
-        _render_alert("Analysis result is current for the active source, Mapping, and settings.", "success")
+        _render_alert("ค่าการวิเคราะห์เปลี่ยน กรุณาวิเคราะห์ TMC ใหม่", "warning")
 
     with st.container(border=True):
         _render_section_header("ช่วงเวลาค้นหา Peak", "กำหนดช่วง AM และ PM ก่อนประมวลผล")
@@ -582,14 +579,15 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
 
     analysis_block_reason = ""
     if uploaded_file is None:
-        analysis_block_reason = "Upload a source workbook in Data first."
+        analysis_block_reason = "อัปโหลดไฟล์ต้นทางในขั้น Data ก่อน"
     elif process_block_reason:
         analysis_block_reason = process_block_reason
     elif not mapping_issues.empty or scheme_validation_issues:
-        analysis_block_reason = "Resolve Mapping issues before analysis."
-    _render_action_hint(analysis_block_reason or "Ready to analyze the current source and Mapping.")
+        analysis_block_reason = "แก้รายการ Mapping ที่ต้องตรวจสอบก่อนวิเคราะห์"
+    if analysis_block_reason:
+        _render_action_hint(analysis_block_reason)
     analyze_tmc = st.button(
-        "Analyze TMC",
+        "วิเคราะห์ TMC",
         type="primary",
         disabled=bool(analysis_block_reason),
         key="analyze_tmc_stage",
@@ -826,9 +824,7 @@ def render_single_review(*, context: WorkflowContext) -> None:
                 columns=4,
             )
             _render_action_hint("ใช้ช่วงนี้เป็นค่าหลักสำหรับรายงาน")
-            if all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
-                _render_alert("กำหนดช่วง Peak แล้ว พร้อมส่งออก", "success")
-            else:
+            if not all([confirmed_am_start, confirmed_am_end, confirmed_pm_start, confirmed_pm_end]):
                 _render_alert("กรุณากำหนด AM Peak และ PM Peak ก่อนส่งออก", "warning")
         else:
             _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak", "warning")
@@ -975,7 +971,6 @@ def render_single_export(*, context: WorkflowContext) -> None:
     PEAK_BINDING_FALLBACK_REASON = context.operations.PEAK_BINDING_FALLBACK_REASON
     PEAK_SELECTION_AUTO = context.operations.PEAK_SELECTION_AUTO
     PNG_MIME = context.operations.PNG_MIME
-    PROJECT_SESSION_MIME = context.operations.PROJECT_SESSION_MIME
     Path = context.operations.Path
     STANDARD_REPORT_EXPORT_MODE = context.operations.STANDARD_REPORT_EXPORT_MODE
     application_assess_standard_peak_binding = context.operations.application_assess_standard_peak_binding
@@ -1431,14 +1426,6 @@ def render_single_export(*, context: WorkflowContext) -> None:
             safe_package_filename(output["workbook_filename"]),
             PACKAGE_MIME,
         )
-        if session_bytes:
-            st.download_button(
-                "ดาวน์โหลด Project Session",
-                data=download_buffer(session_bytes),
-                file_name=session_filename,
-                mime=PROJECT_SESSION_MIME,
-                key="download_project_session_export",
-            )
         with st.expander("กราฟและ Diagram สำหรับรายงาน", expanded=False):
             chart_pngs = output["chart_pngs"]
             chart_cols = st.columns(2)

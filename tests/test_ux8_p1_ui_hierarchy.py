@@ -134,7 +134,7 @@ def test_single_review_keeps_technical_tables_in_one_closed_section() -> None:
         (preset.name, preset.read_bytes(), "application/json")
     ).run(timeout=60)
     _stage(at, "Analyze")
-    next(button for button in at.button if button.label == "Analyze TMC").click().run(timeout=120)
+    next(button for button in at.button if button.label == "วิเคราะห์ TMC").click().run(timeout=120)
     assert not at.exception
     assert at.session_state["active_workflow_tab"] == "Review"
     detail = _expander(at, "รายละเอียดทางเทคนิค")
