@@ -5,23 +5,41 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `0.2.0` (from `pyproject.toml`)
+- Package/application version: `1.0.0` (from `pyproject.toml` after release preparation)
+- Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
 - Installed workflow version: `v1.4.1`
 
-## Current accepted baseline
-- Accepted branch: `main`
-- Accepted HEAD SHA: `472da24108535a58dc41bd6bfb403cb2402f67ea`
-- Accepted date: 2026-08-27
-- Current phase/milestone: UX-2 sheet-centric physical-semantics Mapping merged; UX-3 explicit Peak Review is next.
-- Last accepted PR / CI run: PR #17; GitHub Actions CI #77 passed on Windows / Python 3.10 and 3.12.
+## Current accepted baseline and release state
+- Accepted UX/product baseline: `main@ff26e48a904d4dae53c9d0f92ecf853f86ea93a9` from PR #25 (UX-8).
+- PR #25 qualification: full automated suite 451 passed, 0 failed; CI passed on Windows / Python 3.10 and 3.12.
+- Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
+- GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
+- Current phase: `v1.0.0` release preparation and project closure.
+- After the `v1.0.0` tag is created, that tag is the authoritative stable release baseline.
+- Post-release operating mode: maintenance mode.
+
+## Product workflow
+Canonical operator flow for Single and Batch:
+
+`Data -> Mapping -> Analyze -> Review -> Export`
+
+Core behavior:
+- Data owns source and project/survey setup.
+- Mapping owns movement semantics and Mapping Preset reuse.
+- Analyze owns Peak search/PCE processing and analysis execution.
+- Review owns QC and explicit Peak confirmation.
+- Export owns Standard/Safe PNG report generation and package/ZIP output.
 
 ## Technology stack
-- Languages: Python
-- Frameworks/libraries: Streamlit, pandas, openpyxl, Altair, Matplotlib; optional Microsoft Excel COM via pywin32 for native-template export
+- Language: Python
+- UI: Streamlit
+- Core libraries: pandas, openpyxl, Altair, Matplotlib
+- Optional legacy/diagnostic integration: Microsoft Excel COM via pywin32
 - Package manager: pip / setuptools via `pyproject.toml`
-- Supported OS/runtime: Windows is the authoritative runtime; Python `>=3.10`. GitHub Actions currently qualifies Windows with Python 3.10 and 3.12.
+- Supported runtime: Windows, Python `>=3.10`
+- GitHub Actions qualification: Windows / Python 3.10 and 3.12
 
 ## Standard commands
 ### Install/bootstrap
@@ -29,84 +47,125 @@
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
-### Fast validation
+
+### Focused validation
 ```text
 python -m pytest <relevant test files> -q
 ```
+
 ### Full validation
 ```text
 python -m pytest
 python -m compileall -q app.py src
 git diff --check
 ```
-### Build/package
-```text
-No separate release build or package command is defined.
-```
+
 ### Local run
 ```text
 start_tmc_processor.bat
 ```
 
-When the environment is already prepared, the equivalent developer command is:
+Equivalent developer command:
 
 ```text
 python -m streamlit run app.py
 ```
 
 ## Architecture / invariants
-- `app.py` is the Streamlit application shell; the validated calculation/domain engine is under `src/tmc_processor/`.
-- `src/tmc_processor/workflow_state.py` is pure Python with no Streamlit dependency. `WorkflowState`, semantic revisions/fingerprints, readiness, and `transition_workflow` define the dependency chain and invalidation rules; `app.py` adapts these rules to legacy session-state keys.
-- The canonical operator flow for Single and Batch is `Data -> Mapping -> Analyze -> Review -> Export`.
-- `from_to` remains the compatibility movement-code scheme; `approach_movement` is also supported with its documented export limitations.
-- Effective Peak decisions must remain consistent in every Peak-dependent export artifact.
+- `app.py` is the Streamlit entrypoint/compatibility facade.
+- UI composition is under `src/tmc_processor/ui/`.
+- Application boundaries are under `src/tmc_processor/application/`.
+- Domain/calculation/export code remains under `src/tmc_processor/`.
+- `src/tmc_processor/workflow_state.py` is the authority for workflow revisions, readiness and invalidation.
+- UI/application code adapts to WorkflowState; it must not create a second workflow state machine.
+- Suggested Peak, draft Peak and explicitly confirmed Peak are distinct states.
+- Confirmed/effective Peak is authoritative for Peak-dependent export artifacts.
+- Standard report prefers package-preserving OOXML native-template output when the exact confirmed/effective Peak is representable by the current template.
+- Safe PNG is an explicit alternative/fallback and must preserve the exact confirmed/effective Peak.
+- Excel COM is optional legacy/diagnostic capability, not a requirement for Standard report.
 
 ## Protected behavior
-Changes must not alter the following unless explicitly approved:
-- Calculation methodology, PCU/PCE processing, Peak calculations, QC logic, movement aggregation, movement-code derivation, and existing `from_to` / `approach_movement` behavior.
-- Mapping Excel, Mapping Preset, Project Session, Single, Batch, effective-Peak propagation, export metadata, and movement-diagram contracts.
-- Excel Template Mode behavior when Microsoft Excel/COM is available and Safe PNG/generated export fallback behavior when it is not.
-- Real-workbook regression behavior for the local files in `samples/raw/`.
+Changes must not alter the following without explicit approval and qualification:
+- source parsing and TMC calculation methodology
+- PCU/PCE processing
+- Peak detection/calculation semantics
+- suggested/draft/confirmed/effective Peak semantics
+- QC rules
+- movement aggregation and movement-code derivation
+- Mapping domain semantics
+- WorkflowState/readiness/invalidation rules
+- Mapping Excel and Mapping Preset contracts
+- Project Session schema and supported Single round-trip behavior
+- Batch processing and per-file Review/Export semantics
+- Standard OOXML / Safe PNG routing and effective-Peak consistency
+- native Excel template fidelity
+- protected real-workbook behavior under local `samples/raw/`
 
 ## Important paths
 - Source: `src/tmc_processor/`
-- Application shell: `app.py`
+- UI: `src/tmc_processor/ui/`
+- Application: `src/tmc_processor/application/`
+- Entry point: `app.py`
 - Tests: `tests/`
 - Documentation: `docs/`
-- Generated output: `outputs/`
 - Synthetic demos: `samples/demo/`
+- Generated output: `outputs/`
 - Real local samples: `C:\MyRD\tmc-processor-public\samples\raw\` (not part of public Git history)
 
 ## Validation matrix
 | Gate | Command / Method | Required |
 |---|---|---|
-| Unit / targeted | `python -m pytest <relevant test files> -q` | Yes for affected areas |
-| Integration / regression | `python -m pytest` | Yes |
-| Browser/UI | Manual Streamlit workflow/UAT; no dedicated browser automation gate is defined | When UI behavior changes materially |
-| Build/package/runtime | `python -m compileall -q app.py src`; Windows Streamlit launch | Yes for implementation/runtime changes |
-| Real-data/reference | Local Windows validation of the three workbooks in `samples/raw/`, including required Excel/export checks | Yes for release qualification and changes affecting workflow, mapping, Peak, export, or state |
-| CI | GitHub Actions on `windows-latest`, Python 3.10 and 3.12 | Yes |
+| Focused tests | `python -m pytest <relevant tests> -q` | Yes for affected areas |
+| Full regression | `python -m pytest` | Yes |
+| Compile | `python -m compileall -q app.py src` | Yes for implementation/runtime changes |
+| Whitespace | `git diff --check` | Yes |
+| Browser/UI | Manual populated Single/Batch workflow smoke | When UI/workflow presentation changes materially |
+| Real-data/reference | Protected local workbooks in `samples/raw/` | Required when changes affect relevant workflow/mapping/Peak/export/state behavior |
+| Native template/Excel | Package/formula/cache/fidelity checks and Excel/manual checks where applicable | Required for affected export changes |
+| CI | GitHub Actions Windows Python 3.10 / 3.12 | Yes |
 
-## Execution characteristics
-- Typical task ambiguity: Preserve established engineering outputs while evolving the Streamlit workflow.
-- High-risk areas: `app.py` session-state orchestration, mapping, Peak review, Excel export, and real-workbook compatibility.
-- Modules safe to parallelize: Pure calculation and test-only changes when their contracts are independent.
-- Modules tightly coupled / single-owner: Streamlit state transitions and export/readiness integration in `app.py`.
-- Preferred local execution constraints: Windows; use the repository virtual environment where available; Excel COM qualification requires desktop Microsoft Excel and pywin32.
+## Release history
+### v1.0.0
+Stable closure release after UX-0 through UX-8 modernization and qualification.
 
-## Git / release policy
-- Branch naming: isolated task branches; use `codex/<scope>-<description>` or the task-specified branch.
-- Commit policy: focused commits scoped to the approved task; preserve unrelated changes; no destructive history rewriting without authorization.
-- PR policy: implementation changes require a PR against `main` with baseline SHA, changed files, validation evidence, scope/non-scope, and limitations.
-- Merge policy: do not merge automatically; require review of the diff and applicable regression, CI, runtime, and real-data evidence.
-- Release policy: qualify applicable automated tests, Windows runtime, real-workbook behavior, Excel COM/native-template behavior, Safe PNG fallback, effective-Peak consistency, and `git diff --check`.
+Key capabilities:
+- canonical five-stage Single and Batch workflow
+- sheet-centric physical Mapping
+- explicit Peak Review confirmation
+- exception-first Batch review
+- application/UI architecture split
+- package-preserving OOXML native-template Standard export
+- Safe PNG fallback without Peak coercion
+- operator UI cleanup, stage guidance and global Single Project Session controls
 
-## Current known limitations / risks
-- `app.py` remains a large Streamlit orchestration surface; stale-result regressions remain a risk while UX modernization continues.
-- Peak suggestion versus explicit human confirmation is not yet fully separated; this is planned for UX-3.
-- Batch review is still primarily file-by-file.
-- Excel Template Mode depends on Windows Microsoft Excel/Excel COM; Safe PNG/generated export is the fallback. Batch `approach_movement` Excel Template Mode remains blocked.
-- No dedicated browser automation, wheel/package qualification, or separate release-build gate is defined.
+### v0.2.0 Public Beta
+Original public release from 24 May 2026.
+
+Preserved as:
+- tag/release `v0.2.0`
+- branch `legacy/v0.2.0`
+
+The legacy snapshot is historical and must not be moved or rewritten.
+
+## Known limitations / backlog
+- Issue #23: native-template support for non-hour-aligned rolling 60-minute Peaks (for example `08:15–09:15`). Until implemented, Standard falls back to Safe PNG while preserving the exact confirmed Peak.
+- Batch Project Session is intentionally disabled because the current session format cannot round-trip Batch uploads and Batch Mapping Presets.
+- UX-8 live Batch qualification used successful demo items; failed/excluded outcomes were covered by existing automated behavior but not recreated in that final UX browser smoke.
+- `WorkflowContext` / `WorkflowOperations` retain a relatively broad dependency surface from UX-6; avoid expanding it without architectural review.
+
+## Git / maintenance policy
+- `main` is the maintained current line.
+- `legacy/v0.2.0` is the preserved historical Public Beta snapshot.
+- Use short-lived task branches for future fixes/enhancements.
+- Merged task branches should normally be deleted after remote acceptance.
+- Preserve unrelated local dirty changes.
+- Do not rewrite release tags/history.
+- Implementation changes require evidence appropriate to affected risk areas before merge/release.
 
 ## Current next objective
-- UX-3: separate system Peak suggestions, operator draft selections, and explicit human confirmation; make Review the engineering evidence/QC workspace while preserving effective-Peak calculations and the UX-0 invalidation contract.
+No active modernization milestone is scheduled after `v1.0.0`.
+
+Operate in maintenance mode:
+- bug fixes through focused issues/PRs
+- optional enhancement #23 when prioritized
+- preserve validated behavior unless a separately approved change requires modification
