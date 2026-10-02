@@ -1,8 +1,10 @@
 # TMC Processor
 
-TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป กราฟ ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
+TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
 
-รุ่นปัจจุบันพัฒนาต่อบน branch `main`
+รุ่นปัจจุบัน: **`v1.0.0` stable**
+
+โค้ดรุ่นปัจจุบันอยู่บน branch `main`
 
 ## Legacy version
 
@@ -21,9 +23,14 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 - แปลงข้อมูล TMC จากไฟล์ Excel สำรวจจราจร
 - กำหนดทิศทางและ Mapping จากข้อมูลดิบไปเป็น movement ที่ใช้ในรายงาน
 - คำนวณ PCU ด้วยค่า PCE
-- ตรวจและยืนยันช่วงเร่งด่วน AM/PM Peak ก่อนส่งออก
+- วิเคราะห์และตรวจ AM/PM Peak
+- ให้ผู้ใช้ยืนยัน Peak อย่างชัดเจนก่อนส่งออก
 - ส่งออก Excel Report
 - รองรับการทำหลายไฟล์แบบ Batch สำหรับจุดสำรวจเดียวกันหรือทางแยกเดียวกันหลายวัน
+
+Canonical workflow ของโปรแกรมคือ:
+
+`Data → Mapping → Analyze → Review → Export`
 
 ## เหมาะกับใคร
 
@@ -37,11 +44,12 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 - Single-file workflow สำหรับประมวลผลไฟล์ TMC ทีละไฟล์
 - Batch workflow สำหรับประมวลผลหลายวันของจุดสำรวจเดียวกัน
 - Mapping Preset (`.mapping.json`) สำหรับใช้ Mapping เดิมซ้ำกับหลายไฟล์
-- Project Session (`.tmcproj.json`) สำหรับบันทึกและโหลดการตั้งค่างาน
+- Project Session (`.tmcproj.json`) สำหรับบันทึกและโหลดการตั้งค่างานใน Single workflow
 - Editable PCE factors สำหรับปรับค่า PCE ก่อนคำนวณ PCU
-- Peak Review สำหรับตรวจและยืนยัน AM/PM Peak
-- Excel Template Mode สำหรับส่งออกด้วย Microsoft Excel และ Excel COM
-- Safe PNG Export Mode สำหรับใช้เป็นทางเลือกเมื่อ Excel COM ใช้งานไม่ได้
+- Peak Review ที่แยก suggested / draft / confirmed Peak และต้องยืนยันก่อน Export
+- Standard Excel report แบบ native-template preserving OOXML เมื่อ template รองรับ Peak ที่ยืนยัน
+- Safe PNG Export Mode เป็น explicit alternative และ fallback
+- Excel COM คงไว้เป็น optional legacy/diagnostic capability ไม่ใช่ข้อกำหนดของ Standard report
 - Export Package ZIP สำหรับรวมผลลัพธ์ของงานไฟล์เดียว
 - Batch Summary / Batch QC ใน `batch_summary.xlsx`
 - Demo files สำหรับทดลองโดยไม่ต้องมีไฟล์สำรวจจริง
@@ -49,9 +57,13 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 
 ## คำแนะนำการใช้งาน
 
-แนะนำให้ใช้ Workflow แบบไฟล์เดียวเป็น workflow หลักสำหรับการจัดทำรายงาน เนื่องจากเป็นขั้นตอนที่ตรวจสอบ Mapping, ช่วง Peak, ตารางสรุป และรูปแบบรายงานได้ละเอียดที่สุด รวมถึงรองรับการส่งออกด้วย Excel Template Mode ได้ครบถ้วนเมื่อใช้งานบนเครื่องที่มี Microsoft Excel และ Excel COM พร้อมใช้งาน
+แนะนำให้ใช้ Single workflow เป็น workflow หลักสำหรับการจัดทำรายงาน เนื่องจากตรวจสอบ Mapping, Peak, QC และรายงานได้ละเอียดที่สุด
 
-Workflow แบบ Batch เหมาะสำหรับกรณีที่ต้องประมวลผลหลายไฟล์หรือหลายวันของจุดสำรวจเดียวกัน โดยใช้ Mapping Preset เดียวกัน และควรใช้เมื่อได้ตรวจสอบ Mapping จาก Workflow แบบไฟล์เดียวแล้ว สำหรับ `approach_movement` ปัจจุบัน Batch รองรับการส่งออกแบบ Safe PNG/generated ZIP ส่วน Batch Excel Template Mode ยังไม่รองรับในเวอร์ชันนี้
+Batch workflow เหมาะสำหรับกรณีที่ต้องประมวลผลหลายไฟล์หรือหลายวันของจุดสำรวจเดียวกันโดยใช้ Mapping Preset เดียวกัน และควรใช้เมื่อได้ตรวจสอบ Mapping จาก Single workflow แล้ว
+
+Standard report จะใช้ native-template preserving OOXML เมื่อ Peak ที่ยืนยันสามารถแทนได้โดย template ปัจจุบัน หาก Peak ที่ถูกต้องไม่สามารถแทนใน template ได้ โปรแกรมจะไม่ปัดหรือเปลี่ยน Peak แต่จะ fallback ไป Safe PNG แทน
+
+ข้อจำกัดที่ติดตามอยู่ใน [Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) คือ native-template support สำหรับ rolling 60-minute Peak ที่ไม่ตรงชั่วโมง เช่น `08:15–09:15`
 
 ## วิธีติดตั้งและเปิดใช้งานแบบง่ายที่สุดบน Windows
 
@@ -74,49 +86,49 @@ start_tmc_processor.bat
 
 - Windows
 - Python 3.10 หรือใหม่กว่า และควรเลือก `Add python.exe to PATH` ตอนติดตั้ง Python
-- Microsoft Excel desktop app เฉพาะกรณีที่ต้องการใช้ Excel Template Mode
 
-ถ้า Excel COM ใช้งานไม่ได้ ยังสามารถใช้ Safe PNG Export Mode ได้
+Standard report ไม่จำเป็นต้องใช้ Microsoft Excel desktop app หรือ Excel COM ในกรณีที่ native OOXML path รองรับงานนั้นอยู่แล้ว ส่วน Excel COM เป็น optional capability สำหรับ legacy/diagnostic path
 
 ## Workflow แบบไฟล์เดียว
 
 ใช้เมื่อต้องการประมวลผลไฟล์ TMC Excel หนึ่งไฟล์
 
 1. เปิดโปรแกรมด้วย `start_tmc_processor.bat`
-2. เลือกโหมดทำงานแบบไฟล์เดียว
-3. Upload ไฟล์ TMC Excel หนึ่งไฟล์
-4. กรอกข้อมูลงาน เช่น ชื่อโครงการ จุดสำรวจ วันที่สำรวจ ชื่อถนน และข้อมูลประกอบรายงาน
+2. เลือก Single workflow
+3. Upload ไฟล์ TMC Excel หนึ่งไฟล์ใน Data
+4. กรอกข้อมูลงานและช่วงเวลาสำรวจ
 5. สร้างหรือโหลด Mapping
    - โหลด Mapping Preset (`.mapping.json`)
    - หรือโหลดไฟล์ Mapping Excel ที่เคยบันทึกไว้
    - หรือแก้ไข Mapping ในตารางของโปรแกรม
-6. ตรวจหรือปรับค่า PCE factors ถ้าจำเป็น
-7. ประมวลผลไฟล์
-8. ตรวจ Dashboard และยืนยัน AM/PM Peak
-9. สร้าง Excel Report หรือ Export Package ZIP
+6. ตั้งค่า Peak search / PCE ตามต้องการและกด Analyze
+7. ตรวจ QC และ Suggested Peak ใน Review
+8. ยืนยัน AM/PM Peak อย่างชัดเจน
+9. สร้าง Standard report หรือเลือก Safe PNG ใน Export
 
-Export Package ZIP จะรวมไฟล์ผลลัพธ์ที่ประมวลผลแล้ว เช่น report, chart, summary, Mapping และ Project Session แต่โดยค่าเริ่มต้นจะไม่รวม raw input Excel file
+Export Package ZIP จะรวมไฟล์ผลลัพธ์ที่ประมวลผลแล้วตาม workflow โดยค่าเริ่มต้นจะไม่รวม raw input Excel file
 
 ## Workflow แบบ Batch
 
 Batch workflow เหมาะสำหรับกรณีที่มีข้อมูลหลายวันของจุดสำรวจเดียวกันหรือทางแยกเดียวกัน และใช้ Mapping Preset เดียวกัน
 
 1. เปิดโปรแกรมด้วย `start_tmc_processor.bat`
-2. เลือก `ประมวลผลหลายไฟล์`
-3. Upload ไฟล์ TMC Excel หลายไฟล์ เช่น ไฟล์ของแต่ละวัน
+2. เลือก Batch workflow
+3. Upload ไฟล์ TMC Excel หลายไฟล์ใน Data
 4. โหลด Mapping Preset หนึ่งไฟล์ เช่น `samples/demo/DEMO_TMC1_FourLeg.mapping.json`
-5. ตั้งค่า survey date และ output stem ของแต่ละไฟล์
-6. กดวิเคราะห์ Batch
-7. ตรวจและยืนยัน Peak ของแต่ละไฟล์
-8. สร้าง Batch ZIP
+5. ตั้งค่า survey date และ output stem ของแต่ละไฟล์ถ้าจำเป็น
+6. กด Analyze
+7. ตรวจ QC และยืนยัน Peak ของแต่ละไฟล์ใน Review
+8. สร้าง Batch ZIP ใน Export
 
-Batch ZIP จะมี `batch_summary.xlsx` ซึ่งรวม `Batch_QC` และโฟลเดอร์ผลลัพธ์ของแต่ละไฟล์ที่ประมวลผลสำเร็จ โดยค่าเริ่มต้นจะไม่รวม raw input Excel file และไม่ควรมี local raw file paths อยู่ใน package
+Batch ZIP จะมี `batch_summary.xlsx` ซึ่งรวม `Batch_QC` และผลลัพธ์รายไฟล์ที่ประมวลผลสำเร็จ โดยค่าเริ่มต้นจะไม่รวม raw input Excel file และไม่ควรมี local raw file paths อยู่ใน package
 
-ข้อจำกัดสำคัญของ Batch v1:
+ข้อจำกัดสำคัญของ Batch:
 
 - เหมาะกับจุดสำรวจเดียวกันหรือทางแยกเดียวกันหลายวัน
 - ใช้ Mapping Preset ร่วมกันหนึ่งไฟล์
 - ยังไม่มีการเลือก Mapping แยกเป็นรายไฟล์
+- Project Session ปัจจุบันรองรับ Single workflow เท่านั้น จึงปิด Save/Open controls ใน Batch เพื่อไม่ให้เกิด partial restore ที่ทำให้เข้าใจผิด
 
 ## ทดลองใช้ด้วย Demo files
 
@@ -135,35 +147,39 @@ Batch ZIP จะมี `batch_summary.xlsx` ซึ่งรวม `Batch_QC` แ
 1. เปิดโปรแกรม
 2. Upload `samples/demo/DEMO_TMC1_FourLeg.xlsx`
 3. โหลด `samples/demo/DEMO_TMC1_FourLeg.mapping.json` หรือ `samples/demo/DEMO_TMC1_FourLeg_mapping.xlsx`
-4. ประมวลผลไฟล์
+4. Analyze
 5. ตรวจและยืนยัน Peak
-6. สร้าง Excel Report หรือ Export Package ZIP
+6. สร้าง Standard report หรือ Safe PNG report
 
 ### ทดลองแบบ Batch
 
-1. เลือก `ประมวลผลหลายไฟล์`
+1. เลือก Batch workflow
 2. Upload ไฟล์ต่อไปนี้
    - `samples/demo/DEMO_TMC1_FourLeg.xlsx`
    - `samples/demo/DEMO_TMC1_FourLeg_Day2.xlsx`
 3. โหลด `samples/demo/DEMO_TMC1_FourLeg.mapping.json`
 4. ตั้งค่า survey date และ output stem ถ้าต้องการ
-5. วิเคราะห์ Batch
-6. ตรวจ Peak ของแต่ละไฟล์
+5. Analyze
+6. ตรวจและยืนยัน Peak ของแต่ละไฟล์
 7. สร้าง Batch ZIP
 
 ## Mapping Preset และ Project Session ต่างกันอย่างไร
 
-Mapping Preset (`.mapping.json`) เก็บเฉพาะข้อมูล Mapping เช่น raw sheet, source stream, movement label, output movement code, include flags และ aggregation fields เหมาะสำหรับใช้ Mapping เดิมซ้ำกับหลายวันหรือหลายไฟล์ของทางแยกเดียวกัน
+Mapping Preset (`.mapping.json`) เก็บข้อมูล Mapping เช่น raw sheet, source stream, movement label, output movement code, include flags และ aggregation fields เหมาะสำหรับใช้ Mapping เดิมซ้ำกับหลายวันหรือหลายไฟล์ของทางแยกเดียวกัน
 
-Project Session (`.tmcproj.json`) เก็บการตั้งค่างานที่กว้างกว่า เช่น metadata, Mapping, PCE factors, peak settings และ export settings ใช้สำหรับกลับมาเปิดงานเดิมต่อภายหลัง
+Project Session (`.tmcproj.json`) เก็บการตั้งค่างานที่กว้างกว่า เช่น metadata, Mapping, PCE factors, Peak settings และ export settings เพื่อกลับมาเปิด Single workflow เดิมต่อภายหลัง
 
 Project Session ไม่ได้ฝัง raw input Excel file ไว้ในไฟล์ ผู้ใช้ต้อง Upload ไฟล์ Excel ต้นทางใหม่เมื่อเปิดงานกลับมาใช้อีกครั้ง
 
-## Excel Template Mode และ Safe PNG Export Mode
+Batch Project Session ยังไม่รองรับการ round-trip Batch uploads และ Batch Mapping Preset จึงไม่เปิด Save/Open ใน Batch รุ่นปัจจุบัน
 
-Excel Template Mode ใช้ Microsoft Excel desktop app ผ่าน Excel COM บน Windows เพื่อเติมข้อมูลลงใน template และช่วยรักษา native charts, formulas, layout และ formatting ของไฟล์ Excel
+## Standard report และ Safe PNG
 
-Safe PNG Export Mode ใช้ openpyxl และ chart image แบบ PNG เป็นทางเลือกเมื่อ Excel COM ใช้งานไม่ได้ เหมาะสำหรับเครื่องที่ไม่มี Microsoft Excel หรือใช้งาน Excel COM ไม่สำเร็จ
+Standard report ใช้ package-preserving OOXML กับ authoritative Excel template เมื่อ confirmed/effective Peak สามารถแทนใน template ได้ โดยรักษา native charts, drawings, formulas, styles และ relationships ของ workbook
+
+Safe PNG ใช้ generated workbook และ chart image เป็น explicit alternative/fallback และยังคง Peak ที่ผู้ใช้ยืนยันไว้โดยไม่ round หรือ snap เพื่อให้เข้ากับ template
+
+ถ้าเป็น rolling 60-minute Peak ที่ valid แต่ไม่ตรงแถวเวลาที่ native template ปัจจุบันรองรับ เช่น `08:15–09:15` Standard จะ fallback ไป Safe PNG จนกว่า Issue #23 จะได้รับการแก้ไข
 
 ## ความเป็นส่วนตัวและความปลอดภัยของข้อมูล
 
@@ -191,26 +207,24 @@ repository นี้เป็น public repository จึงไม่ควร c
 คำสั่งตรวจสอบพื้นฐานก่อน release:
 
 ```powershell
-python -m py_compile app.py
-python scripts/smoke_demo.py
 python -m pytest
+python -m compileall -q app.py src
+git diff --check
 ```
 
-`scripts/smoke_demo.py` ใช้ไฟล์สังเคราะห์จาก `samples/demo/`
+`scripts/smoke_demo.py` ใช้ไฟล์สังเคราะห์จาก `samples/demo/` สำหรับ smoke ที่เกี่ยวข้อง
 
 ## CI and testing
 
-Run the automated suite locally with:
+GitHub Actions runs the automated suite on Windows for Python 3.10 and 3.12 on pushes to `main` and pull requests targeting `main`. CI uses committed synthetic/demo fixtures and does not require Microsoft Excel or files under `samples/raw/`.
 
-```powershell
-python -m pytest
-```
+Real-workbook and Excel/native-template qualification เป็น local/manual release gate สำหรับการเปลี่ยนแปลงที่กระทบ workflow, Mapping, Peak, state หรือ export โดยไฟล์จริงใน `samples/raw/` ไม่อยู่ใน public Git history
 
-GitHub Actions runs the suite on Windows for Python 3.10 and 3.12 on pushes to `main` and pull requests targeting `main`. CI uses committed synthetic/demo fixtures and does not require Microsoft Excel or files under `samples/raw/`.
+## Maintenance status
 
-Real Excel COM smoke tests remain a local/manual release gate on a Windows machine with Microsoft Excel installed. Files under `samples/raw/` are local validation data and are not part of CI.
+หลัง `v1.0.0` โครงการเข้าสู่ maintenance mode: แก้บั๊กหรือทำ enhancement แบบมี issue/acceptance แยกเป็นงาน ๆ โดยไม่เปลี่ยน validated behavior โดยไม่จำเป็น
 
-Stable checkpoint validation: 256 tests passed with 11 warnings locally, and three real sample workbooks passed local Streamlit and Excel validation.
+Known enhancement backlog ปัจจุบัน: [Issue #23 — native Excel template support for non-hour-aligned rolling Peaks](https://github.com/bokoboss/tmc-processor/issues/23)
 
 ## License
 
