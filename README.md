@@ -2,7 +2,17 @@
 
 TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป กราฟ ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
 
-เวอร์ชันปัจจุบัน: `0.2.0` public beta
+รุ่นปัจจุบันพัฒนาต่อบน branch `main`
+
+## Legacy version
+
+รุ่น Public Beta เดิมที่เผยแพร่เมื่อ 24 พฤษภาคม 2026 ถูกเก็บไว้เป็น historical snapshot และจะไม่ถูกแก้ไขตามการพัฒนาของ `main`
+
+- Source snapshot: [`legacy/v0.2.0`](https://github.com/bokoboss/tmc-processor/tree/legacy/v0.2.0)
+- Original tag: [`v0.2.0`](https://github.com/bokoboss/tmc-processor/tree/v0.2.0)
+- Original release: [TMC Processor v0.2.0 Public Beta](https://github.com/bokoboss/tmc-processor/releases/tag/v0.2.0)
+
+หากต้องการดูหรือทดลองรุ่นที่เผยแพร่เดิม ให้ใช้ `v0.2.0` หรือ branch `legacy/v0.2.0` แทน `main`
 
 ## โปรแกรมนี้ใช้ทำอะไร
 
