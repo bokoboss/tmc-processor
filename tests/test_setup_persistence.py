@@ -301,7 +301,7 @@ def _assert_analyze_setup_values(at: AppTest, expected: dict[str, object]) -> No
         widget_key = app.SETUP_FIELD_WIDGET_KEYS[field]
         assert _widget_by_key(at.time_input, widget_key).value == expected[field]
     assert _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).value == expected["peak_mode"]
-    assert _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS["survey_period"]).value == expected["survey_period"]
+    assert all(widget.key != app.SETUP_FIELD_WIDGET_KEYS["survey_period"] for widget in at.text_input)
 
 
 def _exercise_analyze_setup_round_trip(at: AppTest, *, batch: bool = False) -> None:
@@ -309,6 +309,11 @@ def _exercise_analyze_setup_round_trip(at: AppTest, *, batch: bool = False) -> N
     if batch:
         at.radio[0].set_value(at.radio[0].options[1])
         at.run(timeout=30)
+
+    survey_period_key = app.SETUP_FIELD_WIDGET_KEYS["survey_period"]
+    assert _widget_by_key(at.text_input, survey_period_key).value == app.DEFAULT_SURVEY_PERIOD
+    _widget_by_key(at.text_input, survey_period_key).set_value("06.00 - 19.00")
+    at.run(timeout=30)
 
     _button_by_label(at, "Analyze").click()
     at.run(timeout=30)
@@ -333,11 +338,11 @@ def _exercise_analyze_setup_round_trip(at: AppTest, *, batch: bool = False) -> N
     for field in ("am_peak_window_start", "am_peak_window_end", "pm_peak_window_start", "pm_peak_window_end"):
         _widget_by_key(at.time_input, app.SETUP_FIELD_WIDGET_KEYS[field]).set_value(configured[field])
     _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).set_value(configured["peak_mode"])
-    _widget_by_key(at.text_input, app.SETUP_FIELD_WIDGET_KEYS["survey_period"]).set_value(configured["survey_period"])
     at.run(timeout=30)
 
-    _button_by_label(at, "Data" if batch else "Mapping").click()
+    _button_by_label(at, "Data").click()
     at.run(timeout=30)
+    assert _widget_by_key(at.text_input, survey_period_key).value == configured["survey_period"]
     _button_by_label(at, "Analyze").click()
     at.run(timeout=30)
     _assert_analyze_setup_values(at, configured)

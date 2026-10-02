@@ -271,7 +271,6 @@ SETUP_TIME_FIELDS = {
     "pm_peak_window_end",
 }
 ANALYZE_SETUP_FIELDS = (
-    "survey_period",
     "peak_mode",
     "am_peak_window_start",
     "am_peak_window_end",
@@ -5681,6 +5680,8 @@ def _run_streamlit_app() -> None:
 
 
     if not is_single_file_mode:
+        batch_workflow_state = _workflow_state_for_mode(WORKFLOW_BATCH_MODE)
+        assert batch_workflow_state is not None
         render_workflow_stage(
             active_tab,
             context=WorkflowContext(
@@ -5688,10 +5689,14 @@ def _run_streamlit_app() -> None:
                 is_single_file_mode=is_single_file_mode,
                 session_state=st.session_state,
                 operations=_workflow_operations(),
+                batch_analysis=st.session_state.get("tmc_batch_analysis_result"),
+                batch_export_mode=st.session_state.get("tmc_batch_export_mode"),
                 batch_export_options=batch_export_options,
+                batch_export_stale=bool(st.session_state.get("tmc_batch_export_stale")),
                 batch_mapping_scheme=batch_mapping_scheme,
                 batch_metadata_rows=batch_metadata_rows,
                 batch_preset_name=batch_preset_name,
+                batch_stale=bool(st.session_state.get("tmc_batch_stale")),
                 batch_uploads=batch_uploads,
                 caption_text=caption_text,
                 detected_sheet_names=detected_sheet_names,
@@ -5702,6 +5707,7 @@ def _run_streamlit_app() -> None:
                 file_bytes=file_bytes,
                 loaded_batch_preset=loaded_batch_preset,
                 mapping=mapping,
+                mapping_ready=batch_workflow_state.readiness.mapping,
                 north_label=north_label,
                 north_road=north_road,
                 parsed_details=parsed_details,
@@ -5720,6 +5726,7 @@ def _run_streamlit_app() -> None:
                 tmc_id=tmc_id,
                 tmc_title=tmc_title,
                 uploaded_file=uploaded_file,
+                uploaded_ready=batch_workflow_state.readiness.source,
                 use_excel_com_native_charts=use_excel_com_native_charts,
                 version_text=version_text,
                 warning_message=warning_message,

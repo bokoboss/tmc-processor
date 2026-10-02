@@ -54,19 +54,13 @@ def render_batch_data(*, context: WorkflowContext) -> None:
     batch_left, batch_right = st.columns([1.1, 1])
     with batch_left:
         with st.container(border=True):
-            _render_section_header("Data", "Shared project setup and Batch source inventory.")
-            _render_readiness_checklist(
-                [
-                    ("Mapping Preset", mapping_ready, "Configure it in Mapping"),
-                    ("Shared PCE factors", pce_ready, "Configure them in Analyze"),
-                    ("Per-file Review", bool(batch_analysis), "Review results after Analyze"),
-                    ("ไม่รวม raw Excel ใน ZIP", True, "แพ็กเกจส่งออกมีเฉพาะรายงานและไฟล์ประกอบ"),
-                ]
-            )
+            _render_section_header("ข้อมูลโครงการ Batch", "ข้อมูลร่วมสำหรับไฟล์สำรวจทั้งหมด")
             setup_cols = st.columns(3)
             setup_cols[0].text_input("ชื่อจุดนับ / TMC title", key="tmc_title_input")
             setup_cols[1].text_input("จุดสำรวจ", key="survey_point_input")
             setup_cols[2].text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+
+        with st.expander("รายละเอียดสำหรับรายงาน Batch", expanded=False):
             direction_cols = st.columns(4)
             direction_cols[0].text_input("ป้ายปลายทางด้านเหนือ", key="north_label_input")
             direction_cols[1].text_input("ป้ายปลายทางด้านใต้", key="south_label_input")
@@ -91,6 +85,9 @@ def render_batch_data(*, context: WorkflowContext) -> None:
                     columns=1,
                 )
                 st.dataframe(pd.DataFrame({"file_name": [row["file_name"] for row in batch_metadata_rows]}), width="stretch")
+                source_names = [str(row["file_name"]).casefold() for row in batch_metadata_rows]
+                if len(source_names) != len(set(source_names)):
+                    _render_alert("พบชื่อไฟล์ต้นทางซ้ำ กรุณาตรวจสอบรายการไฟล์", "warning")
 
         with st.container(border=True):
             _render_section_header("ข้อมูลรายไฟล์", "survey_date_text และ output_stem จะใช้ในรายงานและ ZIP")
@@ -121,6 +118,9 @@ def render_batch_data(*, context: WorkflowContext) -> None:
                             "notes": str(row.get("notes", "") or ""),
                         }
                     )
+                output_names = [row["output_stem"].casefold() for row in cleaned_metadata]
+                if len(output_names) != len(set(output_names)):
+                    _render_alert("พบชื่อไฟล์ส่งออกซ้ำ กรุณาแก้ไขข้อมูลรายไฟล์", "warning")
                 if cleaned_metadata != st.session_state.get("tmc_batch_file_metadata_table"):
                     st.session_state["tmc_batch_file_metadata_table"] = cleaned_metadata
                     _sync_batch_analysis_metadata_from_state()
@@ -210,8 +210,6 @@ def render_batch_mapping(*, context: WorkflowContext) -> None:
         [
             ("อัปโหลดไฟล์ Batch", uploaded_ready, f"{len(batch_uploads or []):,} ไฟล์" if uploaded_ready else "ยังไม่มีไฟล์"),
             ("Mapping Preset พร้อมใช้งาน", mapping_ready, batch_preset_name if mapping_ready else "ยังไม่เปิด Preset"),
-            ("ค่า PCE พร้อมใช้งาน", pce_ready, "พร้อมใช้งาน" if pce_ready else "Configure them in Analyze"),
-            ("Metadata รายไฟล์พร้อมใช้งาน", bool(batch_metadata_rows), f"{len(batch_metadata_rows):,} แถว" if batch_metadata_rows else "Configure them in Data"),
         ]
     )
     if mapping_ready:
@@ -347,17 +345,10 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
     _render_section_header("Analyze Batch", "Configure shared analysis settings and run Analyze Batch.")
     with st.container(border=True):
         _render_section_header("Analysis settings", "These settings apply to every uploaded Batch workbook.")
-        survey_period = st.text_input("Survey period", key="survey_period_input")
         peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
         if peak_mode_default not in PEAK_MODE_OPTIONS:
             peak_mode_default = DEFAULT_PEAK_MODE
             st.session_state["peak_mode_select"] = peak_mode_default
-        peak_mode = st.selectbox(
-            "Peak calculation mode",
-            options=PEAK_MODE_OPTIONS,
-            index=PEAK_MODE_OPTIONS.index(peak_mode_default),
-            key="peak_mode_select",
-        )
         period_cols = st.columns(4)
         am_peak_window_start = period_cols[0].time_input(
             "AM window start",
@@ -383,6 +374,13 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
             step=900,
             key="pm_peak_window_end_input",
         )
+        with st.expander(f"วิธีคำนวณ Peak · {peak_mode_default}", expanded=False):
+            peak_mode = st.selectbox(
+                "Peak calculation mode",
+                options=PEAK_MODE_OPTIONS,
+                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                key="peak_mode_select",
+            )
         selected_pce_factors = _render_pce_factor_editor()
         _sync_workflow_after_pce_editor(
             is_single_file_mode=False,
@@ -591,7 +589,7 @@ def render_batch_review(*, context: WorkflowContext) -> None:
         if excluded_count:
             _render_alert(f"{excluded_count} successful file(s) intentionally excluded from Batch export.", "info")
         if successful_count and confirmed_count + excluded_count == successful_count:
-            _render_alert("กำหนด Peak ครบแล้ว พร้อมส่งออก Batch", "success")
+            _render_alert("ยืนยันช่วง Peak ครบแล้ว", "success")
         elif successful_count:
             _render_alert("ยังมีไฟล์ที่ต้องกำหนด Peak", "warning")
         review_filter = st.radio(
@@ -763,7 +761,6 @@ def render_batch_review(*, context: WorkflowContext) -> None:
         "ตรวจสอบข้อมูล Batch",
         "ตรวจสอบสถานะรายไฟล์, QC รวม, และรายละเอียด Batch_QC ก่อนนำผลไปใช้ต่อ",
     )
-    batch_analysis = st.session_state.get("tmc_batch_analysis_result")
     batch_result = st.session_state.get("tmc_batch_export_result")
     status_frame = _batch_status_frame(batch_analysis, batch_result)
     if batch_analysis and batch_stale:
@@ -788,14 +785,13 @@ def render_batch_review(*, context: WorkflowContext) -> None:
             columns=7,
         )
 
-        _render_section_header("สถานะรายไฟล์", "ตารางตรวจสอบผลวิเคราะห์และความพร้อมส่งออกของแต่ละไฟล์")
+        _render_section_header("สถานะรายไฟล์", "ตรวจผลวิเคราะห์และช่วง Peak ของแต่ละไฟล์")
         status_display = _batch_status_display_frame(batch_analysis, batch_result)
         status_columns = _existing_columns(
             status_display,
             [
                 "ชื่อไฟล์",
                 "วันที่สำรวจ",
-                "ชื่อส่งออก",
                 "สถานะ",
                 "AM กำหนดแล้ว",
                 "PM กำหนดแล้ว",
@@ -803,7 +799,6 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 "QC ผิดพลาด",
                 "QC เตือน",
                 "QC ข้อมูล",
-                "สถานะส่งออก",
                 "หมายเหตุ",
             ],
         )
@@ -828,17 +823,6 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 st.dataframe(_qc_display_frame(batch_qc, thai_labels=True), width="stretch", hide_index=True)
         else:
             _render_alert("ยังไม่มีรายการ Batch_QC สำหรับไฟล์ที่วิเคราะห์สำเร็จ", "success")
-
-        if batch_result:
-            _render_section_header("ร่องรอย Batch ZIP", "ตรวจสอบองค์ประกอบหลักของแพ็กเกจส่งออกล่าสุด")
-            _render_readiness_checklist(
-                [
-                    ("สร้าง batch_summary.xlsx แล้ว", True, ""),
-                    ("มี Sheet Batch_Summary", True, ""),
-                    ("มี Sheet Batch_QC", True, ""),
-                    ("ไม่รวม raw input Excel", True, ""),
-                ]
-            )
 
         with st.expander("สรุป QC รายไฟล์", expanded=False):
             qc_summary_columns = _existing_columns(status_frame, ["file_name", "QC errors", "QC warnings", "QC info"])

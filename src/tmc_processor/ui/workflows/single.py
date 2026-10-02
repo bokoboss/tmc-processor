@@ -29,22 +29,30 @@ def render_single_data(*, context: WorkflowContext) -> None:
     _render_section_header("Data", "Upload the source workbook and enter project/report setup.")
     if uploaded_file is None:
         _render_action_hint("Start by uploading a TMC Excel workbook above.")
-
-    setup_left, setup_right = st.columns([1.15, 1])
-    with setup_left:
+    else:
+        detected_sheets = context.detected_sheet_names or []
         with st.container(border=True):
-            _render_section_header("ข้อมูลโครงการและรายงาน", "ข้อมูลหลักสำหรับปกและหัวรายงาน")
-            report_cols = st.columns(2)
-            project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
-            tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
-            tmc_title = st.text_input("ชื่อจุดนับ", key="tmc_title_input")
-            info_cols = st.columns(2)
-            survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
-            survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
-            weather = info_cols[0].text_input("สภาพอากาศ", key="weather_input")
-            responsible_party = info_cols[1].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
+            _render_section_header("ไฟล์ต้นทาง", uploaded_file.name)
+            st.caption(
+                f"พบ Sheet ทิศทาง {len(detected_sheets):,} รายการ: {', '.join(detected_sheets)}"
+                if detected_sheets else "ยังไม่พบ Sheet ทิศทางในไฟล์นี้"
+            )
 
-    with setup_right:
+    with st.container(border=True):
+        _render_section_header("ข้อมูลโครงการ", "ข้อมูลหลักสำหรับปกและหัวรายงาน")
+        report_cols = st.columns(2)
+        project_name = report_cols[0].text_input("ชื่อโครงการ", key="project_name_input")
+        tmc_id = report_cols[1].text_input("TMC ID", key="tmc_id_input")
+        tmc_title = st.text_input("ชื่อจุดนับ", key="tmc_title_input")
+        info_cols = st.columns(2)
+        survey_point = info_cols[0].text_input("จุดสำรวจ", key="survey_point_input")
+        survey_date_text = info_cols[1].text_input("วันที่สำรวจ", key="survey_date_text_input")
+        survey_period = st.text_input("ช่วงเวลาสำรวจ", key="survey_period_input")
+
+    with st.expander("รายละเอียดสำหรับรายงาน", expanded=False):
+        detail_cols = st.columns(2)
+        weather = detail_cols[0].text_input("สภาพอากาศ", key="weather_input")
+        responsible_party = detail_cols[1].text_input("ผู้รับผิดชอบ", key="responsible_party_input")
         with st.container(border=True):
             _render_section_header("ป้ายปลายทางและถนน", "ข้อความที่ใช้ใน Diagram และรายงาน")
             st.caption("ป้ายปลายทาง")
@@ -61,6 +69,8 @@ def render_single_data(*, context: WorkflowContext) -> None:
             west_road = road_cols[1].text_input("ชื่อถนนด้านตะวันตก", key="west_road_input")
             caption_text = st.text_input("คำบรรยายรูป Diagram", key="caption_text_input")
             show_u_turn = st.checkbox("แสดง movement กลับรถ", key="show_u_turn_checkbox")
+
+
 def render_single_mapping(*, context: WorkflowContext) -> None:
     """Render the Single Mapping stage."""
     BytesIO = context.operations.BytesIO
@@ -184,28 +194,11 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
             default_mapping = apply_saved_mapping_to_sheets(detected_sheet_names, pd.DataFrame(st.session_state["mapping_table"]))
         mapping_scheme = _current_mapping_scheme()
         mapping_rows_committed = _mapping_rows_are_committed()
-        with st.expander("Advanced mapping controls", expanded=False):
-            selected_scheme = st.selectbox(
-                "ระบบรหัส Movement",
-                options=MOVEMENT_SCHEMES,
-                index=MOVEMENT_SCHEMES.index(mapping_scheme),
-                format_func=_scheme_select_label,
-                disabled=mapping_rows_committed,
-                key="movement_code_scheme_selector",
-                help="เลือกได้ก่อนโหลดหรือกรอก Mapping; ถ้ามี Mapping แล้วให้ล้างหรือโหลด Mapping ใหม่เพื่อไม่ตีความรหัสเดิมผิด",
-            )
-            if selected_scheme != mapping_scheme and not mapping_rows_committed:
-                _set_current_mapping_scheme(selected_scheme)
-                mapping_scheme = selected_scheme
-                st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
-            if mapping_rows_committed:
-                st.caption(f"Detected movement_code_scheme: {mapping_scheme}")
-                st.caption(MAPPING_SCHEME_LOCK_CAPTION)
-                if st.button("ล้าง Mapping เพื่อเปลี่ยนระบบรหัส", key="clear_mapping_for_scheme_change"):
-                    _clear_mapping_for_scheme_change()
-                    st.rerun()
-            else:
-                st.caption(f"Selected movement_code_scheme: {mapping_scheme}")
+        selected_scheme = st.session_state.get("movement_code_scheme_selector")
+        if selected_scheme in MOVEMENT_SCHEMES and selected_scheme != mapping_scheme and not mapping_rows_committed:
+            _set_current_mapping_scheme(selected_scheme)
+            mapping_scheme = selected_scheme
+            st.session_state["mapping_editor_version"] = int(st.session_state.get("mapping_editor_version", 0) or 0) + 1
         preset_name_seed = st.session_state.get("tmc_id_input") or st.session_state.get("tmc_title_input") or uploaded_file.name
         preset_source = pd.DataFrame(st.session_state.get("mapping_table") or default_mapping.to_dict("records"))
         preset_bytes = serialize_mapping_preset(
@@ -218,38 +211,8 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
         st.session_state["tmc_mapping_preset_bytes"] = preset_bytes
         st.session_state["tmc_mapping_preset_filename"] = safe_mapping_preset_filename(preset_name_seed)
 
-        with st.container(border=True):
-            _render_section_header("นำเข้า/ส่งออก Mapping", "เลือกใช้ Mapping Excel สำหรับแก้ไขใน Excel หรือ Mapping Preset สำหรับนำค่าที่ตั้งไว้กลับมาใช้ซ้ำ")
-            mapping_excel_col, mapping_preset_col = st.columns(2)
-            with mapping_excel_col:
-                st.markdown("**Mapping Excel**")
-                st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
-                mapping_upload = st.file_uploader(
-                    "โหลดไฟล์ Mapping Excel",
-                    type=["xlsx", "xlsm", "xls"],
-                    key="mapping_upload",
-                )
-                _render_download_button(
-                    "ดาวน์โหลดเทมเพลต Mapping",
-                    mapping_to_excel_bytes(default_mapping, movement_code_scheme=mapping_scheme),
-                    "tmc_mapping_template.xlsx",
-                    EXCEL_MIME,
-                )
-            with mapping_preset_col:
-                st.markdown("**Mapping Preset**")
-                st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
-                mapping_preset_upload = st.file_uploader(
-                    "เปิด Mapping Preset",
-                    type=["json"],
-                    key="mapping_preset_upload",
-                )
-                st.download_button(
-                    "ดาวน์โหลด Mapping Preset",
-                    data=download_buffer(preset_bytes),
-                    file_name=st.session_state["tmc_mapping_preset_filename"],
-                    mime=MAPPING_PRESET_MIME,
-                    key="download_mapping_preset",
-                )
+        mapping_upload = st.session_state.get("mapping_upload")
+        mapping_preset_upload = st.session_state.get("mapping_preset_upload")
         if mapping_upload is not None:
             try:
                 mapping_upload_bytes = mapping_upload.getvalue()
@@ -344,21 +307,17 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
             _render_alert(issue, "warning")
         _render_metric_strip(
             [
-                ("ไฟล์สำรวจ", "โหลดแล้ว", "", uploaded_file.name, "พร้อม"),
                 ("Sheet ที่พบ", mapping_counts["detected_sheets"], "sheet", "ตรวจจาก workbook", "พร้อม"),
-                ("แถว Mapping", mapping_counts["rows"], "แถว", "ข้อมูลหลักสำหรับประมวลผล", "พร้อม" if mapping_counts["rows"] else "ต้องตรวจสอบ"),
-                ("Movement ที่ใช้", mapping_counts["included"], "แถว", f"ไม่รวม {mapping_counts['excluded']:,} แถว", "พร้อม" if mapping_counts["included"] else "ต้องตรวจสอบ"),
-                ("รวมหลาย source", mapping_counts["duplicate_movements"], "movement", "อนุญาตสำหรับ aggregation", "ข้อมูล" if mapping_counts["duplicate_movements"] else "พร้อม"),
+                ("Movement ที่จับคู่", mapping_counts["included"], "แถว", "รวมในรายงาน", "พร้อม" if mapping_counts["included"] else "ต้องตรวจสอบ"),
+                ("ยังไม่ใช้", mapping_counts["excluded"], "แถว", "ไม่รวมในรายงาน", "ข้อมูล"),
                 ("สถานะ Mapping", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ", "", "ประมวลผลได้" if mapping_issues.empty else f"{len(mapping_issues):,} รายการ", "พร้อม" if mapping_issues.empty else "ต้องตรวจสอบ"),
             ],
-            columns=6,
+            columns=4,
         )
 
         if process_block_reason:
             _render_alert(process_block_reason, "warning")
-        elif mapping_issues.empty and not scheme_validation_issues:
-            _render_action_hint("Mapping is ready. Continue to Analyze to run Analyze TMC.")
-        else:
+        elif not mapping_issues.empty or scheme_validation_issues:
             _render_alert("กรุณาตรวจสอบ Mapping ก่อนประมวลผล", "warning")
 
         for warning_message in mapping_control_warnings(default_mapping, mapping_scheme):
@@ -405,6 +364,56 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
                 _set_mapping_source(MAPPING_SOURCE_USER_EDITOR)
         mapping_counts = _mapping_workspace_counts(mapping, detected_sheet_names)
 
+        with st.expander("Advanced mapping controls", expanded=False):
+            selected_scheme = st.selectbox(
+                "ระบบรหัส Movement",
+                options=MOVEMENT_SCHEMES,
+                index=MOVEMENT_SCHEMES.index(mapping_scheme),
+                format_func=_scheme_select_label,
+                disabled=mapping_rows_committed,
+                key="movement_code_scheme_selector",
+                help="เลือกได้ก่อนโหลดหรือกรอก Mapping; ถ้ามี Mapping แล้วให้ล้างหรือโหลด Mapping ใหม่เพื่อไม่ตีความรหัสเดิมผิด",
+            )
+            if mapping_rows_committed:
+                st.caption(f"Detected movement_code_scheme: {mapping_scheme}")
+                st.caption(MAPPING_SCHEME_LOCK_CAPTION)
+                if st.button("ล้าง Mapping เพื่อเปลี่ยนระบบรหัส", key="clear_mapping_for_scheme_change"):
+                    _clear_mapping_for_scheme_change()
+                    st.rerun()
+            else:
+                st.caption(f"Selected movement_code_scheme: {mapping_scheme}")
+        with st.expander("นำเข้า / ใช้ Mapping ซ้ำ", expanded=False):
+            st.caption("ใช้ Mapping Excel หรือ Mapping Preset เพื่อแก้ไขและนำค่ากลับมาใช้ซ้ำ")
+            mapping_excel_col, mapping_preset_col = st.columns(2)
+            with mapping_excel_col:
+                st.markdown("**Mapping Excel**")
+                st.caption("สำหรับกรอกหรือแก้ไข Mapping ด้วย Excel")
+                mapping_upload = st.file_uploader(
+                    "โหลดไฟล์ Mapping Excel",
+                    type=["xlsx", "xlsm", "xls"],
+                    key="mapping_upload",
+                )
+                _render_download_button(
+                    "ดาวน์โหลดเทมเพลต Mapping",
+                    mapping_to_excel_bytes(default_mapping, movement_code_scheme=mapping_scheme),
+                    "tmc_mapping_template.xlsx",
+                    EXCEL_MIME,
+                )
+            with mapping_preset_col:
+                st.markdown("**Mapping Preset**")
+                st.caption("สำหรับบันทึก Mapping ที่ตั้งค่าแล้วและนำกลับมาใช้ซ้ำในโปรแกรม")
+                mapping_preset_upload = st.file_uploader(
+                    "เปิด Mapping Preset",
+                    type=["json"],
+                    key="mapping_preset_upload",
+                )
+                st.download_button(
+                    "ดาวน์โหลด Mapping Preset",
+                    data=download_buffer(preset_bytes),
+                    file_name=st.session_state["tmc_mapping_preset_filename"],
+                    mime=MAPPING_PRESET_MIME,
+                    key="download_mapping_preset",
+                )
         aggregation_preview = _mapping_aggregation_preview(mapping)
         if not aggregation_preview.empty:
             _render_alert("พบ movement ที่รวมจากหลาย source stream", "info")
@@ -417,14 +426,7 @@ def render_single_mapping(*, context: WorkflowContext) -> None:
         scheme_validation_issues = validate_mapping_scheme(mapping, mapping_scheme)
         process_block_reason = _single_file_processing_block_reason(mapping_scheme)
         mapping_issues = _single_file_mapping_issues(detected_sheet_names, mapping, mapping_scheme)
-        if process_block_reason:
-            _render_alert(process_block_reason, "warning")
-        elif _is_v2_scheme(mapping_scheme) and not scheme_validation_issues:
-            _render_alert("Mapping approach_movement พร้อมใช้งานสำหรับ single-file workflow", "success")
-        elif mapping_issues.empty and not scheme_validation_issues:
-            _render_alert("Mapping พร้อมใช้งาน", "success")
-        else:
-            _render_alert("มีรายการที่ต้องตรวจสอบก่อนประมวลผล", "warning")
+        if not mapping_issues.empty or scheme_validation_issues:
             with st.expander("รายการที่ต้องตรวจสอบ", expanded=True):
                 st.dataframe(_mapping_issue_display(mapping_issues), width="stretch")
         if mapping_counts["blank_source_stream"]:
@@ -521,18 +523,11 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
         _render_alert("Analysis result is current for the active source, Mapping, and settings.", "success")
 
     with st.container(border=True):
-        _render_section_header("Analysis settings", "Peak search windows and PCE factors are part of Analyze.")
-        survey_period = st.text_input("Survey period", key="survey_period_input")
+        _render_section_header("ช่วงเวลาค้นหา Peak", "กำหนดช่วง AM และ PM ก่อนประมวลผล")
         peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
         if peak_mode_default not in PEAK_MODE_OPTIONS:
             peak_mode_default = DEFAULT_PEAK_MODE
             st.session_state["peak_mode_select"] = peak_mode_default
-        peak_mode = st.selectbox(
-            "Peak calculation mode",
-            options=PEAK_MODE_OPTIONS,
-            index=PEAK_MODE_OPTIONS.index(peak_mode_default),
-            key="peak_mode_select",
-        )
         period_cols = st.columns(4)
         am_peak_window_start = period_cols[0].time_input(
             "AM window start",
@@ -558,6 +553,13 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
             step=900,
             key="pm_peak_window_end_input",
         )
+        with st.expander(f"วิธีคำนวณ Peak · {peak_mode_default}", expanded=False):
+            peak_mode = st.selectbox(
+                "Peak calculation mode",
+                options=PEAK_MODE_OPTIONS,
+                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
+                key="peak_mode_select",
+            )
         selected_pce_factors = _render_pce_factor_editor()
         _sync_workflow_after_pce_editor(
             is_single_file_mode=True,
@@ -831,20 +833,6 @@ def render_single_review(*, context: WorkflowContext) -> None:
         else:
             _render_alert("ไม่มีช่วงเวลารายชั่วโมงสำหรับกำหนด Peak", "warning")
 
-        _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
-        _render_metric_strip(
-            [
-                ("จำนวนแถว", format_count(len(result.normalized)), "แถว", "normalized"),
-                ("จำนวนรถรวม", format_count(result.normalized["count"].sum()) if not result.normalized.empty else "0", "คัน", ""),
-                ("PCU รวม", format_pcu(result.normalized["pcu"].sum()) if not result.normalized.empty else "0", "PCU", ""),
-                ("QC", format_count(len(result.qc)), "", "ประเด็น"),
-            ],
-            columns=4,
-        )
-        _render_qc_status(result.qc)
-
-        with st.expander("ตารางปริมาณจราจรแยกตามทิศทาง", expanded=False):
-            st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
 
     _render_section_header(
         "ตรวจสอบข้อมูล",
@@ -887,38 +875,54 @@ def render_single_review(*, context: WorkflowContext) -> None:
         else:
             st.dataframe(qc_display, width="stretch", hide_index=True)
 
-        with st.expander("Normalized Data", expanded=False):
+        with st.expander("รายละเอียดทางเทคนิค", expanded=False):
+            _render_section_header("สรุปทางเทคนิค", "แสดงเฉพาะค่าที่มีจากผลประมวลผลปัจจุบัน")
+            _render_metric_strip(
+                [
+                    ("จำนวนแถว", format_count(len(result.normalized)), "แถว", "normalized"),
+                    ("จำนวนรถรวม", format_count(result.normalized["count"].sum()) if not result.normalized.empty else "0", "คัน", ""),
+                    ("PCU รวม", format_pcu(result.normalized["pcu"].sum()) if not result.normalized.empty else "0", "PCU", ""),
+                    ("QC", format_count(len(result.qc)), "", "ประเด็น"),
+                ],
+                columns=4,
+            )
+            _render_qc_status(result.qc)
+
+            st.markdown("**ตารางปริมาณจราจรแยกตามทิศทาง**")
+            st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
+
+            st.markdown("**Normalized Data**")
             st.dataframe(_format_display_columns(result.normalized.head(1000)), width="stretch", hide_index=True)
-        with st.expander("Hourly Movement PCU", expanded=False):
+            st.markdown("**Hourly Movement PCU**")
             if not hourly_movement.empty:
                 st.dataframe(_format_display_columns(hourly_movement), width="stretch", hide_index=True)
             if not result.hourly.empty:
                 st.caption("Hourly raw summary")
                 st.dataframe(_format_display_columns(result.hourly), width="stretch", hide_index=True)
-        with st.expander("Movement Summary", expanded=False):
+            st.markdown("**Movement Summary**")
             st.dataframe(_format_display_columns(result.movement), width="stretch", hide_index=True)
-        if _is_v2_result(result):
-            with st.expander("Movement Diagram Data", expanded=False):
+            if _is_v2_result(result):
+                st.markdown("**Movement Diagram Data**")
                 diagram_data = build_v2_movement_diagram_data(
                     movement_summary=result.movement,
                     hourly_movement_pcu=hourly_movement,
                     peaks=result.peaks,
                 )
                 st.dataframe(_format_display_columns(diagram_data), width="stretch", hide_index=True)
-            with st.expander("Movement Code Reference", expanded=False):
+                st.markdown("**Movement Code Reference**")
                 st.dataframe(_v2_movement_code_reference_frame(), width="stretch", hide_index=True)
-        with st.expander("Peak / PHF Data", expanded=False):
+            st.markdown("**Peak / PHF Data**")
             peak_display = _format_display_columns(result.peaks)
             if "peak_start" in peak_display.columns:
                 peak_display["peak_start"] = peak_display["peak_start"].map(lambda value: str(value)[:5] if str(value) else "-")
             if "peak_end" in peak_display.columns:
                 peak_display["peak_end"] = peak_display["peak_end"].map(lambda value: str(value)[:5] if str(value) else "-")
             st.dataframe(peak_display, width="stretch", hide_index=True)
-        with st.expander("Movement Aggregation Audit", expanded=False):
+            st.markdown("**Movement Aggregation Audit**")
             st.caption("ตารางตรวจสอบ source movement, source stream และ output movement ที่ใช้รวมค่าในรายงาน")
             audit_frame = movement_aggregation_audit(result.normalized, mapping_df)
             st.dataframe(_format_display_columns(audit_frame), width="stretch", hide_index=True)
-        with st.expander("รายละเอียดการอ่านไฟล์และ Parser", expanded=False):
+            st.markdown("**รายละเอียดการอ่านไฟล์และ Parser**")
             if uploaded_file is not None:
                 st.dataframe(preview_summary, width="stretch")
                 for sheet_name, preview in previews.items():
@@ -940,7 +944,7 @@ def render_single_review(*, context: WorkflowContext) -> None:
                     st.dataframe(parsed.data.head(10), width="stretch")
             else:
                 _render_action_hint("ไม่มี Workbook ที่อัปโหลดในรอบการทำงานนี้")
-        with st.expander("Export Metadata / Template Diagnostics", expanded=False):
+            st.markdown("**Export Metadata / Template Diagnostics**")
             output = st.session_state.get("tmc_output")
             if output:
                 st.write(
