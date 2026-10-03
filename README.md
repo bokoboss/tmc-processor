@@ -4,6 +4,8 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 
 รุ่นปัจจุบัน: **`v1.0.0` stable**
 
+ผู้ใช้ทั่วไป: ดาวน์โหลด Windows ZIP จาก [latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest) และดูวิธีเปิดโปรแกรมด้านล่าง
+
 โค้ดรุ่นปัจจุบันอยู่บน branch `main`
 
 ## Legacy version
@@ -65,29 +67,24 @@ Standard report จะใช้ native-template preserving OOXML เมื่อ
 
 ข้อจำกัดที่ติดตามอยู่ใน [Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) คือ native-template support สำหรับ rolling 60-minute Peak ที่ไม่ตรงชั่วโมง เช่น `08:15–09:15`
 
-## วิธีติดตั้งและเปิดใช้งานแบบง่ายที่สุดบน Windows
+## สำหรับผู้ใช้ทั่วไป — ดาวน์โหลด Windows ZIP
 
-วิธีนี้เหมาะสำหรับผู้ใช้ทั่วไปที่ไม่คุ้นกับ Python หรือ GitHub มาก่อน
+1. เปิด [GitHub Releases → latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest)
+   แล้วเลือก `TMC-Processor-vX.Y.Z-Windows.zip` ใน Assets (เช่น `TMC-Processor-v1.0.0-Windows.zip`)
+2. แตก ZIP ทั้งหมดลงในโฟลเดอร์ที่เขียนไฟล์ได้ แล้วเปิดโฟลเดอร์ `TMC-Processor-vX.Y.Z-Windows`
+3. ดับเบิลคลิก `start_tmc_processor.bat` และรอให้โปรแกรมเปิดใน browser
 
-1. ดาวน์โหลด repository จาก GitHub เป็น ZIP หรือ clone ด้วย Git
-2. ถ้าดาวน์โหลดเป็น ZIP ให้แตกไฟล์ไปไว้ในโฟลเดอร์ที่ต้องการ เช่น `C:\MyRD\tmc-processor`
-3. ดับเบิลคลิกไฟล์ `start_tmc_processor.bat`
-4. ครั้งแรกอาจใช้เวลาหลายนาที เพราะโปรแกรมจะสร้าง `.venv` และติดตั้ง package ที่จำเป็น
-5. เมื่อพร้อมแล้ว โปรแกรมจะเปิดใน browser
-6. ครั้งถัดไปจะเปิดเร็วขึ้น เพราะไม่ต้องติดตั้งใหม่ทั้งหมด
+ต้องใช้ **Windows และ Python 3.10 หรือใหม่กว่า** (เลือก `Add python.exe to PATH` ตอนติดตั้ง)
+ZIP นี้เป็น source bundle ที่ต้องใช้ Python ไม่ใช่ standalone executable ผู้ใช้ไม่ต้องติดตั้ง Git หรือ clone repository
+ครั้งแรกต้องใช้อินเทอร์เน็ตเพื่อสร้าง `.venv` และดาวน์โหลด Python packages ครั้งถัดไปใช้ `.venv` เดิม
+อ่านรายละเอียดใน [USER_GUIDE.md](USER_GUIDE.md)
 
-ถ้าเปิดจาก PowerShell หรือ Command Prompt สามารถใช้คำสั่งนี้ได้
+Microsoft Excel เป็น optional integration ไม่ใช่ข้อกำหนดของ Standard report เมื่อ native OOXML path รองรับงานนั้น
+ไฟล์ผลลัพธ์บันทึกผ่านปุ่มดาวน์โหลดไปยังโฟลเดอร์ดาวน์โหลดของ browser หรือตำแหน่งที่ผู้ใช้เลือก
+ตรวจข้อมูลส่วนตัวในไฟล์สำรวจและผลลัพธ์ก่อนส่งต่อ
 
-```powershell
-start_tmc_processor.bat
-```
-
-สิ่งที่ควรมีในเครื่อง:
-
-- Windows
-- Python 3.10 หรือใหม่กว่า และควรเลือก `Add python.exe to PATH` ตอนติดตั้ง Python
-
-Standard report ไม่จำเป็นต้องใช้ Microsoft Excel desktop app หรือ Excel COM ในกรณีที่ native OOXML path รองรับงานนั้นอยู่แล้ว ส่วน Excel COM เป็น optional capability สำหรับ legacy/diagnostic path
+Windows ZIP และ Demo ZIP ต้องแนบใน Release Assets โดยผู้ดูแล หากยังไม่มี Asset ที่ต้องการ ให้รอผู้ดูแลเผยแพร่
+GitHub Source code ZIP เป็น source snapshot สำหรับผู้พัฒนา ไม่ใช่ Windows bundle นี้
 
 ## Workflow แบบไฟล์เดียว
 
@@ -131,6 +128,9 @@ Batch ZIP จะมี `batch_summary.xlsx` ซึ่งรวม `Batch_QC` แ
 - Project Session ปัจจุบันรองรับ Single workflow เท่านั้น จึงปิด Save/Open controls ใน Batch เพื่อไม่ให้เกิด partial restore ที่ทำให้เข้าใจผิด
 
 ## ทดลองใช้ด้วย Demo files
+
+ดาวน์โหลด `TMC-Processor-vX.Y.Z-Demo-Files.zip` แยกจาก Release Assets แล้วแตกไฟล์
+ไฟล์สังเคราะห์ใน `samples/demo/` ของ Demo ZIP ไม่รวมอยู่ใน Windows runtime ZIP และไม่จำเป็นต่อการเปิดโปรแกรม
 
 ไฟล์ตัวอย่างอยู่ใน `samples/demo/`
 
@@ -202,9 +202,17 @@ repository นี้เป็น public repository จึงไม่ควร c
 
 โดยค่าเริ่มต้น Export Package ZIP จะไม่รวม raw input Excel files แต่ผู้ใช้ยังควรตรวจ package ก่อนส่งต่อทุกครั้ง
 
-## การตรวจสอบสำหรับผู้พัฒนา
+## สำหรับผู้พัฒนา — source installation และการตรวจสอบ
 
-คำสั่งตรวจสอบพื้นฐานก่อน release:
+```powershell
+git clone https://github.com/bokoboss/tmc-processor.git
+cd tmc-processor
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+ใช้ Python ใน `.venv` สำหรับคำสั่งตรวจสอบพื้นฐานก่อน release:
 
 ```powershell
 python -m pytest
@@ -213,6 +221,16 @@ git diff --check
 ```
 
 `scripts/smoke_demo.py` ใช้ไฟล์สังเคราะห์จาก `samples/demo/` สำหรับ smoke ที่เกี่ยวข้อง
+
+สร้าง Windows bundle แบบ offline จาก source ที่ตรวจสอบแล้ว:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/build_windows_release.py --demo
+```
+
+ผลลัพธ์อยู่ใน `dist/` (ถูก ignore ใน Git) พร้อม manifest และ SHA-256 ตัว runtime ZIP ใช้ allowlist ของไฟล์ที่จำเป็น
+`--demo` สร้าง ZIP แยกจาก committed synthetic demo files ใน `HEAD` และต้องมี Git ในเครื่องผู้สร้าง
+ผู้ใช้ปลายทางไม่ต้องมี Git การ build ไม่อัปโหลด Release Assets โดยอัตโนมัติ
 
 ## CI and testing
 
