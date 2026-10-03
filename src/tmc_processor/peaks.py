@@ -10,10 +10,9 @@ from .constants import (
     PEAK_INTERVALS,
     PEAK_MODE_FIXED_HOURLY,
     PEAK_MODE_OPTIONS,
-    PEAK_MODE_ROLLING_60MIN,
     PM_WINDOW,
 )
-from .time_utils import minutes_to_time, time_to_minutes
+from .time_utils import is_supported_peak_period, minutes_to_time, time_to_minutes
 
 
 PEAK_SELECTION_AUTO = "auto_suggested"
@@ -25,6 +24,13 @@ PEAK_SETUP_KEYS = {
     "AM": ("am_peak_start", "am_peak_end"),
     "PM": ("pm_peak_start", "pm_peak_end"),
 }
+
+
+def validate_peak_periods(periods: dict[str, tuple[str, str]]) -> None:
+    """Reject unsupported periods before calculation, confirmation, or export."""
+    for period, values in periods.items():
+        if period not in PEAK_SETUP_KEYS or len(values) != 2 or not is_supported_peak_period(*values):
+            raise ValueError(f"Peak {period} must be a valid whole-hour interval (HH:00-HH+1:00): {values}")
 
 
 def _window_minutes(window: tuple[str, str]) -> tuple[int, int]:
@@ -52,6 +58,9 @@ def confirmed_peak_periods_from_setup(setup: dict) -> dict[str, tuple[str, str]]
         end = setup.get(end_key)
         if _present(start) and _present(end):
             periods[period] = (start, end)
+        elif _present(start) or _present(end):
+            raise ValueError(f"Peak {period} must be a complete whole-hour interval")
+    validate_peak_periods(periods)
     return periods
 
 
@@ -81,6 +90,7 @@ def resolve_effective_peak_periods(
     ):
         cleaned = {period: value for period, value in (periods or {}).items() if period in PEAK_SETUP_KEYS}
         if cleaned:
+            validate_peak_periods(cleaned)
             return cleaned, source
     return {}, ""
 
@@ -89,9 +99,6 @@ def _candidate_starts(interval: pd.DataFrame, window_start: int, window_end: int
     if peak_mode == PEAK_MODE_FIXED_HOURLY:
         first_hour = ((window_start + 59) // 60) * 60
         return list(range(first_hour, window_end - 59, 60))
-    if peak_mode == PEAK_MODE_ROLLING_60MIN:
-        candidates = interval[(interval["minute"] >= window_start) & (interval["minute"] < window_end)].copy()
-        return [int(minute) for minute in candidates["minute"]]
     raise ValueError(f"Invalid peak calculation mode: {peak_mode}")
 
 
@@ -158,6 +165,7 @@ def confirmed_peak_phf(
 ) -> pd.DataFrame:
     """Calculate PHF rows for explicitly selected AM/PM peak periods."""
 
+    validate_peak_periods(peak_periods)
     if peak_mode not in PEAK_MODE_OPTIONS:
         raise ValueError(f"Invalid peak calculation mode: {peak_mode}")
     columns = [

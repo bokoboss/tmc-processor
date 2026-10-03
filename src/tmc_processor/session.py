@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timezone
 import json
 from pathlib import Path
@@ -16,6 +16,9 @@ from .mapping import clean_mapping
 from .metadata import APP_VERSION, TEMPLATE_VERSION
 from .movement_scheme import MOVEMENT_SCHEME_V1, normalize_movement_code_scheme
 from .pcu import normalize_pce_factors, validate_pce_factors
+from .time_utils import is_supported_peak_period
+from .application.state import clear_single_review_state
+from .workflow_state import WorkflowState, WorkflowTransition, readiness_after_transition
 
 
 CURRENT_SCHEMA_VERSION = 1
@@ -80,6 +83,22 @@ class ProjectSessionError(ValueError):
 class ProjectSessionLoadResult:
     session: dict[str, Any]
     warnings: tuple[str, ...] = ()
+
+
+def _requires_peak_reanalysis(session: dict[str, Any]) -> bool:
+    peaks = session.get("peaks") if isinstance(session.get("peaks"), dict) else {}
+    if session.get("peak_reanalysis_required") or peaks.get("peak_mode", DEFAULT_PEAK_MODE) != DEFAULT_PEAK_MODE:
+        return True
+    return any((peaks.get(f"{period}_peak_start") or peaks.get(f"{period}_peak_end"))
+               and not is_supported_peak_period(peaks.get(f"{period}_peak_start"), peaks.get(f"{period}_peak_end"))
+               for period in ("am", "pm"))
+
+
+LEGACY_PEAK_WARNING = (
+    "Legacy rolling or incompatible Peak selection is no longer supported and was not reused. "
+    "Analysis mode is fixed_hourly. Run Analyze again, then Review and explicitly confirm whole-hour AM/PM Peaks. "
+    "Project metadata, mapping, PCE factors and search windows are preserved; no Peak was rounded or coerced."
+)
 
 
 def _utc_now_text() -> str:
@@ -164,6 +183,8 @@ def build_project_session(
     """Build a JSON-serializable project session without embedding workbook bytes."""
 
     now = _utc_now_text()
+    if _requires_peak_reanalysis({"peaks": peak_settings or {}}):
+        raise ProjectSessionError("New project sessions require fixed_hourly and valid whole-hour Peak selections.")
     peak_values = _copy_known_fields(peak_settings, PEAK_FIELDS)
     for key in (
         "am_peak_window_start",
@@ -212,7 +233,14 @@ def normalize_project_session(raw_session: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(detected, list):
         detected = []
 
-    return {
+    peak_values = _copy_known_fields(raw_session.get("peaks"), PEAK_FIELDS)
+    peak_values["peak_mode"] = DEFAULT_PEAK_MODE
+    requires_reanalysis = _requires_peak_reanalysis(raw_session)
+    if requires_reanalysis:
+        for field in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end", "peak_selection_source"):
+            peak_values[field] = ""
+
+    normalized = {
         "schema_version": raw_session.get("schema_version", CURRENT_SCHEMA_VERSION),
         "app_version": str(raw_session.get("app_version") or ""),
         "template_version": str(raw_session.get("template_version") or ""),
@@ -231,9 +259,13 @@ def normalize_project_session(raw_session: dict[str, Any]) -> dict[str, Any]:
             "rows": _mapping_rows(rows),
         },
         "pce_factors": _json_safe(normalize_pce_factors(raw_session.get("pce_factors"))),
-        "peaks": _copy_known_fields(raw_session.get("peaks"), PEAK_FIELDS),
+        "peaks": peak_values,
         "export": _copy_known_fields(raw_session.get("export"), EXPORT_FIELDS),
     }
+    if requires_reanalysis:
+        # Transient load marker, not a new persisted schema or analysis result.
+        normalized["peak_reanalysis_required"] = True
+    return normalized
 
 
 def session_to_json(session: dict[str, Any]) -> str:
@@ -270,6 +302,8 @@ def session_from_json(data: str | bytes | bytearray) -> ProjectSessionLoadResult
         )
     pce_validation = validate_pce_factors(raw.get("pce_factors"))
     warnings.extend(pce_validation.warnings)
+    if _requires_peak_reanalysis(raw):
+        warnings.append(LEGACY_PEAK_WARNING)
     return ProjectSessionLoadResult(session=normalize_project_session(raw), warnings=tuple(warnings))
 
 
@@ -291,7 +325,21 @@ def source_file_mismatch_warning(session: dict[str, Any], uploaded_file_name: st
 def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, Any]) -> list[str]:
     """Apply loaded session settings to a Streamlit-like state mapping."""
 
+    session = normalize_project_session(session)
     updates: dict[str, Any] = {}
+    if session.get("peak_reanalysis_required"):
+        clear_single_review_state(state)
+        for key in ("tmc_processed", "tmc_output", "am_peak_period_select", "pm_peak_period_select"):
+            state.pop(key, None)
+        workflows = state.get("tmc_workflow_state")
+        previous = workflows.get("single") if isinstance(workflows, dict) else None
+        if isinstance(previous, WorkflowState):
+            transition = WorkflowTransition(analysis_invalidated=True, review_invalidated=True, export_invalidated=True)
+            state["tmc_workflow_state"] = {**workflows, "single": replace(
+                previous,
+                revisions=previous.revisions.with_updates(analysis_result=None, review_decision=None),
+                readiness=readiness_after_transition(previous.readiness, transition),
+            )}
     for field, key in {
         "project_name": "project_name_input",
         "tmc_id": "tmc_id_input",
@@ -323,7 +371,7 @@ def apply_session_to_state(session: dict[str, Any], state: MutableMapping[str, A
         for key in ("am_peak_start", "am_peak_end", "pm_peak_start", "pm_peak_end", "peak_selection_source")
         if key in peaks
     }
-    if confirmed:
+    if confirmed and not session.get("peak_reanalysis_required"):
         updates["tmc_loaded_confirmed_peaks"] = confirmed
 
     export = session.get("export", {})

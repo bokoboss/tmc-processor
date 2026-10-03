@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 
+from .constants import DEFAULT_PEAK_MODE, PEAK_MODE_OPTIONS
 from .charts import report_chart_pngs
 from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram, render_v2_movement_diagram_png
 from .exporter import PEAK_BINDING_FALLBACK_REASON, assess_native_template_peak_binding, export_v2_generated_workbook
@@ -30,7 +31,7 @@ from .pipeline import ProcessingResult, process_tmc, process_tmc_dry_run_v2
 from .peaks import PEAK_SELECTION_AUTO, PEAK_SELECTION_USER_CONFIRMED_BATCH
 from .session import build_project_session, session_to_json_bytes
 from .summaries import hourly_movement_pcu, vehicle_composition_report
-from .time_utils import hourly_interval_options
+from .time_utils import hourly_interval_options, hourly_interval_label_parts
 
 
 BATCH_PACKAGE_MIME = "application/zip"
@@ -216,7 +217,8 @@ def batch_review_state(item: BatchAnalysisItem | BatchSummaryRow) -> str:
         return "failed"
     if str(getattr(item, "disposition", "") or getattr(item, "review_state", "")).casefold() == "excluded":
         return "excluded"
-    if getattr(item, "confirmed_AM_peak", "") and getattr(item, "confirmed_PM_peak", ""):
+    if (hourly_interval_label_parts(getattr(item, "confirmed_AM_peak", "")) is not None
+            and hourly_interval_label_parts(getattr(item, "confirmed_PM_peak", "")) is not None):
         return "confirmed"
     return "needs_review"
 
@@ -471,7 +473,9 @@ def _period_text_to_tuple(value: str | None) -> tuple[str, str] | None:
     start, end = [part.strip() for part in text.split("-", 1)]
     if not start or not end:
         return None
-    return start[:5], end[:5]
+    if hourly_interval_label_parts(text) is None:
+        raise ValueError(f"Peak must be a valid whole-hour interval: {text}")
+    return start, end
 
 
 def _confirmed_periods_from_labels(am_peak: str | None, pm_peak: str | None) -> dict[str, tuple[str, str]]:
@@ -1163,13 +1167,15 @@ def analyze_batch_files(
     mapping_preset: dict[str, Any] | None = None,
     setup: dict[str, Any] | None = None,
     pce_factors: dict[str, float] | None = None,
-    peak_mode: str = "rolling_60min",
+    peak_mode: str = DEFAULT_PEAK_MODE,
     peak_windows: dict[str, tuple[str, str]] | None = None,
     mapping_preset_name: str = "",
     generated_at: str | None = None,
 ) -> BatchAnalysisResult:
     """Analyze batch files enough for per-file peak confirmation."""
 
+    if peak_mode not in PEAK_MODE_OPTIONS:
+        raise ValueError(f"Unsupported Peak calculation mode: {peak_mode}; use fixed_hourly")
     generated_at = generated_at or generated_timestamp_text()
     setup = dict(setup or {})
     movement_code_scheme = _resolve_batch_scheme(mapping_preset=mapping_preset, setup=setup)
@@ -1243,9 +1249,6 @@ def analyze_batch_files(
             options = [option[0] for option in hourly_interval_options(hourly_movement)]
             suggested_am = _peak_text(result.peaks, "AM")
             suggested_pm = _peak_text(result.peaks, "PM")
-            for suggested in (suggested_am, suggested_pm):
-                if suggested and suggested not in options:
-                    options.append(suggested)
             analysis_items.append(
                 BatchAnalysisItem(
                     file_name=Path(item.file_name).name,
@@ -1330,7 +1333,7 @@ def generate_batch_zip_from_reviewed_peaks(
     *,
     setup: dict[str, Any] | None = None,
     pce_factors: dict[str, float] | None = None,
-    peak_mode: str = "rolling_60min",
+    peak_mode: str = DEFAULT_PEAK_MODE,
     peak_windows: dict[str, tuple[str, str]] | None = None,
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,
@@ -1342,6 +1345,8 @@ def generate_batch_zip_from_reviewed_peaks(
 ) -> BatchResult:
     """Generate the final Batch ZIP using reviewed per-file peak selections."""
 
+    if peak_mode not in PEAK_MODE_OPTIONS:
+        raise ValueError(f"Unsupported Peak calculation mode: {peak_mode}; use fixed_hourly")
     rows: list[BatchSummaryRow] = []
     qc_rows: list[dict[str, str]] = []
     artifacts: list[_BatchFileArtifacts] = []
@@ -1542,7 +1547,7 @@ def process_batch_files(
     mapping_preset: dict[str, Any] | None = None,
     setup: dict[str, Any] | None = None,
     pce_factors: dict[str, float] | None = None,
-    peak_mode: str = "rolling_60min",
+    peak_mode: str = DEFAULT_PEAK_MODE,
     peak_windows: dict[str, tuple[str, str]] | None = None,
     export_mode: str = SAFE_BATCH_EXPORT_MODE,
     use_template_report_layout: bool = True,

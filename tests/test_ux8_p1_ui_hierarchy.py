@@ -121,10 +121,9 @@ def test_single_analyze_shows_windows_and_collapses_advanced_settings() -> None:
         "pm_peak_window_start_input", "pm_peak_window_end_input",
     }
     assert all(widget.key != "survey_period_input" for widget in at.text_input)
-    peak = next(panel for panel in at.get("expander") if panel.label.startswith("วิธีคำนวณ Peak"))
     pce = _expander(at, "ค่าเทียบเท่ารถยนต์นั่ง (PCE)")
-    assert not peak.proto.expanded and not pce.proto.expanded
-    assert next(widget for widget in peak.get("selectbox") if widget.key == "peak_mode_select").value == app.DEFAULT_PEAK_MODE
+    assert not pce.proto.expanded
+    assert all(widget.key != "peak_mode_select" for widget in at.selectbox)
 
 
 def test_single_review_keeps_technical_tables_in_one_closed_section() -> None:
@@ -249,7 +248,7 @@ def test_batch_analyze_owns_pce_and_peak_settings_without_survey_period() -> Non
     assert len(at.time_input) == 4
     assert all(widget.key != "survey_period_input" for widget in at.text_input)
     assert not _expander(at, "ค่าเทียบเท่ารถยนต์นั่ง (PCE)").proto.expanded
-    assert not next(panel for panel in at.get("expander") if panel.label.startswith("วิธีคำนวณ Peak")).proto.expanded
+    assert all(widget.key != "peak_mode_select" for widget in at.selectbox)
     assert any(button.label == "วิเคราะห์ Batch" for button in at.button)
 
 

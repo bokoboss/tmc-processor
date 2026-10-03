@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 from typing import Any
 
+from tmc_processor.peaks import validate_peak_periods
+
 SINGLE_CONFIRMED_PEAKS_KEY = "tmc_application_confirmed_peaks"
 SINGLE_DRAFT_PEAKS_KEY = "tmc_application_draft_peaks"
 SINGLE_PEAK_SOURCE_KEY = "tmc_confirmed_peak_selection_source"
@@ -30,12 +32,15 @@ def _mapping(state: MutableMapping[str, object] | None) -> MutableMapping[str, o
 
 
 def _complete_peak_payload(am_peak: str, pm_peak: str) -> dict[str, str]:
-    return {
+    payload = {
         "am_peak_start": str(am_peak).split("-", 1)[0].strip(),
         "am_peak_end": str(am_peak).split("-", 1)[-1].strip(),
         "pm_peak_start": str(pm_peak).split("-", 1)[0].strip(),
         "pm_peak_end": str(pm_peak).split("-", 1)[-1].strip(),
     }
+    validate_peak_periods({"AM": (payload["am_peak_start"], payload["am_peak_end"]),
+                           "PM": (payload["pm_peak_start"], payload["pm_peak_end"])})
+    return payload
 
 
 def get_draft_peaks(state: MutableMapping[str, object] | None) -> dict[str, str]:

@@ -26,7 +26,7 @@ from .peaks import (
     confirmed_peak_phf,
     detect_peak_phf,
 )
-from .constants import AM_WINDOW, DEFAULT_PEAK_MODE, PM_WINDOW
+from .constants import AM_WINDOW, DEFAULT_PEAK_MODE, PEAK_MODE_OPTIONS, PM_WINDOW
 from .qc import run_qc
 from .summaries import hourly_movement_pcu, hourly_summary, movement_summary, vehicle_composition
 
@@ -83,6 +83,8 @@ def process_tmc(
     export_mode_used: str | None = None,
     export_fallback_notice: str = "",
 ) -> ProcessingResult:
+    if peak_mode not in PEAK_MODE_OPTIONS:
+        raise ValueError(f"Unsupported Peak calculation mode: {peak_mode}; use fixed_hourly")
     detected_sheets = detected_sheets or list(raw_sheets)
     movement_code_scheme = str(setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1)
     block_reason = mapping_processing_block_reason(movement_code_scheme)
@@ -185,6 +187,8 @@ def process_tmc_dry_run_v2(
 ) -> V2DryRunResult:
     """Run the approach_movement v2 path for normalization and summaries only."""
 
+    if peak_mode not in PEAK_MODE_OPTIONS:
+        raise ValueError(f"Unsupported Peak calculation mode: {peak_mode}; use fixed_hourly")
     detected_sheets = detected_sheets or list(raw_sheets)
     setup = {**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2}
     mapping_issues = validate_mapping_for_processing_by_scheme(detected_sheets, mapping, MOVEMENT_SCHEME_V2)

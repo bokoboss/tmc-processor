@@ -662,15 +662,7 @@ def _peak_period_text(peaks: pd.DataFrame, period: str) -> tuple[str, str, str]:
 
 
 def _hourly_interval_options(hourly_movement: pd.DataFrame, peaks: pd.DataFrame) -> list[tuple[str, str, str]]:
-    options = base_hourly_interval_options(hourly_movement)
-
-    existing = {(start, end) for _, start, end in options}
-    for period in ["AM", "PM"]:
-        start, end, _ = _peak_period_text(peaks, period)
-        if start and end and (start, end) not in existing and hourly_interval_label_parts(f"{start}-{end}") is not None:
-            options.append((f"{start}-{end}", start, end))
-            existing.add((start, end))
-    return options
+    return base_hourly_interval_options(hourly_movement)
 
 
 def _selected_interval(options: list[tuple[str, str, str]], label: str) -> tuple[str, str]:
@@ -3011,7 +3003,8 @@ _PEAK_VALUE_KEYS = (
 
 def _peak_values_complete(values: dict[str, object] | None) -> bool:
     values = values or {}
-    return all(str(values.get(key) or "").strip() for key in _PEAK_VALUE_KEYS)
+    return all(hourly_interval_label_parts(f"{values.get(prefix + '_peak_start', '')}-{values.get(prefix + '_peak_end', '')}")
+               is not None for prefix in ("am", "pm"))
 
 
 def _peak_value_payload(values: dict[str, object] | None) -> dict[str, str]:
@@ -3632,6 +3625,8 @@ def _current_mapping_for_session() -> pd.DataFrame | None:
 
 def _confirmed_peaks_from_state() -> dict[str, str]:
     confirmed = application_get_confirmed_peaks(st.session_state)
+    if confirmed and not _peak_values_complete(confirmed):
+        return {}
     state_source = st.session_state.get(SINGLE_CONFIRMED_PEAK_SOURCE_STATE_KEY)
     if state_source:
         confirmed["peak_selection_source"] = str(state_source)
@@ -4459,7 +4454,7 @@ def _batch_peak_settings_signature(
     peak_windows: dict[str, tuple[str, str]] | None,
 ) -> tuple[object, ...]:
     return (
-        str(peak_mode or ""),
+        DEFAULT_PEAK_MODE,
         tuple(sorted((str(key), tuple(value)) for key, value in (peak_windows or {}).items())),
     )
 

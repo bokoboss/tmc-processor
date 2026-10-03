@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import MutableMapping, Sequence
 from typing import Any
+from tmc_processor.constants import DEFAULT_PEAK_MODE
 
 from tmc_processor.workflow_state import (
     WorkflowReadiness,
@@ -72,7 +73,7 @@ def single_workflow_revisions(
         mapping=mapping_fingerprint(mapping),
         analysis_config=analysis_config_fingerprint(
             pce_factors=pce_factors,
-            peak_mode=peak_mode,
+            peak_mode=DEFAULT_PEAK_MODE,
             peak_windows=peak_windows,
             movement_code_scheme=movement_code_scheme,
         ),
@@ -112,7 +113,7 @@ def batch_workflow_revisions(
         mapping=mapping,
         analysis_config=analysis_config_fingerprint(
             pce_factors=pce_factors,
-            peak_mode=peak_mode,
+            peak_mode=DEFAULT_PEAK_MODE,
             peak_windows=peak_windows,
             movement_code_scheme=movement_code_scheme,
         ),
