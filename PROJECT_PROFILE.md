@@ -5,7 +5,7 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `1.0.0` (from `pyproject.toml` after release preparation)
+- Package/application version: `1.0.1` (maintenance preparation; not yet released)
 - Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
@@ -16,8 +16,9 @@
 - PR #25 qualification: full automated suite 451 passed, 0 failed; CI passed on Windows / Python 3.10 and 3.12.
 - Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
 - GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
-- Current phase: `v1.0.0` release preparation and project closure.
-- After the `v1.0.0` tag is created, that tag is the authoritative stable release baseline.
+- Current phase: fixed-hour Peak maintenance for `v1.0.1`, pending review and acceptance.
+- Current accepted maintenance baseline: `main@20b166c9d3f9dd9af06830522009f384109bd55d` after PR #28.
+- `v1.0.0` remains the published stable release baseline while the maintenance candidate is reviewed.
 - Post-release operating mode: maintenance mode.
 
 ## Product workflow
@@ -80,6 +81,7 @@ python -m streamlit run app.py
 - UI/application code adapts to WorkflowState; it must not create a second workflow state machine.
 - Suggested Peak, draft Peak and explicitly confirmed Peak are distinct states.
 - Confirmed/effective Peak is authoritative for Peak-dependent export artifacts.
+- Supported operator Peak periods are fixed whole hours, composed of four 15-minute intervals inside AM/PM search windows. Legacy rolling selections require re-analysis and explicit confirmation.
 - Standard report prefers package-preserving OOXML native-template output when the exact confirmed/effective Peak is representable by the current template.
 - Safe PNG is an explicit alternative/fallback and must preserve the exact confirmed/effective Peak.
 - Excel COM is optional legacy/diagnostic capability, not a requirement for Standard report.
@@ -148,7 +150,7 @@ Preserved as:
 The legacy snapshot is historical and must not be moved or rewritten.
 
 ## Known limitations / backlog
-- Issue #23: native-template support for non-hour-aligned rolling 60-minute Peaks (for example `08:15–09:15`). Until implemented, Standard falls back to Safe PNG while preserving the exact confirmed Peak.
+- Issue #23 remains open pending acceptance of the clarified fixed-hour contract. Non-hour-aligned rolling Peaks are outside that contract; proposed disposition is NOT PLANNED / NO LONGER APPLICABLE after merge/release acceptance.
 - Batch Project Session is intentionally disabled because the current session format cannot round-trip Batch uploads and Batch Mapping Presets.
 - UX-8 live Batch qualification used successful demo items; failed/excluded outcomes were covered by existing automated behavior but not recreated in that final UX browser smoke.
 - `WorkflowContext` / `WorkflowOperations` retain a relatively broad dependency surface from UX-6; avoid expanding it without architectural review.
@@ -167,5 +169,5 @@ No active modernization milestone is scheduled after `v1.0.0`.
 
 Operate in maintenance mode:
 - bug fixes through focused issues/PRs
-- optional enhancement #23 when prioritized
+- qualify the fixed-hour Peak maintenance patch before merge/release and Issue #23 closure
 - preserve validated behavior unless a separately approved change requires modification

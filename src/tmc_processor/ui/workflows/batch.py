@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tmc_processor.time_utils import hourly_interval_label_parts
+
 from tmc_processor.ui.workflow_context import WorkflowContext
 from tmc_processor.ui.components.export import (
     SAFE_PNG_DESCRIPTION,
@@ -291,7 +293,6 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
     BATCH_DRAFT_PEAKS_STATE_KEY = context.operations.BATCH_DRAFT_PEAKS_STATE_KEY
     BATCH_SAFE_PNG_EXPORT_LABEL = context.operations.BATCH_SAFE_PNG_EXPORT_LABEL
     DEFAULT_PEAK_MODE = context.operations.DEFAULT_PEAK_MODE
-    PEAK_MODE_OPTIONS = context.operations.PEAK_MODE_OPTIONS
     PM_WINDOW = context.operations.PM_WINDOW
     WORKFLOW_BATCH_MODE = context.operations.WORKFLOW_BATCH_MODE
     WorkflowReadiness = context.operations.WorkflowReadiness
@@ -343,10 +344,8 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
     _render_section_header("วิเคราะห์ Batch", "กำหนดค่าร่วมก่อนวิเคราะห์ทุกไฟล์")
     with st.container(border=True):
         _render_section_header("ค่าการวิเคราะห์", "ใช้กับทุกไฟล์ใน Batch")
-        peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
-        if peak_mode_default not in PEAK_MODE_OPTIONS:
-            peak_mode_default = DEFAULT_PEAK_MODE
-            st.session_state["peak_mode_select"] = peak_mode_default
+        peak_mode = DEFAULT_PEAK_MODE
+        st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
         period_cols = st.columns(4)
         am_peak_window_start = period_cols[0].time_input(
             "AM window start",
@@ -372,13 +371,7 @@ def render_batch_analyze(*, context: WorkflowContext) -> None:
             step=900,
             key="pm_peak_window_end_input",
         )
-        with st.expander(f"วิธีคำนวณ Peak · {peak_mode_default}", expanded=False):
-            peak_mode = st.selectbox(
-                "Peak calculation mode",
-                options=PEAK_MODE_OPTIONS,
-                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
-                key="peak_mode_select",
-            )
+        st.caption("Peak Hour ใช้ช่วงเต็มชั่วโมง เช่น 08:00–09:00 รวมข้อมูล 15 นาที 4 ช่วง ภายในหน้าต่าง AM/PM")
         selected_pce_factors = _render_pce_factor_editor()
         _sync_workflow_after_pce_editor(
             is_single_file_mode=False,
@@ -689,8 +682,8 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 preview["confirmed_AM_peak"] or preview["suggested_AM_peak"] or "",
                 preview["confirmed_PM_peak"] or preview["suggested_PM_peak"] or "",
             )
-            option_labels = list(dict.fromkeys(selected_item.hourly_period_options or [selected_item.suggested_AM_peak, selected_item.suggested_PM_peak]))
-            option_labels = [value for value in option_labels if value]
+            option_labels = list(dict.fromkeys(selected_item.hourly_period_options))
+            option_labels = [value for value in option_labels if hourly_interval_label_parts(value) is not None]
             _render_section_header("กำหนด Peak ของไฟล์นี้", "ระบบจะใช้ช่วง Peak ที่กำหนดในหน้านี้สำหรับรายงานของไฟล์นี้")
             peak_cols = st.columns(2)
             if option_labels:
@@ -699,10 +692,6 @@ def render_batch_review(*, context: WorkflowContext) -> None:
                 draft = batch_draft_peaks.get(selected_item.folder_name, {})
                 am_default = draft.get("AM") or stored.get("AM") or selected_item.suggested_AM_peak
                 pm_default = draft.get("PM") or stored.get("PM") or selected_item.suggested_PM_peak
-                for value in [am_default, pm_default]:
-                    if value and value not in option_labels:
-                        option_labels.insert(0, value)
-                option_labels = list(dict.fromkeys(option_labels))
                 with peak_cols[0]:
                     _render_peak_card("AM Peak · ระบบตรวจจับอัตโนมัติ", preview["suggested_AM_peak"] or "", "", "auto_suggested")
                     selected_am = st.selectbox(

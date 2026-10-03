@@ -190,30 +190,14 @@ def test_exact_peak_binding_accepts_hour_aligned_rolling_mode():
     ]
 
 
-def test_standard_non_aligned_confirmed_peak_uses_safe_png_without_ooxml(monkeypatch):
-    binding = assess_standard_peak_binding({
-        "am_peak_start": "08:15", "am_peak_end": "09:15",
-        "pm_peak_start": "17:00", "pm_peak_end": "18:00",
-    })
-    assert not binding[0].matched and binding[1].matched
-    decision = app._standard_report_decision(
-        SimpleNamespace(available=True, reason="COM available"),
-        template_compatible=False,
-        fallback_reason=PEAK_BINDING_FALLBACK_REASON,
-    )
+def test_standard_non_aligned_confirmed_peak_is_rejected_before_export(monkeypatch):
+    decision = app._standard_report_decision(SimpleNamespace(available=False, reason="not installed"))
     monkeypatch.setattr(ooxml_template_export, "export_template_ooxml", lambda *a, **k: pytest.fail("OOXML used"))
     monkeypatch.setattr(exporter, "_export_workbook_with_excel_com", lambda *a, **k: pytest.fail("COM used"))
-    result = _run(decision, am=("08:15", "09:15"), pm=("17:00", "18:00"), peak_mode="rolling_60min")
-    workbook = load_workbook(BytesIO(result.workbook_bytes), read_only=True, data_only=True)
-    try:
-        fields = _fields(workbook)
-        assert fields["export_mode_requested"] == STANDARD_REPORT_EXPORT_MODE
-        assert fields["export_mode_used"] == SAFE_PNG_EXPORT_MODE
-        assert PEAK_BINDING_FALLBACK_REASON in fields["export_fallback_notice"]
-        assert fields["effective_am_peak"] == "08:15-09:15"
-        assert fields["effective_pm_peak"] == "17:00-18:00"
-    finally:
-        workbook.close()
+    with pytest.raises(ValueError, match="whole-hour"):
+        _run(decision, am=("08:15", "09:15"), pm=("17:00", "18:00"))
+    with pytest.raises(ValueError, match="fixed_hourly"):
+        _run(decision, peak_mode="rolling_60min")
 
 
 def test_reviewed_batch_standard_uses_the_same_ooxml_transport(monkeypatch):
@@ -258,45 +242,21 @@ def test_reviewed_batch_standard_uses_the_same_ooxml_transport(monkeypatch):
         assert "xl/charts/chart2.xml" in workbook.namelist()
 
 
-def test_reviewed_batch_non_aligned_peak_falls_back_per_item(monkeypatch):
-    root = Path(__file__).resolve().parents[1]
-    demo = root / "samples" / "demo"
+def test_reviewed_batch_non_aligned_peak_requires_reconfirmation(monkeypatch):
+    demo = Path(__file__).resolve().parents[1] / "samples" / "demo"
     source = demo / "DEMO_TMC1_FourLeg.xlsx"
     preset = load_mapping_preset((demo / "DEMO_TMC1_FourLeg.mapping.json").read_bytes()).preset
-    analysis = analyze_batch(
-        [BatchItem(file_name=source.name, workbook_bytes=source.read_bytes())],
-        mapping_preset=preset, setup={"project_name": "Reviewed Batch routing"},
-        generated_at="2026-10-01T00:00:00Z",
-    )
+    analysis = analyze_batch([BatchItem(file_name=source.name, workbook_bytes=source.read_bytes())],
+                             mapping_preset=preset, setup={"project_name": "Reviewed Batch routing"})
     item = analysis.successful_items[0]
-    item.confirmed_AM_peak = item.suggested_AM_peak
-    item.confirmed_PM_peak = item.suggested_PM_peak
-    assert item.confirmed_AM_peak == "08:15-09:15"
+    assert item.suggested_AM_peak == "08:00-09:00"
+    item.confirmed_AM_peak = "08:15-09:15"
+    item.confirmed_PM_peak = "17:00-18:00"
     monkeypatch.setattr(ooxml_template_export, "export_template_ooxml", lambda *a, **k: pytest.fail("OOXML used"))
     monkeypatch.setattr(exporter, "_export_workbook_with_excel_com", lambda *a, **k: pytest.fail("COM used"))
-    result = export_batch_reviewed(
-        analysis, setup={"project_name": "Reviewed Batch routing"},
-        export_mode=EXCEL_TEMPLATE_EXPORT_MODE, use_template_report_layout=True,
-        use_excel_com_native_charts=False, use_ooxml_native_template=True,
-        export_mode_requested=STANDARD_REPORT_EXPORT_MODE,
-    )
-    row = result.summary_rows[0]
-    assert row.export_status == "success"
-    assert row.export_mode_requested == STANDARD_REPORT_EXPORT_MODE
-    assert row.export_mode_used == SAFE_PNG_EXPORT_MODE
-    assert row.confirmed_AM_peak == "08:15-09:15"
-    assert PEAK_BINDING_FALLBACK_REASON in row.notes
-    with ZipFile(BytesIO(result.package_bytes)) as package:
-        report = package.read(f"{row.folder_name}/{row.output_stem}_report.xlsx")
-    workbook = load_workbook(BytesIO(report), read_only=True, data_only=True)
-    try:
-        fields = _fields(workbook)
-        assert fields["export_mode_requested"] == STANDARD_REPORT_EXPORT_MODE
-        assert fields["export_mode_used"] == SAFE_PNG_EXPORT_MODE
-        assert fields["export_fallback_notice"] == PEAK_BINDING_FALLBACK_REASON
-        assert fields["effective_am_peak"] == "08:15-09:15"
-    finally:
-        workbook.close()
+    with pytest.raises(ValueError, match="whole-hour"):
+        export_batch_reviewed(analysis, setup={}, export_mode=EXCEL_TEMPLATE_EXPORT_MODE,
+                              use_ooxml_native_template=True)
 
 
 def test_reviewed_batch_mixes_native_fallback_excluded_and_failed_items(monkeypatch):
@@ -306,7 +266,7 @@ def test_reviewed_batch_mixes_native_fallback_excluded_and_failed_items(monkeypa
     analysis = analyze_batch(
         [
             BatchItem(file_name="aligned.xlsx", workbook_bytes=source_bytes),
-            BatchItem(file_name="rolling.xlsx", workbook_bytes=source_bytes),
+            BatchItem(file_name="fallback.xlsx", workbook_bytes=source_bytes),
             BatchItem(file_name="excluded.xlsx", workbook_bytes=source_bytes),
             BatchItem(file_name="failed.xlsx", workbook_bytes=b"not an xlsx"),
         ],
@@ -314,8 +274,8 @@ def test_reviewed_batch_mixes_native_fallback_excluded_and_failed_items(monkeypa
         generated_at="2026-10-01T00:00:00Z",
     )
     by_name = {item.file_name: item for item in analysis.items}
-    for name in ("aligned.xlsx", "rolling.xlsx"):
-        by_name[name].confirmed_AM_peak = "08:00-09:00" if name == "aligned.xlsx" else "08:15-09:15"
+    for name in ("aligned.xlsx", "fallback.xlsx"):
+        by_name[name].confirmed_AM_peak = "08:00-09:00"
         by_name[name].confirmed_PM_peak = "17:00-18:00"
     exclude_batch_item(by_name["excluded.xlsx"], "Operator excluded this file")
     calls = []
@@ -323,6 +283,8 @@ def test_reviewed_batch_mixes_native_fallback_excluded_and_failed_items(monkeypa
 
     def record(*args, **kwargs):
         calls.append(args)
+        if len(calls) == 2:
+            raise ValueError("forced transport failure")
         return original(*args, **kwargs)
 
     monkeypatch.setattr(ooxml_template_export, "export_template_ooxml", record)
@@ -334,16 +296,16 @@ def test_reviewed_batch_mixes_native_fallback_excluded_and_failed_items(monkeypa
         export_mode_requested=STANDARD_REPORT_EXPORT_MODE,
     )
     rows = {row.file_name: row for row in result.summary_rows}
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert (rows["aligned.xlsx"].export_status, rows["aligned.xlsx"].export_mode_used) == ("success", EXCEL_TEMPLATE_EXPORT_MODE)
-    assert (rows["rolling.xlsx"].export_status, rows["rolling.xlsx"].export_mode_used) == ("success", SAFE_PNG_EXPORT_MODE)
-    assert PEAK_BINDING_FALLBACK_REASON in rows["rolling.xlsx"].notes
+    assert (rows["fallback.xlsx"].export_status, rows["fallback.xlsx"].export_mode_used) == ("success", SAFE_PNG_EXPORT_MODE)
+    assert "forced transport failure" in rows["fallback.xlsx"].notes
     assert rows["excluded.xlsx"].export_status == "excluded"
     assert rows["failed.xlsx"].export_status == "failed"
     assert {row.export_mode_requested for row in rows.values()} == {STANDARD_REPORT_EXPORT_MODE}
     with ZipFile(BytesIO(result.package_bytes)) as package:
         names = set(package.namelist())
         assert f'{rows["aligned.xlsx"].folder_name}/{rows["aligned.xlsx"].output_stem}_report.xlsx' in names
-        assert f'{rows["rolling.xlsx"].folder_name}/{rows["rolling.xlsx"].output_stem}_report.xlsx' in names
+        assert f'{rows["fallback.xlsx"].folder_name}/{rows["fallback.xlsx"].output_stem}_report.xlsx' in names
         assert not any(name.startswith(rows["excluded.xlsx"].folder_name + "/") for name in names)
         assert not any(name.startswith(rows["failed.xlsx"].folder_name + "/") for name in names)

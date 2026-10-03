@@ -73,6 +73,27 @@ def minutes_to_time(minutes: int) -> time:
 SUMMARY_TIME_LABELS = {"total", "\u0e23\u0e27\u0e21", "\xe0\xb8\xa3\xe0\xb8\xa7\xe0\xb8\xa1"}
 
 
+def is_supported_peak_period(start: Any, end: Any) -> bool:
+    """A Peak is exactly one whole hour; never round or truncate input."""
+    def minute(value: Any) -> int | None:
+        if isinstance(value, time):
+            parsed = value
+        elif isinstance(value, str) and re.fullmatch(r"\d{2}:\d{2}(?::00)?", value):
+            try:
+                parsed = time.fromisoformat(value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.minute or parsed.second or parsed.microsecond:
+            return None
+        return parsed.hour * 60
+
+    start_minute, end_minute = minute(start), minute(end)
+    return (start_minute is not None and end_minute is not None
+            and end_minute - start_minute == 60)
+
+
 def _blankish(value: Any) -> bool:
     if value is None:
         return True
@@ -98,8 +119,14 @@ def hourly_interval_label_parts(value: Any) -> tuple[str, str] | None:
 
     if is_summary_time_label(value):
         return None
-    start, end = parse_interval(value)
+    label = normalize_interval_label(value)
+    pieces = [part.strip() for part in label.split("-")]
+    if len(pieces) != 2 or not is_supported_peak_period(*pieces):
+        return None
+    start, end = parse_interval(label)
     if start is None or end is None:
+        return None
+    if not is_supported_peak_period(start, end):
         return None
     start_minutes = time_to_minutes(start)
     end_minutes = time_to_minutes(end)

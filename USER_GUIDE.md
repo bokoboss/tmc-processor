@@ -27,7 +27,16 @@ from that optional check does not prevent supported Standard or Safe PNG exports
 
 Follow **Data → Mapping → Analyze → Review → Export**. Upload a TMC workbook,
 check the movement mapping, analyze it, review QC and explicitly confirm AM/PM
-Peak periods before exporting. Batch mode processes multiple days of the same
+Peak periods before exporting. Peak Hour uses fixed whole-hour intervals, such
+as 08:00–09:00. Survey data remains at 15-minute intervals; each Peak Hour
+contains four intervals. AM/PM search windows define where whole-hour
+candidates are evaluated. Non-hour-aligned rolling Peaks are unsupported.
+
+When opening a legacy rolling session, metadata, mapping, PCE and search
+windows are preserved. Its old Peak selections are not reused or rounded;
+run Analyze, Review and explicitly confirm AM/PM Peaks again.
+
+Batch mode processes multiple days of the same
 survey point with a shared mapping.
 
 **Standard** preserves the supplied Excel report template when it supports the

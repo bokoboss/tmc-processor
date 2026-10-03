@@ -443,7 +443,6 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
     """Render the Single Analyze stage."""
     AM_WINDOW = context.operations.AM_WINDOW
     DEFAULT_PEAK_MODE = context.operations.DEFAULT_PEAK_MODE
-    PEAK_MODE_OPTIONS = context.operations.PEAK_MODE_OPTIONS
     PM_WINDOW = context.operations.PM_WINDOW
     WORKFLOW_SINGLE_MODE = context.operations.WORKFLOW_SINGLE_MODE
     WorkflowReadiness = context.operations.WorkflowReadiness
@@ -521,10 +520,8 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
 
     with st.container(border=True):
         _render_section_header("ช่วงเวลาค้นหา Peak", "กำหนดช่วง AM และ PM ก่อนประมวลผล")
-        peak_mode_default = str(st.session_state.get("peak_mode_select") or DEFAULT_PEAK_MODE)
-        if peak_mode_default not in PEAK_MODE_OPTIONS:
-            peak_mode_default = DEFAULT_PEAK_MODE
-            st.session_state["peak_mode_select"] = peak_mode_default
+        peak_mode = DEFAULT_PEAK_MODE
+        st.session_state["peak_mode_select"] = DEFAULT_PEAK_MODE
         period_cols = st.columns(4)
         am_peak_window_start = period_cols[0].time_input(
             "AM window start",
@@ -550,13 +547,7 @@ def render_single_analyze(*, context: WorkflowContext) -> None:
             step=900,
             key="pm_peak_window_end_input",
         )
-        with st.expander(f"วิธีคำนวณ Peak · {peak_mode_default}", expanded=False):
-            peak_mode = st.selectbox(
-                "Peak calculation mode",
-                options=PEAK_MODE_OPTIONS,
-                index=PEAK_MODE_OPTIONS.index(peak_mode_default),
-                key="peak_mode_select",
-            )
+        st.caption("Peak Hour ใช้ช่วงเต็มชั่วโมง เช่น 08:00–09:00 รวมข้อมูล 15 นาที 4 ช่วง ภายในหน้าต่าง AM/PM")
         selected_pce_factors = _render_pce_factor_editor()
         _sync_workflow_after_pce_editor(
             is_single_file_mode=True,

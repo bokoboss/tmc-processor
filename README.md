@@ -2,7 +2,7 @@
 
 TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
 
-รุ่นปัจจุบัน: **`v1.0.0` stable**
+รุ่นปัจจุบัน: **`v1.0.1` — patch preparation (not yet published)**
 
 ผู้ใช้ทั่วไป: ดาวน์โหลด Windows ZIP จาก [latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest) และดูวิธีเปิดโปรแกรมด้านล่าง
 
@@ -65,7 +65,9 @@ Batch workflow เหมาะสำหรับกรณีที่ต้อ�
 
 Standard report จะใช้ native-template preserving OOXML เมื่อ Peak ที่ยืนยันสามารถแทนได้โดย template ปัจจุบัน หาก Peak ที่ถูกต้องไม่สามารถแทนใน template ได้ โปรแกรมจะไม่ปัดหรือเปลี่ยน Peak แต่จะ fallback ไป Safe PNG แทน
 
-ข้อจำกัดที่ติดตามอยู่ใน [Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) คือ native-template support สำหรับ rolling 60-minute Peak ที่ไม่ตรงชั่วโมง เช่น `08:15–09:15`
+Peak Hour ใช้ช่วงเต็มชั่วโมงเท่านั้น โดยเริ่มและจบที่ `HH:00` และมีระยะเวลา 60 นาที เช่น `08:00–09:00` ข้อมูลสำรวจยังคงเป็นช่วงละ 15 นาที โดย Peak Hour รวมข้อมูล 4 ช่วง หน้าต่างค้นหา AM/PM กำหนดขอบเขตสำหรับประเมินช่วงเต็มชั่วโมง
+
+ไม่รองรับ rolling Peak ที่ไม่ตรงชั่วโมง Session เก่าจะเก็บ metadata, Mapping, PCE และหน้าต่างค้นหาไว้ แต่ไม่ใช้ Peak ที่ไม่รองรับ ต้อง Analyze → Review → ยืนยัน Peak ใหม่ โดยไม่มีการปัดหรือเปลี่ยนช่วง Peak อัตโนมัติ
 
 ## สำหรับผู้ใช้ทั่วไป — ดาวน์โหลด Windows ZIP
 
@@ -177,9 +179,9 @@ Batch Project Session ยังไม่รองรับการ round-trip B
 
 Standard report ใช้ package-preserving OOXML กับ authoritative Excel template เมื่อ confirmed/effective Peak สามารถแทนใน template ได้ โดยรักษา native charts, drawings, formulas, styles และ relationships ของ workbook
 
-Safe PNG ใช้ generated workbook และ chart image เป็น explicit alternative/fallback และยังคง Peak ที่ผู้ใช้ยืนยันไว้โดยไม่ round หรือ snap เพื่อให้เข้ากับ template
+Safe PNG ใช้ generated workbook และ chart image เป็น explicit alternative/fallback สำหรับ Peak เต็มชั่วโมงที่รองรับ และยังคง Peak ที่ผู้ใช้ยืนยันไว้โดยไม่ round หรือ snap เพื่อให้เข้ากับ template
 
-ถ้าเป็น rolling 60-minute Peak ที่ valid แต่ไม่ตรงแถวเวลาที่ native template ปัจจุบันรองรับ เช่น `08:15–09:15` Standard จะ fallback ไป Safe PNG จนกว่า Issue #23 จะได้รับการแก้ไข
+ไม่รองรับ rolling Peak ที่ไม่ตรงชั่วโมง เช่น `08:15–09:15` ทั้งใน Standard และ Safe PNG โดยไม่มีการปัดหรือเปลี่ยนช่วง Peak เพื่อให้เข้ากับ template หาก Session เก่ามี Peak ที่ไม่รองรับ ต้อง Analyze → Review → ยืนยัน Peak ใหม่ก่อนส่งออก
 
 ## ความเป็นส่วนตัวและความปลอดภัยของข้อมูล
 
@@ -242,7 +244,7 @@ Real-workbook and Excel/native-template qualification เป็น local/manual 
 
 หลัง `v1.0.0` โครงการเข้าสู่ maintenance mode: แก้บั๊กหรือทำ enhancement แบบมี issue/acceptance แยกเป็นงาน ๆ โดยไม่เปลี่ยน validated behavior โดยไม่จำเป็น
 
-Known enhancement backlog ปัจจุบัน: [Issue #23 — native Excel template support for non-hour-aligned rolling Peaks](https://github.com/bokoboss/tmc-processor/issues/23)
+[Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) ยังคงเปิดไว้จนกว่า PR นี้จะได้รับการยอมรับและ merge และเผยแพร่ v1.0.1 โดยข้อกำหนดผลิตภัณฑ์ที่ชัดเจนแล้วรองรับเฉพาะ Peak เต็มชั่วโมง จึงไม่ต้องปรับ native template เพื่อรองรับ rolling Peak และจะเสนอปิด Issue เป็น NOT PLANNED / NO LONGER APPLICABLE หลัง release acceptance
 
 ## License
 

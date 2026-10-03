@@ -363,7 +363,7 @@ def test_rehydrate_analyze_setup_widgets_uses_canonical_values() -> None:
     restored = app._rehydrate_analyze_setup_widgets(state)
 
     assert restored["survey_period"] == "06.00 - 19.00"
-    assert restored["peak_mode"] == "rolling_60min"
+    assert restored["peak_mode"] == "fixed_hourly"
     assert restored["am_peak_window_start"] == time(6, 0)
     assert restored["am_peak_window_end"] == time(10, 0)
     assert restored["pm_peak_window_start"] == time(15, 0)

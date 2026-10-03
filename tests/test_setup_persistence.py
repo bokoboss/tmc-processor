@@ -300,7 +300,8 @@ def _assert_analyze_setup_values(at: AppTest, expected: dict[str, object]) -> No
     for field in ("am_peak_window_start", "am_peak_window_end", "pm_peak_window_start", "pm_peak_window_end"):
         widget_key = app.SETUP_FIELD_WIDGET_KEYS[field]
         assert _widget_by_key(at.time_input, widget_key).value == expected[field]
-    assert _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).value == expected["peak_mode"]
+    assert all(widget.key != app.SETUP_FIELD_WIDGET_KEYS["peak_mode"] for widget in at.selectbox)
+    assert at.session_state[app.SETUP_STATE_KEY]["peak_mode"] == expected["peak_mode"]
     assert all(widget.key != app.SETUP_FIELD_WIDGET_KEYS["survey_period"] for widget in at.text_input)
 
 
@@ -332,12 +333,11 @@ def _exercise_analyze_setup_round_trip(at: AppTest, *, batch: bool = False) -> N
         "am_peak_window_end": time(10, 0),
         "pm_peak_window_start": time(15, 0),
         "pm_peak_window_end": time(19, 0),
-        "peak_mode": "rolling_60min",
+        "peak_mode": "fixed_hourly",
         "survey_period": "06.00 - 19.00",
     }
     for field in ("am_peak_window_start", "am_peak_window_end", "pm_peak_window_start", "pm_peak_window_end"):
         _widget_by_key(at.time_input, app.SETUP_FIELD_WIDGET_KEYS[field]).set_value(configured[field])
-    _widget_by_key(at.selectbox, app.SETUP_FIELD_WIDGET_KEYS["peak_mode"]).set_value(configured["peak_mode"])
     at.run(timeout=30)
 
     _button_by_label(at, "Data").click()
