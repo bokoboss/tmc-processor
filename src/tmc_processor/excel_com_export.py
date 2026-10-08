@@ -16,6 +16,7 @@ from pathlib import Path
 import site
 import sys
 import sysconfig
+from contextvars import ContextVar
 from typing import Any
 import warnings
 
@@ -75,11 +76,17 @@ class ExcelComExportDiagnostics:
         }
 
 
-_LAST_EXPORT_DIAGNOSTICS = ExcelComExportDiagnostics()
+_LAST_EXPORT_DIAGNOSTICS: ContextVar[ExcelComExportDiagnostics | None] = ContextVar(
+    "excel_com_export_diagnostics", default=None
+)
 
 
 def get_last_export_diagnostics() -> ExcelComExportDiagnostics:
-    return _LAST_EXPORT_DIAGNOSTICS
+    diagnostics = _LAST_EXPORT_DIAGNOSTICS.get()
+    if diagnostics is None:
+        diagnostics = ExcelComExportDiagnostics()
+        _LAST_EXPORT_DIAGNOSTICS.set(diagnostics)
+    return diagnostics
 
 
 def _import_com_modules():
@@ -791,8 +798,6 @@ def export_with_excel_com(
     and saves the output workbook.
     """
 
-    global _LAST_EXPORT_DIAGNOSTICS
-
     from .template_write_plan import resolve_template_write_plan
 
     require_excel_com()
@@ -817,7 +822,7 @@ def export_with_excel_com(
         raise OSError(f"Unable to prepare Excel COM export workbook at {target}: {exc}") from exc
     plan = resolve_template_write_plan(source, template_map, report_data, metadata, chart_source_data)
     diagnostics = _build_export_diagnostics(source, template_map)
-    _LAST_EXPORT_DIAGNOSTICS = diagnostics
+    _LAST_EXPORT_DIAGNOSTICS.set(diagnostics)
 
     excel = None
     workbook = None

@@ -200,6 +200,7 @@ from tmc_processor.application.services import (
 )
 from tmc_processor.ui.components.peak import render_peak_card as render_peak_card_component
 from tmc_processor.ui.components.export import operator_report_label
+from tmc_processor.ui.components.support import render_support_view
 from tmc_processor.ui.components.qc import render_qc_summary as render_qc_summary_component
 from tmc_processor.ui.components.status import render_readiness_checklist as render_readiness_checklist_component
 from tmc_processor.ui.workflows import (
@@ -281,6 +282,9 @@ ANALYZE_SETUP_FIELDS = (
 WORKFLOW_STATE_KEY = "tmc_workflow_state"
 WORKFLOW_SINGLE_MODE = "single"
 WORKFLOW_BATCH_MODE = "batch"
+APP_VIEW_STATE_KEY = "tmc_app_view"
+APP_WORKFLOW_VIEW = "TMC Processor"
+APP_SUPPORT_VIEW = "เลี้ยงชาเย็นคนทำโปรแกรม"
 SINGLE_SOURCE_UPLOAD_STATE_KEY = "tmc_single_source_upload"
 BATCH_SOURCE_UPLOAD_STATE_KEY = "tmc_batch_source_uploads"
 BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY = "tmc_batch_mapping_preset_upload"
@@ -920,6 +924,20 @@ def set_active_tab(tab_name: str) -> str:
 
 def get_active_tab() -> str:
     return set_active_tab(str(st.session_state.get("active_workflow_tab") or DEFAULT_WORKFLOW_TAB))
+
+
+def set_app_view(view: object, state: MutableMapping[str, object] | None = None) -> str:
+    """Select the secondary app surface without changing engineering workflow state."""
+
+    state = st.session_state if state is None else state
+    selected = APP_SUPPORT_VIEW if str(view or "") == APP_SUPPORT_VIEW else APP_WORKFLOW_VIEW
+    state[APP_VIEW_STATE_KEY] = selected
+    return selected
+
+
+def get_app_view(state: MutableMapping[str, object] | None = None) -> str:
+    state = st.session_state if state is None else state
+    return set_app_view(state.get(APP_VIEW_STATE_KEY), state)
 
 
 def workflow_stages_for_mode(mode: str) -> list[str]:
@@ -5494,6 +5512,19 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
+        get_app_view()
+        app_view = st.radio(
+            "เลือกหน้า",
+            options=[APP_WORKFLOW_VIEW, APP_SUPPORT_VIEW],
+            key=APP_VIEW_STATE_KEY,
+        )
+
+    if app_view == APP_SUPPORT_VIEW:
+        _render_app_header()
+        render_support_view()
+        return
+
+    with st.sidebar:
         _render_sidebar_section("โครงการ")
 
     _render_app_header()
