@@ -3,40 +3,113 @@ from __future__ import annotations
 from contextlib import nullcontext
 from pathlib import Path
 
+from tmc_processor.ui import app_shell
 from tmc_processor.ui.components import support
-from tmc_processor.ui.app_shell import (
-    APP_SUPPORT_VIEW,
-    APP_VIEW_STATE_KEY,
-    get_app_view,
-    set_app_view,
-)
 from tmc_processor.ui.components.support import resolve_support_qr_path
 
 
-def test_support_navigation_preserves_the_active_workflow_and_session_state() -> None:
-    state: dict[str, object] = {
+APPROVED_SUPPORT_TEXT = """TMC Processor เปิดให้ใช้งานฟรีครับ
+
+ถ้าโปรแกรมนี้ช่วยลดเวลาจัดการข้อมูล TMC และงาน Excel ของคุณได้
+และอยากช่วยสนับสนุนการพัฒนาต่อ
+สามารถเลี้ยงชาเย็นคนทำโปรแกรมได้ตามสะดวกครับ
+
+การสนับสนุนเป็นความสมัครใจ และไม่มีผลต่อฟังก์ชันการใช้งานของโปรแกรม"""
+
+
+class RecordingHeader:
+    def __init__(self, *, clicked: bool) -> None:
+        self.clicked = clicked
+        self.buttons: list[tuple[str, dict[str, object]]] = []
+        self.markdown_values: list[str] = []
+        self.captions: list[str] = []
+        self.session_state: dict[str, object] = {}
+
+    def columns(self, ratios: list[float], **_kwargs):
+        return (nullcontext(), nullcontext())
+
+    def markdown(self, value: str, **_kwargs) -> None:
+        self.markdown_values.append(value)
+
+    def caption(self, value: str) -> None:
+        self.captions.append(value)
+
+    def button(self, label: str, **kwargs) -> bool:
+        self.buttons.append((label, kwargs))
+        return self.clicked
+
+
+def test_header_support_button_opens_dialog_without_changing_workflow_state(monkeypatch) -> None:
+    state = {
         "active_workflow_tab": "Review",
         "work_mode": "ประมวลผลหลายไฟล์",
+        "tmc_batch_source_uploads": [object(), object()],
         "mapping_table": [{"movement_code": "N1"}],
+        "tmc_batch_confirmed_peaks": {"file-1": {"am": "07:00-08:00"}},
         "tmc_batch_analysis_result": object(),
         "tmc_batch_export_result": object(),
     }
+    header = RecordingHeader(clicked=True)
+    header.session_state = state
     original_state = dict(state)
+    opened: list[bool] = []
+    monkeypatch.setattr(app_shell, "st", header)
+    monkeypatch.setattr(support, "open_support_dialog", lambda: opened.append(True))
 
-    assert set_app_view(APP_SUPPORT_VIEW, state=state) == APP_SUPPORT_VIEW
-    assert get_app_view(state=state) == APP_SUPPORT_VIEW
-    assert state[APP_VIEW_STATE_KEY] == APP_SUPPORT_VIEW
+    app_shell._render_app_header()
 
-    set_app_view("TMC Processor", state=state)
-
-    assert state["active_workflow_tab"] == original_state["active_workflow_tab"]
-    assert state["work_mode"] == original_state["work_mode"]
-    assert state["mapping_table"] == original_state["mapping_table"]
-    assert state["tmc_batch_analysis_result"] is original_state["tmc_batch_analysis_result"]
-    assert state["tmc_batch_export_result"] is original_state["tmc_batch_export_result"]
+    assert header.buttons == [("เลี้ยงชาเย็น", {"key": "open_support_dialog", "type": "secondary"})]
+    assert opened == [True]
+    assert header.session_state == original_state
+    assert header.session_state["tmc_batch_analysis_result"] is original_state["tmc_batch_analysis_result"]
+    assert header.session_state["tmc_batch_export_result"] is original_state["tmc_batch_export_result"]
 
 
-def test_support_qr_resolver_uses_the_supplied_asset_and_handles_missing_files(tmp_path: Path) -> None:
+def test_header_keeps_privacy_disclosure_outside_support_dialog(monkeypatch) -> None:
+    header = RecordingHeader(clicked=False)
+    monkeypatch.setattr(app_shell, "st", header)
+    monkeypatch.setattr(support, "open_support_dialog", lambda: None)
+
+    app_shell._render_app_header()
+
+    assert len(header.captions) == 1
+    assert "ไม่มีการบันทึกไฟล์สมุดงานสำรวจ" in header.captions[0]
+    assert "ที่เก็บโครงการแบบถาวร" in header.captions[0]
+
+
+def test_support_dialog_renders_exact_approved_text_and_authoritative_qr(monkeypatch) -> None:
+    class RecordingView:
+        def __init__(self) -> None:
+            self.markdown_values: list[str] = []
+            self.captions: list[str] = []
+            self.images: list[tuple[str, int]] = []
+
+        def markdown(self, value: str) -> None:
+            self.markdown_values.append(value)
+
+        def caption(self, value: str) -> None:
+            self.captions.append(value)
+
+        def image(self, value: str, *, width: int) -> None:
+            self.images.append((value, width))
+
+        def columns(self, _ratios: list[int], *, gap: str):
+            assert gap == "small"
+            return (nullcontext(), nullcontext(), nullcontext())
+
+    view = RecordingView()
+    monkeypatch.setattr(support, "st", view)
+    expected_qr = Path("assets/support_qr.png")
+    monkeypatch.setattr(support, "SUPPORT_QR_PATH", expected_qr)
+
+    support.render_support_view()
+
+    assert view.markdown_values == [APPROVED_SUPPORT_TEXT]
+    assert view.images == [(str(expected_qr), 220)]
+    assert view.captions == []
+
+
+def test_support_qr_resolver_uses_supplied_asset_and_cleanly_handles_missing_files(tmp_path: Path) -> None:
     supplied_qr = tmp_path / "support_qr.png"
     supplied_qr.write_bytes(b"authoritative qr bytes")
 
@@ -51,29 +124,20 @@ def test_support_qr_resolver_finds_the_repository_asset() -> None:
     assert resolve_support_qr_path() == expected
 
 
-def test_support_view_shows_a_clean_fallback_without_a_qr(tmp_path: Path, monkeypatch) -> None:
+def test_support_dialog_shows_a_clean_fallback_without_a_qr(tmp_path: Path, monkeypatch) -> None:
     class RecordingView:
         def __init__(self) -> None:
             self.captions: list[str] = []
             self.images: list[str] = []
 
-        def title(self, value: str) -> None:
-            pass
-
-        def markdown(self, value: str) -> None:
+        def markdown(self, _value: str) -> None:
             pass
 
         def caption(self, value: str) -> None:
             self.captions.append(value)
 
-        def image(self, value: str, *, width: int) -> None:
-            self.images.append(value)
-
-        def container(self, *, border: bool):
-            return nullcontext()
-
-        def columns(self, ratios: list[float], *, gap: str):
-            return (nullcontext(), nullcontext())
+        def columns(self, *_args, **_kwargs):
+            raise AssertionError("the QR layout should not render without an asset")
 
     view = RecordingView()
     monkeypatch.setattr(support, "st", view)
@@ -82,4 +146,13 @@ def test_support_view_shows_a_clean_fallback_without_a_qr(tmp_path: Path, monkey
     support.render_support_view()
 
     assert view.images == []
-    assert any("ไม่มีไฟล์ QR" in caption for caption in view.captions)
+    assert view.captions == ["ไม่มีไฟล์ QR สำหรับแสดงในสภาพแวดล้อมนี้"]
+
+
+def test_support_dialog_uses_streamlit_compact_dialog(monkeypatch) -> None:
+    opened: list[bool] = []
+    monkeypatch.setattr(support, "_support_dialog", lambda: opened.append(True))
+
+    support.open_support_dialog()
+
+    assert opened == [True]

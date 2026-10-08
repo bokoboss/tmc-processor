@@ -200,7 +200,7 @@ from tmc_processor.application.services import (
 )
 from tmc_processor.ui.components.peak import render_peak_card as render_peak_card_component
 from tmc_processor.ui.components.export import operator_report_label
-from tmc_processor.ui.components.support import render_support_view
+from tmc_processor.ui.components import support
 from tmc_processor.ui.components.qc import render_qc_summary as render_qc_summary_component
 from tmc_processor.ui.components.status import render_readiness_checklist as render_readiness_checklist_component
 from tmc_processor.ui.workflows import (
@@ -282,9 +282,6 @@ ANALYZE_SETUP_FIELDS = (
 WORKFLOW_STATE_KEY = "tmc_workflow_state"
 WORKFLOW_SINGLE_MODE = "single"
 WORKFLOW_BATCH_MODE = "batch"
-APP_VIEW_STATE_KEY = "tmc_app_view"
-APP_WORKFLOW_VIEW = "TMC Processor"
-APP_SUPPORT_VIEW = "เลี้ยงชาเย็นคนทำโปรแกรม"
 SINGLE_SOURCE_UPLOAD_STATE_KEY = "tmc_single_source_upload"
 BATCH_SOURCE_UPLOAD_STATE_KEY = "tmc_batch_source_uploads"
 BATCH_MAPPING_PRESET_UPLOAD_STATE_KEY = "tmc_batch_mapping_preset_upload"
@@ -924,20 +921,6 @@ def set_active_tab(tab_name: str) -> str:
 
 def get_active_tab() -> str:
     return set_active_tab(str(st.session_state.get("active_workflow_tab") or DEFAULT_WORKFLOW_TAB))
-
-
-def set_app_view(view: object, state: MutableMapping[str, object] | None = None) -> str:
-    """Select the secondary app surface without changing engineering workflow state."""
-
-    state = st.session_state if state is None else state
-    selected = APP_SUPPORT_VIEW if str(view or "") == APP_SUPPORT_VIEW else APP_WORKFLOW_VIEW
-    state[APP_VIEW_STATE_KEY] = selected
-    return selected
-
-
-def get_app_view(state: MutableMapping[str, object] | None = None) -> str:
-    state = st.session_state if state is None else state
-    return set_app_view(state.get(APP_VIEW_STATE_KEY), state)
 
 
 def workflow_stages_for_mode(mode: str) -> list[str]:
@@ -1729,8 +1712,30 @@ def _inject_global_css() -> None:
         }
         .tmc-header {
             padding: var(--tmc-space-1) 0 var(--tmc-space-3) 0;
+            margin-bottom: 0;
+        }
+        .tmc-header-divider {
             border-bottom: 1px solid var(--tmc-divider);
-            margin-bottom: var(--tmc-space-3);
+            margin: 0 0 var(--tmc-space-2) 0;
+        }
+        div[class*="st-key-open_support_dialog"] {
+            display: flex;
+            justify-content: flex-end;
+        }
+        div[class*="st-key-open_support_dialog"] button {
+            min-height: 2rem;
+            max-width: 8.5rem;
+            padding: 0.35rem 0.65rem;
+            border: 1px solid var(--tmc-primary) !important;
+            background: transparent !important;
+            color: var(--tmc-primary) !important;
+            white-space: nowrap;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-open_support_dialog"] button:hover {
+            border-color: var(--tmc-primary-hover) !important;
+            background: var(--tmc-success-soft) !important;
+            color: var(--tmc-primary-hover) !important;
         }
         .tmc-title {
             color: var(--tmc-text);
@@ -2618,6 +2623,22 @@ def _inject_global_css() -> None:
             .tmc-title {
                 font-size: 1.55rem;
             }
+            div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-open_support_dialog"]) {
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                align-items: flex-start !important;
+            }
+            div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-open_support_dialog"]) > div:first-child {
+                flex: 1 1 0 !important;
+                width: auto !important;
+                min-width: 0;
+            }
+            div[data-testid="stHorizontalBlock"]:has(div[class*="st-key-open_support_dialog"]) > div:last-child {
+                flex: 0 0 6.5rem !important;
+                width: 6.5rem !important;
+                min-width: 0 !important;
+                max-width: 6.5rem !important;
+            }
         }
         </style>
         """,
@@ -2837,15 +2858,22 @@ def _render_sidebar_section(label: str) -> None:
 
 
 def _render_app_header() -> None:
-    st.markdown(
-        """
-        <div class="tmc-header">
-            <h1 class="tmc-title">TMC Processor</h1>
-            <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    title_column, action_column = st.columns([0.84, 0.16], gap="small", vertical_alignment="center")
+    with title_column:
+        st.markdown(
+            """
+            <div class="tmc-header">
+                <h1 class="tmc-title">TMC Processor</h1>
+                <div class="tmc-subtitle">ประมวลผลข้อมูล Turning Movement Count และจัดทำรายงาน Excel</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with action_column:
+        if st.button("เลี้ยงชาเย็น", key="open_support_dialog", type="secondary"):
+            support.open_support_dialog()
+    st.markdown('<div class="tmc-header-divider"></div>', unsafe_allow_html=True)
+    st.caption(support.PRIVACY_DISCLOSURE)
 
 
 def _topbar_item(label: str, value: str, note: str = "") -> str:
@@ -5512,17 +5540,6 @@ def _run_streamlit_app() -> None:
             label_visibility="collapsed",
         )
         is_single_file_mode = work_mode == "ประมวลผลไฟล์เดียว"
-        get_app_view()
-        app_view = st.radio(
-            "เลือกหน้า",
-            options=[APP_WORKFLOW_VIEW, APP_SUPPORT_VIEW],
-            key=APP_VIEW_STATE_KEY,
-        )
-
-    if app_view == APP_SUPPORT_VIEW:
-        _render_app_header()
-        render_support_view()
-        return
 
     with st.sidebar:
         _render_sidebar_section("โครงการ")
