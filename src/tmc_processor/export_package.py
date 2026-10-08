@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
+import ntpath
 from pathlib import Path
 import re
 from typing import Any
@@ -35,7 +36,7 @@ def _timestamp_text(generated_at: datetime | str | None = None) -> str:
 
 
 def _safe_member_name(name: str | None, default: str) -> str:
-    base = Path(str(name or default)).name
+    base = ntpath.basename(str(name or default))
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
     return base or default
 
@@ -135,7 +136,7 @@ def build_export_summary_text(
         f"App version: {APP_VERSION}",
         f"Template version: {_template_version(template_version, export_settings)}",
         f"Generated at: {_timestamp_text(generated_at)}",
-        f"Source file name: {Path(str(source_file_name or '')).name}",
+        f"Source file name: {ntpath.basename(str(source_file_name or ''))}",
         f"Survey point / TMC title: {survey_title}",
         f"Export mode: {export_mode or ''}",
         f"AM peak period: {_peak_period(setup, peaks, 'AM')}",
