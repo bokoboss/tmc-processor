@@ -848,6 +848,8 @@ def _render_primary_workflow_inputs(
 
     if active_stage == "Data":
         with st.container(border=True):
+            with st.expander("Privacy / ความเป็นส่วนตัว", expanded=False):
+                st.caption(support.PRIVACY_DISCLOSURE)
             if is_single_file_mode:
                 _render_section_header("Source workbook", "Upload the TMC workbook that starts the Single workflow.")
                 current_upload = st.file_uploader(
@@ -2873,7 +2875,6 @@ def _render_app_header() -> None:
         if st.button("เลี้ยงชาเย็น", key="open_support_dialog", type="secondary"):
             support.open_support_dialog()
     st.markdown('<div class="tmc-header-divider"></div>', unsafe_allow_html=True)
-    st.caption(support.PRIVACY_DISCLOSURE)
 
 
 def _topbar_item(label: str, value: str, note: str = "") -> str:

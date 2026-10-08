@@ -2,11 +2,48 @@
 
 TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
 
-รุ่นปัจจุบัน: **`v1.0.1` — patch preparation (not yet published)**
+รุ่นปัจจุบัน: **`v1.0.1` — published stable**; `v1.1.0` อยู่ระหว่างเตรียมและตรวจหลักฐานก่อนเผยแพร่
 
 ผู้ใช้ทั่วไป: ดาวน์โหลด Windows ZIP จาก [latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest) และดูวิธีเปิดโปรแกรมด้านล่าง
 
 โค้ดรุ่นปัจจุบันอยู่บน branch `main`
+
+## Streamlit Community Cloud deployment
+
+Production hosting uses **Streamlit Community Cloud**. After PR #31 passes final
+evidence review and is approved and merged, sign in at
+[share.streamlit.io](https://share.streamlit.io/) and authorize GitHub access.
+Create an app with repository `bokoboss/tmc-processor`, branch `main`, entrypoint
+`app.py`, and explicitly choose **Python 3.12** in Advanced settings. Select the
+public subdomain in the deployment form; no production URL has been assigned here.
+
+Root `requirements.txt` installs `-e .`, keeping dependencies authoritative in
+the setuptools-style `pyproject.toml` and making the `src/` package importable.
+Community Cloud tries uv and falls back to pip; the Linux CI job validates both.
+See the official [dependency installation documentation](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies).
+The existing `.streamlit/config.toml` supplies the theme. No secrets, Excel COM,
+database, permanent uploaded-file store or Vercel configuration are required.
+
+Reproduce the pip runtime check from the repository root in a clean Linux
+Python 3.12 virtual environment:
+
+```sh
+python -m pip install -r requirements.txt
+python -m pip check
+python scripts/smoke_streamlit.py
+python -m streamlit run app.py --server.headless=true
+```
+
+After deployment, use non-sensitive files from `samples/demo/` to verify upload
+→ Mapping → Analyze → Review/Peak confirmation → Excel export/download, and
+open/close Support while confirming session preservation and QR rendering.
+Check desktop and narrow-screen layout, and resource behavior at intended upload
+sizes before release acceptance. Community Cloud processes files on a third-party
+US-hosted service. Session uploads are ephemeral and can be lost on restart or
+redeploy; the app does not intentionally save them to a durable project store.
+Export processing can use short-lived temporary files. Download outputs locally.
+Merge, tag/release `v1.1.0`, and Issue #30 closure require final evidence review;
+deployment preparation alone does not qualify a public deployment.
 
 ## Legacy version
 

@@ -47,15 +47,45 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
 
-      - name: Install package
+      - name: Install Community Cloud dependencies with uv
+        run: |
+          python -m pip install uv
+          python -m venv /tmp/tmc-cloud-uv
+          uv pip install --python /tmp/tmc-cloud-uv/bin/python -r requirements.txt
+          uv pip check --python /tmp/tmc-cloud-uv/bin/python
+          /tmp/tmc-cloud-uv/bin/python -c "import tmc_processor; import importlib.util; assert importlib.util.find_spec('win32com') is None"
+          /tmp/tmc-cloud-uv/bin/python scripts/smoke_streamlit.py
+
+      - name: Install Community Cloud dependencies with pip fallback
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -r requirements.txt
+          python -m pip check
+          python -c "import tmc_processor; import importlib.util; assert importlib.util.find_spec('win32com') is None"
+
+      - name: Execute app.py entrypoint without Excel COM
+        run: |
+          python - <<'PY'
+          from streamlit.testing.v1 import AppTest
+          app = AppTest.from_file("app.py", default_timeout=60).run()
+          assert not app.exception, [error.message for error in app.exception]
+          print("app.py executed without exceptions")
+          PY
+
+      - name: Install test dependencies
+        run: python -m pip install pytest
 
       - name: Run tests
         run: python -m pytest
 
       - name: Smoke test headless Streamlit startup
         run: python scripts/smoke_streamlit.py
+
+      - name: Compile and check whitespace
+        run: |
+          python -m compileall -q app.py src
+          git diff --check

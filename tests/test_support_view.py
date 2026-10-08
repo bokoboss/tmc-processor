@@ -8,13 +8,14 @@ from tmc_processor.ui.components import support
 from tmc_processor.ui.components.support import resolve_support_qr_path
 
 
-APPROVED_SUPPORT_TEXT = """TMC Processor เปิดให้ใช้งานฟรีครับ
+# Issue #30, final copy override: issuecomment-6061137433.
+APPROVED_SUPPORT_TEXT = """TMC Processor เปิดให้ใช้งานฟรี
 
-ถ้าโปรแกรมนี้ช่วยลดเวลาจัดการข้อมูล TMC และงาน Excel ของคุณได้
-และอยากช่วยสนับสนุนการพัฒนาต่อ
-สามารถเลี้ยงชาเย็นคนทำโปรแกรมได้ตามสะดวกครับ
+ถ้าโปรแกรมนี้ช่วยลดเวลาจัดการข้อมูล TMC และงาน Excel ของคุณได้ และอยากช่วยสนับสนุนการพัฒนาต่อ จะเลี้ยงชาเย็นคนทำโปรแกรมสักแก้วก็ได้
 
-การสนับสนุนเป็นความสมัครใจ และไม่มีผลต่อฟังก์ชันการใช้งานของโปรแกรม"""
+**สแกน QR ได้ตามสะดวกเลย**
+
+สนับสนุนหรือไม่ก็ใช้งานได้ครบทุกฟังก์ชันเหมือนเดิม"""
 
 
 class RecordingHeader:
@@ -65,16 +66,30 @@ def test_header_support_button_opens_dialog_without_changing_workflow_state(monk
     assert header.session_state["tmc_batch_export_result"] is original_state["tmc_batch_export_result"]
 
 
-def test_header_keeps_privacy_disclosure_outside_support_dialog(monkeypatch) -> None:
+def test_header_keeps_privacy_disclosure_in_data_context(monkeypatch) -> None:
     header = RecordingHeader(clicked=False)
     monkeypatch.setattr(app_shell, "st", header)
     monkeypatch.setattr(support, "open_support_dialog", lambda: None)
 
     app_shell._render_app_header()
 
-    assert len(header.captions) == 1
-    assert "ไม่มีการบันทึกไฟล์สมุดงานสำรวจ" in header.captions[0]
-    assert "ที่เก็บโครงการแบบถาวร" in header.captions[0]
+    assert header.captions == []
+
+
+def test_data_uploads_include_privacy_disclosure_in_single_and_batch() -> None:
+    from streamlit.testing.v1 import AppTest
+
+    entrypoint = Path(__file__).resolve().parents[1] / "app.py"
+    at = AppTest.from_file(str(entrypoint), default_timeout=60).run()
+    assert not at.exception
+    for batch in (False, True):
+        if batch:
+            mode = next(widget for widget in at.radio if widget.key == "work_mode")
+            mode.set_value(mode.options[1]).run()
+            assert not at.exception
+        privacy = next(panel for panel in at.get("expander") if panel.label == "Privacy / ความเป็นส่วนตัว")
+        assert [caption.value for caption in privacy.caption] == [support.PRIVACY_DISCLOSURE]
+        assert at.file_uploader
 
 
 def test_support_dialog_renders_exact_approved_text_and_authoritative_qr(monkeypatch) -> None:
@@ -105,6 +120,7 @@ def test_support_dialog_renders_exact_approved_text_and_authoritative_qr(monkeyp
     support.render_support_view()
 
     assert view.markdown_values == [APPROVED_SUPPORT_TEXT]
+    assert support.SUPPORT_TITLE == "เลี้ยงชาเย็นคนทำโปรแกรม"
     assert view.images == [(str(expected_qr), 220)]
     assert view.captions == []
 
