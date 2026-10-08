@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 import os
+import ntpath
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkstemp
@@ -190,7 +191,7 @@ def _export_metadata_frame(
         ("export_mode_requested", export_mode_requested or export_mode or ""),
         ("export_mode_used", export_mode_used or export_mode or ""),
         ("export_fallback_notice", fallback_notice or ""),
-        ("source_file_name", Path(str(source_file_name or "")).name),
+        ("source_file_name", ntpath.basename(str(source_file_name or ""))),
         ("report_title", metadata_values.get("report_title", "")),
         ("project", metadata_values.get("project", "")),
         ("survey_point", metadata_values.get("survey_point", "")),

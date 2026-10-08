@@ -5,21 +5,23 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `1.0.1` (maintenance preparation; not yet released)
+- Package/application version: `1.0.1` (current published stable release)
 - Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
 - Installed workflow version: `v1.4.1`
 
 ## Current accepted baseline and release state
+- Accepted released baseline before Issue #30: `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827` (`v1.0.1`).
+- v1.0.1 qualification: full automated suite 504 passed; GitHub Actions CI #113 passed on Windows / Python 3.10 and 3.12.
+- Before the separately approved Issue #30 web-app enhancement, the project was in maintenance mode.
+- Current task: Issue #30 Web App W0-W1 (Linux hosting readiness and Support view).
 - Accepted UX/product baseline: `main@ff26e48a904d4dae53c9d0f92ecf853f86ea93a9` from PR #25 (UX-8).
 - PR #25 qualification: full automated suite 451 passed, 0 failed; CI passed on Windows / Python 3.10 and 3.12.
 - Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
 - GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
-- Current phase: fixed-hour Peak maintenance for `v1.0.1`, pending review and acceptance.
-- Current accepted maintenance baseline: `main@20b166c9d3f9dd9af06830522009f384109bd55d` after PR #28.
-- `v1.0.0` remains the published stable release baseline while the maintenance candidate is reviewed.
-- Post-release operating mode: maintenance mode.
+- Current release: `v1.0.1` is published and stable.
+- Post-release operating mode before Issue #30: maintenance mode.
 
 ## Product workflow
 Canonical operator flow for Single and Batch:
@@ -165,9 +167,4 @@ The legacy snapshot is historical and must not be moved or rewritten.
 - Implementation changes require evidence appropriate to affected risk areas before merge/release.
 
 ## Current next objective
-No active modernization milestone is scheduled after `v1.0.0`.
-
-Operate in maintenance mode:
-- bug fixes through focused issues/PRs
-- qualify the fixed-hour Peak maintenance patch before merge/release and Issue #23 closure
-- preserve validated behavior unless a separately approved change requires modification
+Complete the separately approved Issue #30 web-hosting readiness and Support view while preserving the accepted `v1.0.1` engineering behavior.

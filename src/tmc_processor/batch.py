@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from io import BytesIO
+import ntpath
 from pathlib import Path
 import re
 import warnings
@@ -288,7 +289,7 @@ class _BatchFileArtifacts:
 def safe_batch_name(name: str | None, default: str = "file") -> str:
     """Return an ASCII ZIP-safe member segment without paths."""
 
-    base = Path(str(name or default)).name
+    base = ntpath.basename(str(name or default))
     stem = Path(base).stem if "." in base else base
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
     return (cleaned or default)[:80]
@@ -325,7 +326,7 @@ def batch_folder_name(index: int, output_stem: str) -> str:
 def derive_survey_date_text_from_filename(filename: str | None) -> str:
     """Extract a practical survey date from common filename patterns."""
 
-    stem = Path(str(filename or "")).stem
+    stem = ntpath.splitext(ntpath.basename(str(filename or "")))[0]
     patterns = [
         (r"(?<!\d)(20\d{2})[-_. ]?(0[1-9]|1[0-2])[-_. ]?([0-2]\d|3[01])(?!\d)", "{0}-{1}-{2}"),
         (r"(?<!\d)([0-2]\d|3[01])[-_. ](0[1-9]|1[0-2])[-_. ](20\d{2})(?!\d)", "{2}-{1}-{0}"),
@@ -342,7 +343,7 @@ def batch_file_metadata_defaults(file_names: Iterable[str]) -> list[dict[str, st
 
     return [
         {
-            "file_name": Path(str(file_name)).name,
+            "file_name": ntpath.basename(str(file_name)),
             "survey_date_text": derive_survey_date_text_from_filename(file_name),
             "output_stem": safe_output_stem(file_name, f"file_{index:02d}"),
             "notes": "",
