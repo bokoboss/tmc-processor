@@ -63,6 +63,15 @@ def test_plain_mapping_batch_confirmation_and_exclusion_are_explicit() -> None:
     assert state[BATCH_PEAK_SOURCE_KEY]["001_demo"] == "user_confirmed_batch"
 
 
+def test_workflow_operations_factory_constructs_required_export_fields() -> None:
+    from tmc_processor.ui import app_shell
+
+    operations = app_shell._workflow_operations()
+    assert operations.V2_TEMPLATE_MAP_PATH == app_shell.V2_TEMPLATE_MAP_PATH
+    assert operations.V2_TEMPLATE_PATH == app_shell.V2_TEMPLATE_PATH
+    assert operations.MOVEMENT_SCHEME_V1 == app_shell.MOVEMENT_SCHEME_V1
+
+
 def test_workflow_registry_routes_each_canonical_stage_to_an_owner() -> None:
     from tmc_processor.ui.workflows import WORKFLOW_STAGE_RENDERERS, render_workflow_stage
 

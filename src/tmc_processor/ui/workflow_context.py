@@ -35,6 +35,7 @@ class WorkflowOperations:
     MAPPING_SOURCE_MAPPING_PRESET: Any = None
     MAPPING_SOURCE_USER_EDITOR: Any = None
     MOVEMENT_SCHEMES: Any = None
+    MOVEMENT_SCHEME_V1: Any = None
     MOVEMENT_SCHEME_V2: Any = None
     MappingPresetError: Any = None
     PACKAGE_MIME: Any = None
@@ -48,6 +49,8 @@ class WorkflowOperations:
     STANDARD_REPORT_EXPORT_MODE: Any = None
     TEMPLATE_VERSION: Any = None
     V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE: Any = None
+    V2_TEMPLATE_MAP_PATH: Any = None
+    V2_TEMPLATE_PATH: Any = None
     WORKFLOW_BATCH_MODE: Any = None
     WORKFLOW_SINGLE_MODE: Any = None
     WorkflowReadiness: Any = None

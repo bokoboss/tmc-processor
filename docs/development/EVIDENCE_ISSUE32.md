@@ -177,3 +177,39 @@ after committing. The full Issue #32 diff still has 14 changed paths; no unrelat
 No changes to templates, native Summary writer/verifier, calculations, stream audit, ZIP packaging,
 PNG renderer or UI are included in this correction. CI and Cloud smoke remain acceptance gates;
 this evidence does not authorize merge or release.
+
+## PR #33 Linux startup correction (2026-10-10)
+
+Review: https://github.com/bokoboss/tmc-processor/pull/33#issuecomment-6091117631.
+Started from clean `faa32ea0b47c549a5b6d4b78812e2e1bca3c894b` on the existing PR branch.
+The real `_workflow_operations()` factory reproduced CI's unexpected-keyword TypeError.
+Added exactly `V2_TEMPLATE_MAP_PATH`, `V2_TEMPLATE_PATH`, and `MOVEMENT_SCHEME_V1` to
+`WorkflowOperations`, using the existing `Any = None` field convention. A focused regression
+constructs the actual factory and verifies all three values. No export/template/worksheet,
+PNG packaging, calculation or other UI implementation changed.
+
+Success gates: real factory construction, actual `app.py` entrypoint without exceptions,
+focused context/architecture regressions, compile and whitespace checks.
+
+- `.venv/Scripts/python.exe -m pytest -q tests/test_application_architecture.py tests/test_workflow_contract_adapter.py --tb=short --basetemp=outputs/pytest-issue32-startup-focused -p no:cacheprovider`: **41 passed**.
+- The exact CI AppTest lines ran against `app.py`:
+
+```python
+from streamlit.testing.v1 import AppTest
+app = AppTest.from_file("app.py", default_timeout=60).run()
+assert not app.exception, [error.message for error in app.exception]
+print("app.py executed without exceptions")
+```
+
+Result: **PASS**, no app exceptions. The Windows sandbox initially blocked the harness's asyncio
+socket-pair creation before executing the app (confirmed by a stack trace). The assertion passed
+outside the sandbox. Optional `win32com`, `pythoncom`, and `pywintypes` imports were unavailable
+only within this test process, matching CI's no-COM condition; no installed packages or source
+were changed. Actual Linux confirmation remains the new GitHub CI run on the pushed SHA.
+
+- `.venv/Scripts/python.exe -m compileall -q app.py src`: **PASS**.
+- `git diff --check`: **PASS**.
+
+Correction files: `src/tmc_processor/ui/workflow_context.py`,
+`tests/test_application_architecture.py`, and this evidence document. No full local suite rerun.
+Push is limited to the existing PR branch; no merge, tag or release is authorized.
