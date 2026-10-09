@@ -6,6 +6,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from PIL import Image
 import pytest
 
 from tmc_processor.batch import (
@@ -675,6 +676,11 @@ def test_v2_batch_template_zip_contains_authored_summary_without_raw_inputs() ->
         summary_text = archive.read(f"{first.folder_name}/{first.output_stem}_export_summary.txt").decode("utf-8")
         diagram_csv = archive.read(f"{first.folder_name}/diagram/movement_diagram_data.csv").decode("utf-8")
         first_report_bytes = archive.read(f"{first.folder_name}/{first.output_stem}_report.xlsx")
+        assert archive.testzip() is None
+        for row in result.summary_rows:
+            with Image.open(BytesIO(archive.read(f"{row.folder_name}/diagram/movement_diagram.png"))) as image:
+                assert image.format == "PNG"
+                image.verify()
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     assert {"metadata", "Batch_Summary", "Batch_QC"}.issubset(set(workbook.sheetnames))
@@ -692,15 +698,20 @@ def test_v2_batch_template_zip_contains_authored_summary_without_raw_inputs() ->
         assert row.movement_code_scheme == MOVEMENT_SCHEME_V2
         assert f"{row.folder_name}/{row.output_stem}_report.xlsx" in names
         assert f"{row.folder_name}/diagram/movement_diagram_data.csv" in names
-        assert f"{row.folder_name}/diagram/movement_diagram.png" not in names
+        assert f"{row.folder_name}/diagram/movement_diagram.png" in names
+        assert f"{row.folder_name}/diagram/movement_diagram.png" in batch_zip_contents_preview(result.summary_rows)
     assert DAY1.name not in names
     assert DAY2.name not in names
     assert "movement_code_scheme: approach_movement" in summary_text
     assert "NL,N,Northbound,L,Left turn" in diagram_csv
     first_report = load_workbook(BytesIO(first_report_bytes), data_only=False)
+    fields = dict(first_report["Export_Metadata"].iter_rows(min_row=2, values_only=True))
+    assert fields["diagram_png_package_path"] == "diagram/movement_diagram.png"
     assert first_report.sheetnames[0] == "Summary"
     assert len(first_report["Summary"]._images) == 0
     with ZipFile(BytesIO(first_report_bytes)) as report_package:
+        with ZipFile(ROOT / "templates" / "four_leg_tmc_report_template_approach_v2.xlsx") as template:
+            assert report_package.read("xl/drawings/drawing1.xml") == template.read("xl/drawings/drawing1.xml")
         assert "xl/charts/chart1.xml" in report_package.namelist()
         assert "xl/charts/chart2.xml" in report_package.namelist()
         assert "xl/drawings/drawing1.xml" in report_package.namelist()

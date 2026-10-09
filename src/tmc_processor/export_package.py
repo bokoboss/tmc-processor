@@ -13,6 +13,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from openpyxl import load_workbook
 import pandas as pd
 
+from .diagram import render_v2_movement_diagram_png
 from .mapping import clean_mapping, mapping_to_excel_bytes, movement_aggregation_messages
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, get_app_version
 from .movement_scheme import MOVEMENT_SCHEME_V2
@@ -270,4 +271,7 @@ def create_v2_generated_export_package_zip(
         diagram_data = _workbook_sheet_dataframe(workbook_bytes, V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME)
         if diagram_data is not None:
             archive.writestr("diagram/movement_diagram_data.csv", diagram_data.to_csv(index=False).encode("utf-8"))
+            diagram_png = render_v2_movement_diagram_png(diagram_data)
+            if diagram_png:
+                archive.writestr("diagram/movement_diagram.png", diagram_png)
     return output.getvalue()

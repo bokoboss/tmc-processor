@@ -15,7 +15,7 @@ import pandas as pd
 
 from .constants import DEFAULT_PEAK_MODE, PEAK_MODE_OPTIONS
 from .charts import report_chart_pngs
-from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram
+from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram, render_v2_movement_diagram_png
 from .exporter import (
     PEAK_BINDING_FALLBACK_REASON,
     V2_TEMPLATE_EXPORT_MODE,
@@ -289,6 +289,7 @@ class _BatchFileArtifacts:
     chart_pngs: dict[str, bytes] = field(default_factory=dict)
     diagram_png: bytes | None = None
     diagram_data_csv: bytes | None = None
+    diagram_data_png: bytes | None = None
 
 
 def safe_batch_name(name: str | None, default: str = "file") -> str:
@@ -426,7 +427,10 @@ def batch_zip_contents_preview(summary_rows: Iterable[BatchSummaryRow]) -> list[
             )
             if row.movement_code_scheme == MOVEMENT_SCHEME_V2:
                 preview.extend(
-                    [f"{folder}/diagram/movement_diagram_data.csv"]
+                    [
+                        f"{folder}/diagram/movement_diagram_data.csv",
+                        f"{folder}/diagram/movement_diagram.png",
+                    ]
                 )
             preview.append(f"{folder}/charts/")
     else:
@@ -744,6 +748,8 @@ def create_batch_package_zip(
                 archive.writestr(f"{folder}/charts/tmc_movement_diagram.png", bytes(artifact.diagram_png))
             if artifact.diagram_data_csv:
                 archive.writestr(f"{folder}/diagram/movement_diagram_data.csv", bytes(artifact.diagram_data_csv))
+            if artifact.diagram_data_png:
+                archive.writestr(f"{folder}/diagram/movement_diagram.png", bytes(artifact.diagram_data_png))
     return output.getvalue()
 
 
@@ -1145,6 +1151,7 @@ def _process_one_file_v2(
         mapping_preset_bytes=mapping_preset_bytes,
         chart_pngs=chart_pngs,
         diagram_data_csv=diagram_data.to_csv(index=False).encode("utf-8"),
+        diagram_data_png=render_v2_movement_diagram_png(diagram_data),
     )
     qc_rows = _batch_qc_rows_for_file(
         file_name=item.file_name,

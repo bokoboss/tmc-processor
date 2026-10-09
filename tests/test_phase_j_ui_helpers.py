@@ -5,6 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from PIL import Image
 import pandas as pd
 import pytest
 
@@ -171,6 +172,13 @@ def test_v2_single_ui_export_uses_authored_template_without_excel_com(monkeypatc
         assert exported.read("xl/drawings/drawing1.xml") == template.read("xl/drawings/drawing1.xml")
         assert exported.read("xl/charts/chart1.xml")
         assert exported.read("xl/charts/chart2.xml")
+    package_bytes = app.create_v2_generated_export_package_zip(workbook_bytes=workbook_bytes)
+    with ZipFile(BytesIO(package_bytes)) as package:
+        assert package.testzip() is None
+        assert package.read("approach_movement_v2_template_workbook.xlsx") == workbook_bytes
+        with Image.open(BytesIO(package.read("diagram/movement_diagram.png"))) as image:
+            assert image.format == "PNG"
+            image.verify()
 
 
 def test_v2_single_template_mode_does_not_call_excel_com(monkeypatch: pytest.MonkeyPatch) -> None:

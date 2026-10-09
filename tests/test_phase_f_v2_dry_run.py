@@ -6,6 +6,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from PIL import Image
 import pandas as pd
 import pytest
 
@@ -625,14 +626,22 @@ def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None
     )
 
     with ZipFile(BytesIO(package)) as archive:
+        assert archive.testzip() is None
         names = set(archive.namelist())
         summary = archive.read("export_summary.txt").decode("utf-8")
         diagram_csv = archive.read("diagram/movement_diagram_data.csv").decode("utf-8")
+        assert archive.read("v2_generated.xlsx") == workbook_bytes
+        with Image.open(BytesIO(archive.read("diagram/movement_diagram.png"))) as image:
+            assert image.format == "PNG"
+            image.verify()
 
     assert "v2_generated.xlsx" in names
     assert "export_summary.txt" in names
     assert "diagram/movement_diagram_data.csv" in names
-    assert "diagram/movement_diagram.png" not in names
+    assert "diagram/movement_diagram.png" in names
+    workbook = load_workbook(BytesIO(workbook_bytes), read_only=True, data_only=True)
+    assert _sheet_records(workbook, "Export_Metadata")["diagram_png_package_path"] == "diagram/movement_diagram.png"
+    workbook.close()
     assert "raw_input.xlsx" not in names
     assert "Template version: four_leg_approach_movement_v2" in summary
     assert "movement_code,total_pcu,pm_peak_pcu,am_peak_pcu" in diagram_csv

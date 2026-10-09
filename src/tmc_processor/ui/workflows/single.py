@@ -1411,6 +1411,7 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     "mapping_preset.mapping.json",
                     "mapping_table.xlsx",
                     "diagram/movement_diagram_data.csv",
+                    "diagram/movement_diagram.png",
                 ]
             else:
                 preview_files = [
@@ -1448,6 +1449,8 @@ def render_single_export(*, context: WorkflowContext) -> None:
             if output.get("diagram_png"):
                 st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
                 _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
+            elif _is_v2_result(output_result):
+                st.caption("approach_movement diagram PNG อยู่ใน Export Package ZIP ที่ path diagram/movement_diagram.png")
     else:
         _render_empty_state(
             "ยังไม่มีไฟล์ส่งออก",
