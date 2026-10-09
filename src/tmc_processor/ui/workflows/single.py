@@ -8,6 +8,8 @@ from tmc_processor.ui.components.export import (
     SAFE_PNG_TITLE,
     STANDARD_REPORT_DESCRIPTION,
     STANDARD_REPORT_TITLE,
+    V2_GENERATED_SUMMARY_DESCRIPTION,
+    V2_GENERATED_SUMMARY_TITLE,
     operator_fallback_message,
 )
 
@@ -1130,7 +1132,11 @@ def render_single_export(*, context: WorkflowContext) -> None:
             st.rerun()
         use_template_report_layout = bool(standard_decision.use_template_report_layout)
         use_excel_com_native_charts = bool(standard_decision.use_excel_com_native_charts)
-        st.info(STANDARD_REPORT_TITLE if use_template_report_layout else SAFE_PNG_TITLE)
+        st.info(
+            STANDARD_REPORT_TITLE
+            if use_template_report_layout
+            else V2_GENERATED_SUMMARY_TITLE if _is_v2_result(result) else SAFE_PNG_TITLE
+        )
         if standard_decision.fallback_notice:
             st.warning(operator_fallback_message(standard_decision.fallback_notice))
     else:
@@ -1162,6 +1168,9 @@ def render_single_export(*, context: WorkflowContext) -> None:
             if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
                 st.markdown(f"**{STANDARD_REPORT_TITLE}**")
                 st.caption(STANDARD_REPORT_DESCRIPTION)
+            elif _is_v2_result(result):
+                st.markdown(f"**{V2_GENERATED_SUMMARY_TITLE}**")
+                st.caption(V2_GENERATED_SUMMARY_DESCRIPTION)
             else:
                 st.markdown(f"**{SAFE_PNG_TITLE}**")
                 st.caption(SAFE_PNG_DESCRIPTION)

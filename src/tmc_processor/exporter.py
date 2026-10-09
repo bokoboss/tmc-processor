@@ -23,7 +23,13 @@ import pandas as pd
 
 from .charts import report_chart_pngs
 from .constants import DEFAULT_PCE_FACTORS, DEFAULT_PEAK_MODE, VEHICLE_CLASSES
-from .diagram import DiagramConfig, MOVEMENT_CODES, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram
+from .diagram import (
+    DiagramConfig,
+    MOVEMENT_CODES,
+    build_v2_movement_diagram_data,
+    generate_four_leg_tmc_diagram,
+    render_v2_intersection_summary_png,
+)
 from .metadata import APP_VERSION, TEMPLATE_VERSION, generated_timestamp_text, metadata_cell_values, setup_with_metadata
 from .mapping import clean_mapping
 from .movement_scheme import (
@@ -62,7 +68,7 @@ from .summaries import (
     vehicle_composition_report,
     vehicle_group_pce,
 )
-from .time_utils import hourly_interval_rows
+from .time_utils import hourly_interval_rows, time_to_minutes
 
 
 EXPORT_SHEETS = [
@@ -96,10 +102,9 @@ V2_TEMPLATE_EXPORT_TEMPLATE = "four_leg_approach_movement_v2"
 V2_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 V2_GENERATED_EXPORT_MODE = "Safe PNG Export Mode"
 V2_EXPORT_LIMITATION_NOTES = (
-    "Generated v2 workbook export does not use an Excel template; the openpyxl template helper is limited to "
-    "structural/internal validation and is not native-template-preserving. Native Excel COM template export remains "
-    "unsupported; v2 diagram support is table-based in Movement_Diagram_Data "
-    "with a visual PNG included in generated export packages."
+    "Generated v2 export includes a Summary worksheet with an embedded conceptual four-leg schematic and "
+    "source-stream movement details. It does not use or preserve an Excel-authored template; native Excel COM "
+    "template export is unsupported."
 )
 V2_TEMPLATE_EXPORT_LIMITATION_NOTES = (
     "Limited openpyxl structural template export for approach_movement v2; not safe for visual Excel Template Mode "
@@ -271,9 +276,12 @@ def _v2_export_metadata_frame(
             ("export_mode_used", export_mode or V2_GENERATED_EXPORT_MODE),
             ("excel_template_mode_supported", excel_template_mode_supported),
             ("native_template_export_supported", native_template_export_supported),
-            ("diagram_export_supported", "table_based"),
-            ("diagram_export_artifact", V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
-            ("diagram_png_package_path", "diagram/movement_diagram.png"),
+            ("summary_sheet", "Summary"),
+            ("summary_diagram", "embedded_conceptual_four_leg_schematic"),
+            ("summary_source_stream_detail", "Summary worksheet source-stream table"),
+            ("diagram_export_supported", "embedded_intersection_schematic"),
+            ("diagram_export_artifact", "Summary drawing and " + V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME),
+            ("diagram_png_package_path", "xl/media/*.png (worksheet drawing relationship)"),
             ("v2_export_limitation_notes", limitation_notes),
         ],
         columns=["field", "value"],
@@ -527,6 +535,100 @@ def _v2_peak_summary_frame(peaks: pd.DataFrame) -> pd.DataFrame:
         frame["_period_order"] = frame["period"].astype(str).str.upper().map(order).fillna(99)
         frame = frame.sort_values("_period_order").drop(columns=["_period_order"])
     return frame
+
+
+def _v2_source_stream_summary(normalized: pd.DataFrame, peaks: pd.DataFrame) -> pd.DataFrame:
+    """Keep same-code rows from separate source streams visible in Summary."""
+
+    columns = [
+        "movement_code", "source_stream", "source_direction", "total_count", "total_pcu",
+        "am_peak_count", "am_peak_pcu", "pm_peak_count", "pm_peak_pcu",
+    ]
+    frame = normalized.copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    code_column = "output_movement_code" if "output_movement_code" in frame else "movement_code"
+    if code_column not in frame:
+        return pd.DataFrame(columns=columns)
+    frame["movement_code"] = frame[code_column].fillna("").astype(str).str.strip()
+    streams = frame["source_stream"] if "source_stream" in frame else pd.Series("mainline", index=frame.index)
+    frame["source_stream"] = streams.fillna("mainline").astype(str).str.strip()
+    frame["source_stream"] = frame["source_stream"].replace("", "mainline")
+    directions = frame["source_direction"] if "source_direction" in frame else frame.get("raw_direction", pd.Series("", index=frame.index))
+    frame["source_direction"] = directions.fillna("").astype(str).str.strip()
+    frame["_minutes"] = frame["time_start"].map(time_to_minutes)
+    keys = ["movement_code", "source_stream", "source_direction"]
+    totals = frame.groupby(keys, dropna=False, as_index=False).agg(total_count=("count", "sum"), total_pcu=("pcu", "sum"))
+    for period in ("AM", "PM"):
+        match = peaks[peaks["period"].astype(str).str.upper() == period] if not peaks.empty and "period" in peaks else pd.DataFrame()
+        if match.empty:
+            totals[f"{period.lower()}_peak_count"] = 0
+            totals[f"{period.lower()}_peak_pcu"] = 0
+            continue
+        peak = match.iloc[0]
+        start = _time_text(peak.get("peak_start"))
+        end = _time_text(peak.get("peak_end"))
+        try:
+            start_minute = int(start[:2]) * 60 + int(start[3:5])
+            end_minute = int(end[:2]) * 60 + int(end[3:5])
+        except (TypeError, ValueError):
+            totals[f"{period.lower()}_peak_count"] = 0
+            totals[f"{period.lower()}_peak_pcu"] = 0
+            continue
+        selected = frame[(frame["_minutes"] >= start_minute) & (frame["_minutes"] < end_minute)]
+        peak_totals = selected.groupby(keys, dropna=False, as_index=False).agg(
+            **{f"{period.lower()}_peak_count": ("count", "sum"), f"{period.lower()}_peak_pcu": ("pcu", "sum")}
+        )
+        totals = totals.merge(peak_totals, on=keys, how="left")
+        for column in (f"{period.lower()}_peak_count", f"{period.lower()}_peak_pcu"):
+            totals[column] = totals[column].fillna(0)
+    code_order = {code: index for index, code in enumerate(APPROACH_MOVEMENT_CODES)}
+    totals["_order"] = totals["movement_code"].map(code_order).fillna(len(code_order))
+    totals = totals.sort_values(["_order", "source_stream", "source_direction"]).drop(columns="_order")
+    return totals[columns].reset_index(drop=True)
+
+
+def _add_v2_summary_sheet(workbook, diagram_data: pd.DataFrame, stream_data: pd.DataFrame, peaks: pd.DataFrame, setup: dict[str, Any]) -> None:
+    summary = workbook.create_sheet("Summary", 0)
+    summary.sheet_view.showGridLines = False
+    summary.sheet_view.zoomScale = 65
+    png = render_v2_intersection_summary_png(diagram_data, peaks, setup)
+    image = OpenpyxlImage(BytesIO(png))
+    image.width = 1300
+    image.height = 812
+    summary.add_image(image, "A1")
+    summary.cell(
+        44,
+        1,
+        "Source-stream PCU detail retains decimals; schematic AM/PM movement values follow Hourly_Movement_PCU rounding.",
+    ).font = Font(italic=True, size=9, color="475569")
+    header_row = 45
+    summary.cell(header_row, 1, "V2 movement values by source stream")
+    summary.cell(header_row, 1).font = Font(bold=True, size=12, color="17324D")
+    for column_index, column in enumerate(stream_data.columns, start=1):
+        cell = summary.cell(header_row + 1, column_index, column)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
+        cell.alignment = Alignment(horizontal="center")
+    for row_index, row in enumerate(stream_data.itertuples(index=False, name=None), start=header_row + 2):
+        for column_index, value in enumerate(row, start=1):
+            cell = summary.cell(row_index, column_index, None if pd.isna(value) else value)
+            if column_index >= 4:
+                cell.number_format = "#,##0.0" if "pcu" in str(stream_data.columns[column_index - 1]) else "#,##0"
+    widths = [18, 18, 20, 15, 15, 15, 15, 15, 15]
+    for index, width in enumerate(widths, start=1):
+        summary.column_dimensions[get_column_letter(index)].width = width
+    summary.freeze_panes = f"A{header_row + 2}"
+    summary.sheet_properties.pageSetUpPr.fitToPage = True
+    summary.page_setup.orientation = "landscape"
+    summary.page_setup.paperSize = summary.PAPERSIZE_A3
+    summary.page_setup.fitToWidth = 1
+    summary.page_setup.fitToHeight = 0
+    summary.page_margins.left = 0.25
+    summary.page_margins.right = 0.25
+    summary.page_margins.top = 0.35
+    summary.page_margins.bottom = 0.35
+    summary.print_area = f"A1:I{header_row + len(stream_data) + 1}"
 
 
 def _v2_hourly_movement_frame(hourly_movement: pd.DataFrame) -> pd.DataFrame:
@@ -1469,6 +1571,7 @@ def export_v2_generated_workbook(
         hourly_movement_pcu=hourly_movement,
         peaks=peaks,
     )
+    source_stream_summary = _v2_source_stream_summary(normalized, peaks)
 
     sheets: dict[str, pd.DataFrame] = {
         "Export_Metadata": _v2_export_metadata_frame(
@@ -1504,6 +1607,7 @@ def export_v2_generated_workbook(
                 sheet_name,
                 create_excel_tables=create_excel_tables,
             )
+        _add_v2_summary_sheet(writer.book, movement_diagram, source_stream_summary, peaks, setup)
     return buffer.getvalue()
 
 

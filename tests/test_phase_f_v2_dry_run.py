@@ -250,13 +250,78 @@ def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
     assert "Vehicle_Composition" in workbook.sheetnames
     assert "Peak_Summary" in workbook.sheetnames
     assert "QC_Check" in workbook.sheetnames
+    assert workbook.sheetnames[0] == "Summary"
+    assert len(workbook["Summary"]._images) == 1
+    summary_headers = [
+        [cell.value for cell in row]
+        for row in workbook["Summary"].iter_rows()
+        if row[0].value == "movement_code"
+    ]
+    assert summary_headers == [[
+        "movement_code", "source_stream", "source_direction", "total_count", "total_pcu",
+        "am_peak_count", "am_peak_pcu", "pm_peak_count", "pm_peak_pcu",
+    ]]
+    with ZipFile(BytesIO(workbook_bytes)) as package:
+        assert package.testzip() is None
+        assert any(name.startswith("xl/media/") and name.endswith(".png") for name in package.namelist())
+        assert "xl/drawings/drawing1.xml" in package.namelist()
+        assert "xl/drawings/_rels/drawing1.xml.rels" in package.namelist()
+        assert "xl/worksheets/_rels/sheet1.xml.rels" in package.namelist()
+
+
+def test_v2_generated_summary_reconciles_duplicate_codes_by_source_stream() -> None:
+    result = _dry_run_with_preset()
+    duplicated = result.normalized.index[
+        (result.normalized["movement_code"] == "NT") & (result.normalized["source_stream"] == "mainline")
+    ]
+    result.normalized.loc[duplicated[: len(duplicated) // 2], "source_stream"] = "frontage"
+    peaks = result.peaks.set_index("period")
+    setup = {
+        **_setup(),
+        "survey_point": "Synthetic Junction",
+        "survey_date_text": "2026-01-01",
+        "am_peak_start": peaks.loc["AM", "peak_start"],
+        "am_peak_end": peaks.loc["AM", "peak_end"],
+        "pm_peak_start": peaks.loc["PM", "peak_start"],
+        "pm_peak_end": peaks.loc["PM", "peak_end"],
+        "peak_selection_source": "user_confirmed",
+    }
+    workbook = load_workbook(
+        BytesIO(export_v2_generated_workbook(result, setup=setup)),
+        data_only=False,
+    )
+    rows = list(workbook["Summary"].iter_rows(values_only=True))
+    header_index = next(index for index, row in enumerate(rows) if row[0] == "movement_code")
+    records = [dict(zip(rows[header_index], row)) for row in rows[header_index + 1 :] if row[0]]
+    nt_rows = [row for row in records if row["movement_code"] == "NT"]
+    assert {row["source_stream"] for row in nt_rows} == {"frontage", "mainline"}
+    assert sum(row["total_count"] for row in nt_rows) == pytest.approx(
+        result.normalized.loc[result.normalized["movement_code"] == "NT", "count"].sum()
+    )
+    assert sum(row["total_pcu"] for row in nt_rows) == pytest.approx(
+        result.normalized.loc[result.normalized["movement_code"] == "NT", "pcu"].sum()
+    )
+    assert sum(row["am_peak_pcu"] for row in records) == pytest.approx(peaks.loc["AM", "hourly_pcu"])
+    assert sum(row["pm_peak_pcu"] for row in records) == pytest.approx(peaks.loc["PM", "hourly_pcu"])
+    movement_headers = [cell.value for cell in workbook["Movement_Diagram_Data"][1]]
+    movement_rows = list(workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
+    assert [row[0] for row in movement_rows] == APPROACH_MOVEMENT_CODES
+    diagram = {row[0]: dict(zip(movement_headers, row)) for row in movement_rows}
+    for code in APPROACH_MOVEMENT_CODES:
+        grouped = [row for row in records if row["movement_code"] == code]
+        assert sum(row["total_count"] for row in grouped) == pytest.approx(diagram[code]["total_count"])
+        assert sum(row["total_pcu"] for row in grouped) == pytest.approx(diagram[code]["total_pcu"])
+        assert sum(row["am_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["am_peak_pcu"], abs=0.5)
+        assert sum(row["pm_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["pm_peak_pcu"], abs=0.5)
+    confirmed_peaks = list(workbook["Peak_Summary"].iter_rows(min_row=2, values_only=True))
+    assert all(row[7] == "user_confirmed" for row in confirmed_peaks)
 
     metadata = _sheet_records(workbook, "Export_Metadata")
     assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
     assert metadata["template_version"] == "generated_approach_movement_v2"
     assert metadata["export_template"] == "generated_approach_movement_v2"
     assert metadata["export_mode_used"] == "Safe PNG Export Mode"
-    assert "openpyxl template helper is limited to structural/internal validation" in metadata["v2_export_limitation_notes"]
+    assert "embedded conceptual four-leg schematic" in metadata["v2_export_limitation_notes"]
 
 
 def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:

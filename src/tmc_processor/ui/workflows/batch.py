@@ -9,6 +9,8 @@ from tmc_processor.ui.components.export import (
     SAFE_PNG_DESCRIPTION,
     STANDARD_REPORT_DESCRIPTION,
     STANDARD_REPORT_TITLE,
+    V2_GENERATED_SUMMARY_DESCRIPTION,
+    V2_GENERATED_SUMMARY_TITLE,
     operator_fallback_message,
     operator_report_label,
 )
@@ -1031,9 +1033,15 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     with batch_export_left:
         with st.container(border=True):
             _render_section_header("รูปแบบรายงาน", "รูปแบบที่จะได้รับจากการส่งออก Batch")
-            _render_status_chip(operator_report_label(batch_export_mode), "success" if export_mode_ready else "warning")
+            v2_generated = batch_mapping_scheme == "approach_movement"
+            _render_status_chip(
+                V2_GENERATED_SUMMARY_TITLE if v2_generated else operator_report_label(batch_export_mode),
+                "success" if export_mode_ready else "warning",
+            )
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
                 st.caption(STANDARD_REPORT_DESCRIPTION)
+            elif v2_generated:
+                st.caption(V2_GENERATED_SUMMARY_DESCRIPTION)
             else:
                 st.caption(SAFE_PNG_DESCRIPTION)
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) and len(batch_uploads or []) > 10:

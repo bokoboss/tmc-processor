@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import time
 from io import BytesIO
@@ -13,7 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch, Polygon, Rectangle
+from matplotlib.patches import FancyArrowPatch, PathPatch, Polygon, Rectangle
+from matplotlib.path import Path as MplPath
 import pandas as pd
 
 from .movement_scheme import (
@@ -280,6 +282,10 @@ def _v2_diagram_frame(diagram_data: pd.DataFrame) -> pd.DataFrame:
                 "movement_type_label": source.get("movement_type_label", movement_type_label(parsed.movement_type)),
                 "total_count": _numeric_value(source.get("total_count", 0)),
                 "total_pcu": _numeric_value(source.get("total_pcu", 0)),
+                "am_peak_count": _numeric_value(source.get("am_peak_count", 0)),
+                "am_peak_pcu": _numeric_value(source.get("am_peak_pcu", 0)),
+                "pm_peak_count": _numeric_value(source.get("pm_peak_count", 0)),
+                "pm_peak_pcu": _numeric_value(source.get("pm_peak_pcu", 0)),
                 "diagram_order": order,
             }
         )
@@ -380,6 +386,120 @@ def render_v2_movement_diagram_png(diagram_data: pd.DataFrame) -> bytes:
         color="#4B5563",
     )
     fig.tight_layout(rect=(0.02, 0.05, 0.98, 0.94), h_pad=2.0, w_pad=1.2)
+    return _write_png(fig)
+
+
+def render_v2_intersection_summary_png(
+    diagram_data: pd.DataFrame,
+    peaks: pd.DataFrame,
+    setup: Mapping[str, Any] | None = None,
+) -> bytes:
+    """Render V2 movements as actual travel paths through a four-leg junction."""
+
+    _configure_fonts()
+    setup = setup or {}
+    frame = _v2_diagram_frame(diagram_data)
+    lookup = {row.movement_code: row for row in frame.itertuples(index=False)}
+    peak_lookup = {
+        str(row.get("period", "")).upper(): row
+        for _, row in (peaks if peaks is not None else pd.DataFrame()).iterrows()
+    }
+    peak_text = []
+    for period in ("AM", "PM"):
+        row = peak_lookup.get(period, {})
+        start = str(row.get("peak_start", ""))[:5]
+        end = str(row.get("peak_end", ""))[:5]
+        total = _numeric_value(row.get("hourly_pcu", 0))
+        source = str(row.get("peak_selection_source", "")).casefold()
+        label = f"{period} Confirmed Peak" if source in {"user_confirmed", "user_confirmed_batch"} else f"{period} Peak"
+        peak_text.append(f"{label} {start}-{end}   {total:,.0f} PCU")
+    total_pcu = sum(_numeric_value(getattr(row, "total_pcu", 0)) for row in lookup.values())
+
+    fig, ax = plt.subplots(figsize=(16, 10), dpi=150)
+    fig.patch.set_facecolor("white")
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.add_patch(Rectangle((42, 34), 16, 32, facecolor="#E8EAED", edgecolor="none", zorder=0))
+    ax.add_patch(Rectangle((34, 42), 32, 16, facecolor="#E8EAED", edgecolor="none", zorder=0))
+    for x in (42, 58):
+        ax.plot([x, x], [34, 42], color="white", lw=1.4, ls=(0, (3, 3)), zorder=1)
+        ax.plot([x, x], [58, 66], color="white", lw=1.4, ls=(0, (3, 3)), zorder=1)
+    for y in (42, 58):
+        ax.plot([34, 42], [y, y], color="white", lw=1.4, ls=(0, (3, 3)), zorder=1)
+        ax.plot([58, 66], [y, y], color="white", lw=1.4, ls=(0, (3, 3)), zorder=1)
+    ax.add_patch(Rectangle((42, 42), 16, 16, facecolor="#F4F5F7", edgecolor="white", lw=1.3, zorder=1))
+
+    # Travel headings define the inbound arm. Left/right turns are relative to
+    # that heading; no v1 from-to movement-code interpretation is used here.
+    heading = {"N": (0, 1), "S": (0, -1), "E": (1, 0), "W": (-1, 0)}
+    turn_angle = {"L": 90, "T": 0, "R": -90, "U": 180}
+    colors = {"L": "#2563EB", "T": "#15803D", "R": "#D97706", "U": "#7C3AED"}
+    for code in APPROACH_MOVEMENT_CODES:
+        direction, turn = code
+        dx, dy = heading[direction]
+        theta = turn_angle[turn]
+        radians = math.radians(theta)
+        ex = dx * math.cos(radians) - dy * math.sin(radians)
+        ey = dx * math.sin(radians) + dy * math.cos(radians)
+        lane = {"L": -1.7, "T": -0.55, "R": 0.55, "U": 1.7}[turn]
+        # Right-hand local normal here only spaces the four schematic paths;
+        # the movement's physical destination is set by its travel heading.
+        nx, ny = dy, -dx
+        sx, sy = 50 - dx * 16 + nx * lane, 50 - dy * 16 + ny * lane
+        tx, ty = 50 + ex * 16 + nx * lane, 50 + ey * 16 + ny * lane
+        p0 = (sx, sy)
+        p3 = (tx, ty)
+        scale = 12 if turn == "T" else 9
+        p1 = (sx + dx * scale, sy + dy * scale)
+        p2 = (tx - ex * scale, ty - ey * scale)
+        route = MplPath([p0, p1, p2, p3], [MplPath.MOVETO, MplPath.CURVE4, MplPath.CURVE4, MplPath.CURVE4])
+        arrow = FancyArrowPatch(
+            path=route,
+            arrowstyle="-|>",
+            mutation_scale=12,
+            linewidth=1.7,
+            color=colors[turn],
+            alpha=0.9,
+            zorder=3,
+        )
+        ax.add_patch(arrow)
+
+    # Value cards sit around the road. Each row reports the actual movement
+    # code and the exact total/peak values used by the workbook tables.
+    cards = [
+        ("N", "Northbound", (2, 59)),
+        ("S", "Southbound", (62, 59)),
+        ("W", "Westbound", (2, 2)),
+        ("E", "Eastbound", (62, 2)),
+    ]
+    for direction, label, (x, y) in cards:
+        width, height = 36, 26
+        ax.add_patch(Rectangle((x, y), width, height, facecolor="white", edgecolor="#64748B", lw=1.0, zorder=4))
+        ax.add_patch(Rectangle((x, y + height - 4), width, 4, facecolor="#EAF0F6", edgecolor="#64748B", lw=0.8, zorder=4))
+        ax.text(x + 1, y + height - 2, f"{label} movements", ha="left", va="center", fontsize=9, fontweight="bold", color="#17324D", zorder=5)
+        ax.text(x + 1, y + height - 6.0, "Code   Total Count   Total PCU   AM PCU   PM PCU", ha="left", va="center", fontsize=6.4, fontweight="bold", color="#475569", zorder=5)
+        for row_index, turn in enumerate(("L", "T", "R", "U")):
+            code = f"{direction}{turn}"
+            item = lookup[code]
+            row_y = y + height - 9 - row_index * 3.7
+            ax.add_patch(Rectangle((x + 0.6, row_y - 1.1), 2.2, 2.2, facecolor=colors[turn], edgecolor="none", zorder=5))
+            ax.text(x + 4, row_y, code, ha="left", va="center", fontsize=7.1, fontweight="bold", color="#111827", zorder=5)
+            ax.text(x + 11.2, row_y, f"{item.total_count:,.0f}", ha="right", va="center", fontsize=6.8, color="#111827", zorder=5)
+            ax.text(x + 19.0, row_y, f"{item.total_pcu:,.1f}", ha="right", va="center", fontsize=6.8, color="#111827", zorder=5)
+            ax.text(x + 26.1, row_y, f"{_numeric_value(getattr(item, 'am_peak_pcu', 0)):,.1f}", ha="right", va="center", fontsize=6.8, color="#111827", zorder=5)
+            ax.text(x + 34.7, row_y, f"{_numeric_value(getattr(item, 'pm_peak_pcu', 0)):,.1f}", ha="right", va="center", fontsize=6.8, color="#111827", zorder=5)
+
+    title = " ".join(str(setup.get(key, "") or "").strip() for key in ("tmc_id", "tmc_name")).strip()
+    ax.text(50, 99, title or "Four-leg intersection movement summary", ha="center", va="top", fontsize=14, fontweight="bold", color="#111827")
+    site = str(setup.get("survey_point") or setup.get("tmc_name") or "").strip()
+    date = str(setup.get("survey_date_text") or setup.get("survey_date") or "").strip()
+    ax.text(50, 95.5, f"Site: {site or '—'}   |   Survey date: {date or '—'}   |   Total PCU: {total_pcu:,.0f}", ha="center", va="top", fontsize=8.5, color="#334155")
+    ax.text(50, 92.5, "     |     ".join(peak_text), ha="center", va="top", fontsize=9, fontweight="bold", color="#17324D")
+    ax.text(50, 89.5, "Conceptual schematic — not to scale", ha="center", va="top", fontsize=7.5, color="#475569")
+    ax.text(50, 50, "Intersection", ha="center", va="center", fontsize=6.5, color="#64748B", zorder=2)
+    fig.tight_layout(pad=0.4)
     return _write_png(fig)
 
 

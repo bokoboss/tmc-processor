@@ -721,7 +721,12 @@ def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
     with ZipFile(BytesIO(result.package_bytes)) as archive:
         first_row = result.summary_rows[0]
         summary_text = archive.read(f"{first_row.folder_name}/{first_row.output_stem}_export_summary.txt").decode("utf-8")
+        report_bytes = archive.read(f"{first_row.folder_name}/{first_row.output_stem}_report.xlsx")
         summary_bytes = archive.read("batch_summary.xlsx")
+
+    report_workbook = load_workbook(BytesIO(report_bytes), data_only=False)
+    assert report_workbook.sheetnames[0] == "Summary"
+    assert len(report_workbook["Summary"]._images) == 1
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
