@@ -659,12 +659,12 @@ def test_v2_batch_rejects_mixed_v1_v2_mapping_codes() -> None:
     assert all("invalid approach_movement" in item.notes for item in analysis.items)
 
 
-def test_v2_batch_safe_png_zip_contains_expected_artifacts_without_raw_inputs() -> None:
+def test_v2_batch_template_zip_contains_authored_summary_without_raw_inputs() -> None:
     result = process_batch_files(
         _demo_items(),
         mapping_preset=_v2_preset(),
         setup=_setup(),
-        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
         generated_at="2026-05-19T10:00:00Z",
     )
 
@@ -674,7 +674,7 @@ def test_v2_batch_safe_png_zip_contains_expected_artifacts_without_raw_inputs() 
         first = result.summary_rows[0]
         summary_text = archive.read(f"{first.folder_name}/{first.output_stem}_export_summary.txt").decode("utf-8")
         diagram_csv = archive.read(f"{first.folder_name}/diagram/movement_diagram_data.csv").decode("utf-8")
-        diagram_png = archive.read(f"{first.folder_name}/diagram/movement_diagram.png")
+        first_report_bytes = archive.read(f"{first.folder_name}/{first.output_stem}_report.xlsx")
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     assert {"metadata", "Batch_Summary", "Batch_QC"}.issubset(set(workbook.sheetnames))
@@ -685,19 +685,25 @@ def test_v2_batch_safe_png_zip_contains_expected_artifacts_without_raw_inputs() 
 
     assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
     assert all(record["movement_code_scheme"] == MOVEMENT_SCHEME_V2 for record in summary_records)
-    assert all(record["export_mode_requested"] == BATCH_SAFE_PNG_EXPORT_MODE for record in summary_records)
-    assert all(record["export_mode_used"] == BATCH_SAFE_PNG_EXPORT_MODE for record in summary_records)
+    assert all(record["export_mode_requested"] == BATCH_EXCEL_TEMPLATE_EXPORT_MODE for record in summary_records)
+    assert all(record["export_mode_used"] == BATCH_EXCEL_TEMPLATE_EXPORT_MODE for record in summary_records)
     assert all(record["export_status"] == "success" for record in summary_records)
     for row in result.summary_rows:
         assert row.movement_code_scheme == MOVEMENT_SCHEME_V2
         assert f"{row.folder_name}/{row.output_stem}_report.xlsx" in names
         assert f"{row.folder_name}/diagram/movement_diagram_data.csv" in names
-        assert f"{row.folder_name}/diagram/movement_diagram.png" in names
+        assert f"{row.folder_name}/diagram/movement_diagram.png" not in names
     assert DAY1.name not in names
     assert DAY2.name not in names
     assert "movement_code_scheme: approach_movement" in summary_text
     assert "NL,N,Northbound,L,Left turn" in diagram_csv
-    assert diagram_png.startswith(b"\x89PNG\r\n\x1a\n")
+    first_report = load_workbook(BytesIO(first_report_bytes), data_only=False)
+    assert first_report.sheetnames[0] == "Summary"
+    assert len(first_report["Summary"]._images) == 0
+    with ZipFile(BytesIO(first_report_bytes)) as report_package:
+        assert "xl/charts/chart1.xml" in report_package.namelist()
+        assert "xl/charts/chart2.xml" in report_package.namelist()
+        assert "xl/drawings/drawing1.xml" in report_package.namelist()
 
 
 def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
@@ -715,7 +721,7 @@ def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
     result = generate_batch_zip_from_reviewed_peaks(
         analysis,
         setup=_setup(),
-        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
     )
 
     with ZipFile(BytesIO(result.package_bytes)) as archive:
@@ -726,7 +732,10 @@ def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
 
     report_workbook = load_workbook(BytesIO(report_bytes), data_only=False)
     assert report_workbook.sheetnames[0] == "Summary"
-    assert len(report_workbook["Summary"]._images) == 1
+    assert len(report_workbook["Summary"]._images) == 0
+    with ZipFile(BytesIO(report_bytes)) as report_package:
+        assert "xl/charts/chart1.xml" in report_package.namelist()
+        assert "xl/charts/chart2.xml" in report_package.namelist()
 
     workbook = load_workbook(BytesIO(summary_bytes), read_only=True, data_only=True)
     rows = list(workbook["Batch_Summary"].iter_rows(values_only=True))
@@ -739,17 +748,20 @@ def test_v2_batch_confirmed_peak_override_is_used_in_export_summary() -> None:
     assert "Peak selection source: user_confirmed_batch" in summary_text
 
 
-def test_v2_batch_excel_template_mode_is_blocked_with_clear_message() -> None:
-    analysis = analyze_batch_files(
+def test_v2_batch_excel_template_mode_is_supported() -> None:
+    result = process_batch_files(
         _demo_items(),
         mapping_preset=_v2_preset(),
         setup=_setup(),
+        export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
         generated_at="2026-05-19T10:00:00Z",
     )
-
-    with pytest.raises(ValueError, match="Excel Template Mode สำหรับ Batch approach_movement"):
-        generate_batch_zip_from_reviewed_peaks(
-            analysis,
-            setup=_setup(),
-            export_mode=BATCH_EXCEL_TEMPLATE_EXPORT_MODE,
-        )
+    assert [row.status for row in result.summary_rows] == ["success", "success"], [row.notes for row in result.summary_rows]
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        first = result.summary_rows[0]
+        report_bytes = archive.read(f"{first.folder_name}/{first.output_stem}_report.xlsx")
+    report = load_workbook(BytesIO(report_bytes), data_only=False)
+    assert report.sheetnames[0] == "Summary"
+    with ZipFile(BytesIO(report_bytes)) as report_package:
+        assert "xl/charts/chart1.xml" in report_package.namelist()
+        assert "xl/charts/chart2.xml" in report_package.namelist()

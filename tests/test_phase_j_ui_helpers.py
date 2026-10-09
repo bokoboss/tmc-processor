@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 from openpyxl import load_workbook
 import pandas as pd
@@ -134,8 +135,20 @@ def test_v2_result_feeds_peak_review_hourly_data_helper() -> None:
     assert "Total" in hourly.columns
 
 
-def test_v2_ui_export_helper_produces_generated_workbook() -> None:
+def test_v2_single_ui_export_uses_authored_template_without_excel_com(monkeypatch: pytest.MonkeyPatch) -> None:
     result, mapping = _v2_result()
+    export_payload = app._workflow_export_payload(
+        _setup(MOVEMENT_SCHEME_V1),
+        movement_code_scheme=MOVEMENT_SCHEME_V2,
+        export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
+    )
+    assert export_payload["template_version"] == "four_leg_approach_movement_v2"
+    assert Path(str(export_payload["template_path"])).name == "four_leg_tmc_report_template_approach_v2.xlsx"
+
+    def fail_if_called(*args: object, **kwargs: object) -> bytes:
+        raise AssertionError("V2 Single export must use direct OOXML")
+
+    monkeypatch.setattr(app, "export_v2_template_workbook_com", fail_if_called)
 
     workbook_bytes = app._export_single_file_for_ui(
         result=result,
@@ -149,38 +162,47 @@ def test_v2_ui_export_helper_produces_generated_workbook() -> None:
     )
     workbook = load_workbook(BytesIO(workbook_bytes), read_only=True)
 
+    assert workbook.sheetnames[0] == "Summary"
     assert "Hourly_Movement_PCU" in workbook.sheetnames
     assert "Movement_Diagram_Data" in workbook.sheetnames
+    assert "Movement_Source_Stream_Audit" in workbook.sheetnames
+    with ZipFile(BytesIO(workbook_bytes)) as exported, ZipFile(ROOT / "templates" / "four_leg_tmc_report_template_approach_v2.xlsx") as template:
+        assert exported.testzip() is None
+        assert exported.read("xl/drawings/drawing1.xml") == template.read("xl/drawings/drawing1.xml")
+        assert exported.read("xl/charts/chart1.xml")
+        assert exported.read("xl/charts/chart2.xml")
 
 
-def test_v2_ui_export_helper_blocks_excel_template_mode_without_openpyxl_template_export(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_v2_single_template_mode_does_not_call_excel_com(monkeypatch: pytest.MonkeyPatch) -> None:
     result, mapping = _v2_result()
 
     def fail_if_called(*args: object, **kwargs: object) -> bytes:
-        raise AssertionError("v2 UI Excel Template Mode must not call COM export when COM is unavailable")
+        raise AssertionError("V2 template export must not require Excel COM")
 
     monkeypatch.setattr(app, "export_v2_template_workbook_com", fail_if_called)
 
-    with pytest.raises(ValueError, match="Excel Template Mode สำหรับ approach_movement ต้องใช้ Excel COM"):
-        app._export_single_file_for_ui(
-            result=result,
-            mapping=mapping,
-            setup=_setup(MOVEMENT_SCHEME_V2),
-            export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
-            use_template_report_layout=True,
-            use_excel_com_native_charts=False,
-            source_file_name=RAW_WORKBOOK.name,
-            generated_at="2026-05-26 12:00:00",
-        )
+    workbook_bytes = app._export_single_file_for_ui(
+        result=result,
+        mapping=mapping,
+        setup=_setup(MOVEMENT_SCHEME_V2),
+        export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
+        use_template_report_layout=True,
+        use_excel_com_native_charts=False,
+        source_file_name=RAW_WORKBOOK.name,
+        generated_at="2026-05-26 12:00:00",
+    )
+    with ZipFile(BytesIO(workbook_bytes)) as package:
+        assert package.testzip() is None
+        assert "xl/drawings/drawing1.xml" in package.namelist()
 
 
-def test_v2_excel_com_native_mode_uses_com_template_export(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_v2_single_export_never_selects_excel_com_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     result, mapping = _v2_result()
     calls: list[dict[str, object]] = []
 
     def fake_com_export(*args: object, **kwargs: object) -> bytes:
         calls.append({"args": args, "kwargs": kwargs})
-        return b"PK-v2-com"
+        raise AssertionError("V2 Single export must not call Excel COM")
 
     monkeypatch.setattr(app, "export_v2_template_workbook_com", fake_com_export)
 
@@ -190,14 +212,16 @@ def test_v2_excel_com_native_mode_uses_com_template_export(monkeypatch: pytest.M
         setup=_setup(MOVEMENT_SCHEME_V2),
         export_mode=app.EXCEL_TEMPLATE_EXPORT_MODE,
         use_template_report_layout=True,
-        use_excel_com_native_charts=True,
+        use_excel_com_native_charts=False,
         source_file_name=RAW_WORKBOOK.name,
         generated_at="2026-05-26 12:00:00",
     )
 
-    assert workbook_bytes == b"PK-v2-com"
-    assert len(calls) == 1
-    assert calls[0]["kwargs"]["setup"]["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert workbook_bytes.startswith(b"PK")
+    assert calls == []
+    with ZipFile(BytesIO(workbook_bytes)) as package:
+        assert package.testzip() is None
+        assert "xl/drawings/drawing1.xml" in package.namelist()
 
 
 def test_v2_batch_analysis_is_ready_for_phase_k() -> None:

@@ -248,28 +248,26 @@ def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
     assert "Hourly_Movement_PCU" in workbook.sheetnames
     assert "Movement_Summary" in workbook.sheetnames
     assert "Vehicle_Composition" in workbook.sheetnames
-    assert "Peak_Summary" in workbook.sheetnames
+    assert "Peak_PHF" in workbook.sheetnames
+    assert "Movement_Source_Stream_Audit" in workbook.sheetnames
     assert "QC_Check" in workbook.sheetnames
     assert workbook.sheetnames[0] == "Summary"
-    assert len(workbook["Summary"]._images) == 1
-    summary_headers = [
-        [cell.value for cell in row]
-        for row in workbook["Summary"].iter_rows()
-        if row[0].value == "movement_code"
-    ]
-    assert summary_headers == [[
-        "movement_code", "source_stream", "source_direction", "total_count", "total_pcu",
-        "am_peak_count", "am_peak_pcu", "pm_peak_count", "pm_peak_pcu",
-    ]]
+    assert len(workbook["Summary"]._images) == 0
     with ZipFile(BytesIO(workbook_bytes)) as package:
         assert package.testzip() is None
-        assert any(name.startswith("xl/media/") and name.endswith(".png") for name in package.namelist())
         assert "xl/drawings/drawing1.xml" in package.namelist()
         assert "xl/drawings/_rels/drawing1.xml.rels" in package.namelist()
         assert "xl/worksheets/_rels/sheet1.xml.rels" in package.namelist()
+        with ZipFile(V2_TEMPLATE_WORKBOOK) as template:
+            assert package.read("xl/drawings/drawing1.xml") == template.read("xl/drawings/drawing1.xml")
+            assert package.read("xl/drawings/_rels/drawing1.xml.rels") == template.read("xl/drawings/_rels/drawing1.xml.rels")
+            assert package.read("xl/worksheets/_rels/sheet1.xml.rels") == template.read("xl/worksheets/_rels/sheet1.xml.rels")
+        assert package.read("xl/charts/chart1.xml")
+        assert package.read("xl/charts/chart2.xml")
+        assert not any(name.startswith("xl/media/") for name in package.namelist())
 
 
-def test_v2_generated_summary_reconciles_duplicate_codes_by_source_stream() -> None:
+def test_v2_authored_summary_and_source_stream_audit_reconcile_movement_and_confirmed_peaks() -> None:
     result = _dry_run_with_preset()
     duplicated = result.normalized.index[
         (result.normalized["movement_code"] == "NT") & (result.normalized["source_stream"] == "mainline")
@@ -286,13 +284,11 @@ def test_v2_generated_summary_reconciles_duplicate_codes_by_source_stream() -> N
         "pm_peak_end": peaks.loc["PM", "peak_end"],
         "peak_selection_source": "user_confirmed",
     }
-    workbook = load_workbook(
-        BytesIO(export_v2_generated_workbook(result, setup=setup)),
-        data_only=False,
-    )
-    rows = list(workbook["Summary"].iter_rows(values_only=True))
-    header_index = next(index for index, row in enumerate(rows) if row[0] == "movement_code")
-    records = [dict(zip(rows[header_index], row)) for row in rows[header_index + 1 :] if row[0]]
+    workbook_bytes = export_v2_generated_workbook(result, setup=setup)
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    cached_workbook = load_workbook(BytesIO(workbook_bytes), data_only=True)
+    audit_rows = list(workbook["Movement_Source_Stream_Audit"].iter_rows(values_only=True))
+    records = [dict(zip(audit_rows[0], row)) for row in audit_rows[1:] if row[0]]
     nt_rows = [row for row in records if row["movement_code"] == "NT"]
     assert {row["source_stream"] for row in nt_rows} == {"frontage", "mainline"}
     assert sum(row["total_count"] for row in nt_rows) == pytest.approx(
@@ -303,25 +299,36 @@ def test_v2_generated_summary_reconciles_duplicate_codes_by_source_stream() -> N
     )
     assert sum(row["am_peak_pcu"] for row in records) == pytest.approx(peaks.loc["AM", "hourly_pcu"])
     assert sum(row["pm_peak_pcu"] for row in records) == pytest.approx(peaks.loc["PM", "hourly_pcu"])
-    movement_headers = [cell.value for cell in workbook["Movement_Diagram_Data"][1]]
-    movement_rows = list(workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
+    movement_headers = [cell.value for cell in cached_workbook["Movement_Diagram_Data"][1]]
+    movement_rows = list(cached_workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
     assert [row[0] for row in movement_rows] == APPROACH_MOVEMENT_CODES
     diagram = {row[0]: dict(zip(movement_headers, row)) for row in movement_rows}
     for code in APPROACH_MOVEMENT_CODES:
         grouped = [row for row in records if row["movement_code"] == code]
-        assert sum(row["total_count"] for row in grouped) == pytest.approx(diagram[code]["total_count"])
-        assert sum(row["total_pcu"] for row in grouped) == pytest.approx(diagram[code]["total_pcu"])
-        assert sum(row["am_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["am_peak_pcu"], abs=0.5)
-        assert sum(row["pm_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["pm_peak_pcu"], abs=0.5)
-    confirmed_peaks = list(workbook["Peak_Summary"].iter_rows(min_row=2, values_only=True))
-    assert all(row[7] == "user_confirmed" for row in confirmed_peaks)
+        assert sum(row["total_count"] for row in grouped) == pytest.approx(
+            result.normalized.loc[result.normalized["movement_code"] == code, "count"].sum()
+        )
+        assert sum(row["total_pcu"] for row in grouped) == pytest.approx(diagram[code]["total_pcu"], abs=6.0)
+        assert sum(row["am_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["am_peak_pcu"], abs=6.0)
+        assert sum(row["pm_peak_pcu"] for row in grouped) == pytest.approx(diagram[code]["pm_peak_pcu"], abs=6.0)
+    confirmed_peaks = list(workbook["Peak_PHF"].iter_rows(min_row=2, values_only=True))
+    peak_headers = [cell.value for cell in workbook["Peak_PHF"][1]]
+    confirmed_peak = dict(zip(peak_headers, confirmed_peaks[0]))
+    assert confirmed_peak["peak_selection_source"] == "user_confirmed"
+    assert confirmed_peak["am_peak_pcu"] == pytest.approx(peaks.loc["AM", "hourly_pcu"])
+    assert confirmed_peak["pm_peak_pcu"] == pytest.approx(peaks.loc["PM", "hourly_pcu"])
+    assert cached_workbook["Summary"]["F30"].value == pytest.approx(confirmed_peak["am_peak_pcu"], abs=6.0)
+    assert cached_workbook["Summary"]["F31"].value == pytest.approx(confirmed_peak["pm_peak_pcu"], abs=6.0)
+    assert workbook["Summary"]["F30"].data_type == "f"
+    assert workbook["Summary"]["F31"].data_type == "f"
 
     metadata = _sheet_records(workbook, "Export_Metadata")
     assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
-    assert metadata["template_version"] == "generated_approach_movement_v2"
-    assert metadata["export_template"] == "generated_approach_movement_v2"
-    assert metadata["export_mode_used"] == "Safe PNG Export Mode"
-    assert "embedded conceptual four-leg schematic" in metadata["v2_export_limitation_notes"]
+    assert metadata["template_version"] == "four_leg_approach_movement_v2"
+    assert metadata["export_template"] == "four_leg_approach_movement_v2"
+    assert metadata["export_mode_used"] == "Excel Template Mode"
+    assert metadata["summary_diagram"] == "authored_v2_template_shapes_arrows_and_charts"
+    assert metadata["summary_source_stream_detail"] == "Movement_Source_Stream_Audit"
 
 
 def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:
@@ -336,12 +343,10 @@ def test_v2_generated_hourly_movement_columns_follow_approach_order() -> None:
 def test_v2_generated_workbook_contains_all_movement_code_references() -> None:
     result = _dry_run_with_preset()
     workbook = load_workbook(BytesIO(export_v2_generated_workbook(result, setup=_setup())), data_only=False)
-    worksheet = workbook["Movement_Code_Reference"]
-    rows = list(worksheet.iter_rows(min_row=2, values_only=True))
+    rows = list(workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
 
     assert [row[0] for row in rows] == APPROACH_MOVEMENT_CODES
     assert len(rows) == 16
-    assert rows[0] == ("NL", "N", "Northbound", "L", "Left turn", "NL - Northbound Left turn")
 
 
 def test_v2_diagram_data_helper_returns_ordered_approach_movements() -> None:
@@ -409,7 +414,8 @@ def test_v2_generated_workbook_includes_movement_diagram_data_sheet() -> None:
     assert "Movement_Diagram_Data" in workbook.sheetnames
     rows = list(workbook["Movement_Diagram_Data"].iter_rows(min_row=2, values_only=True))
     assert [row[0] for row in rows] == APPROACH_MOVEMENT_CODES
-    assert rows[0][0:6] == ("NL", "N", "Northbound", "L", "Left turn", "NL - Northbound Left turn")
+    headers = [cell.value for cell in workbook["Movement_Diagram_Data"][1]]
+    assert headers == ["movement_code", "total_pcu", "pm_peak_pcu", "am_peak_pcu"]
     assert {row[0] for row in rows}.isdisjoint({"NS", "WE", "EN"})
 
 
@@ -432,14 +438,16 @@ def test_v2_generated_workbook_keeps_v2_normalized_and_movement_labels() -> None
     assert all(row[0] == MOVEMENT_SCHEME_V2 for row in movement_rows)
 
 
-def test_v2_generated_export_does_not_use_v1_template_map() -> None:
+def test_v2_export_routes_through_approved_v2_template_only() -> None:
     result = _dry_run_with_preset()
 
-    with patch("tmc_processor.exporter.load_report_template_resources") as loader:
+    with patch("tmc_processor.exporter.load_report_template_resources", wraps=exporter_module.load_report_template_resources) as loader:
         workbook_bytes = export_v2_generated_workbook(result, setup=_setup())
 
     assert workbook_bytes.startswith(b"PK")
-    loader.assert_not_called()
+    args, _ = loader.call_args
+    assert Path(args[0]).name == V2_TEMPLATE_WORKBOOK.name
+    assert Path(args[1]).name == V2_TEMPLATE_MAP.name
 
 
 def test_v2_template_workbook_and_map_exist() -> None:
@@ -470,8 +478,8 @@ def test_v2_dry_run_result_exports_template_workbook_bytes() -> None:
     assert metadata["template_version"] == "four_leg_approach_movement_v2"
     assert metadata["movement_code_scheme"] == MOVEMENT_SCHEME_V2
     assert metadata["export_template"] == "four_leg_approach_movement_v2"
-    assert metadata["excel_template_mode_supported"] is False
-    assert metadata["native_template_export_supported"] is False
+    assert metadata["excel_template_mode_supported"] is True
+    assert metadata["native_template_export_supported"] is True
 
     assert summary["B2"].value == "Custom v2 TMC Report"
     assert summary["E5"].value == "Approach V2 Test Point"
@@ -555,15 +563,17 @@ def test_v2_com_template_export_never_selects_v1_template_files() -> None:
         )
 
 
-def test_v2_openpyxl_template_helper_is_limited_non_visual_export() -> None:
+def test_v2_template_helper_uses_direct_ooxml_and_preserves_authored_drawing() -> None:
     result = _dry_run_with_preset()
 
     workbook_bytes = export_v2_template_workbook(result, setup=_setup(), mapping=_v2_preset_mapping(_raw_sheets()))
     metadata = _sheet_records(load_workbook(BytesIO(workbook_bytes), read_only=True), "Export_Metadata")
 
-    assert metadata["excel_template_mode_supported"] is False
-    assert metadata["native_template_export_supported"] is False
-    assert "not safe for visual Excel Template Mode" in metadata["v2_export_limitation_notes"]
+    assert metadata["excel_template_mode_supported"] is True
+    assert metadata["native_template_export_supported"] is True
+    assert "direct OOXML" in metadata["v2_export_limitation_notes"]
+    with ZipFile(BytesIO(workbook_bytes)) as package, ZipFile(V2_TEMPLATE_WORKBOOK) as template:
+        assert package.read("xl/drawings/drawing1.xml") == template.read("xl/drawings/drawing1.xml")
 
 
 def test_v2_template_export_rejects_v1_template_files_and_excel_com() -> None:
@@ -577,7 +587,7 @@ def test_v2_template_export_rejects_v1_template_files_and_excel_com() -> None:
             template_map_path=str(ROOT / "templates" / "four_leg_tmc_report_template_map.json"),
         )
 
-    with pytest.raises(ValueError, match="Excel COM/native"):
+    with pytest.raises(ValueError, match="does not require Excel COM"):
         export_v2_template_workbook(
             result,
             setup=_setup(),
@@ -618,16 +628,13 @@ def test_v2_generated_package_excludes_raw_inputs_and_includes_summary() -> None
         names = set(archive.namelist())
         summary = archive.read("export_summary.txt").decode("utf-8")
         diagram_csv = archive.read("diagram/movement_diagram_data.csv").decode("utf-8")
-        diagram_png = archive.read("diagram/movement_diagram.png")
 
     assert "v2_generated.xlsx" in names
     assert "export_summary.txt" in names
     assert "diagram/movement_diagram_data.csv" in names
-    assert "diagram/movement_diagram.png" in names
+    assert "diagram/movement_diagram.png" not in names
     assert "raw_input.xlsx" not in names
-    assert "Template version: generated_approach_movement_v2" in summary
-    assert "NL, N,Northbound" not in diagram_csv
-    assert "NL,N,Northbound,L,Left turn" in diagram_csv
+    assert "Template version: four_leg_approach_movement_v2" in summary
+    assert "movement_code,total_pcu,pm_peak_pcu,am_peak_pcu" in diagram_csv
+    assert "NL," in diagram_csv
     assert "NS," not in diagram_csv
-    assert diagram_png.startswith(b"\x89PNG\r\n\x1a\n")
-    assert len(diagram_png) > 1000

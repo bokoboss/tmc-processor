@@ -8,8 +8,8 @@ from tmc_processor.ui.components.export import (
     SAFE_PNG_TITLE,
     STANDARD_REPORT_DESCRIPTION,
     STANDARD_REPORT_TITLE,
-    V2_GENERATED_SUMMARY_DESCRIPTION,
-    V2_GENERATED_SUMMARY_TITLE,
+    V2_TEMPLATE_DESCRIPTION,
+    V2_TEMPLATE_TITLE,
     operator_fallback_message,
 )
 
@@ -960,6 +960,9 @@ def render_single_export(*, context: WorkflowContext) -> None:
     EXPORT_PREFERENCE_ADVANCED = context.operations.EXPORT_PREFERENCE_ADVANCED
     EXPORT_PREFERENCE_STANDARD = context.operations.EXPORT_PREFERENCE_STANDARD
     MOVEMENT_SCHEME_V2 = context.operations.MOVEMENT_SCHEME_V2
+    MOVEMENT_SCHEME_V1 = context.operations.MOVEMENT_SCHEME_V1
+    V2_TEMPLATE_MAP_PATH = context.operations.V2_TEMPLATE_MAP_PATH
+    V2_TEMPLATE_PATH = context.operations.V2_TEMPLATE_PATH
     PACKAGE_MIME = context.operations.PACKAGE_MIME
     PEAK_BINDING_FALLBACK_REASON = context.operations.PEAK_BINDING_FALLBACK_REASON
     PEAK_SELECTION_AUTO = context.operations.PEAK_SELECTION_AUTO
@@ -1091,7 +1094,9 @@ def render_single_export(*, context: WorkflowContext) -> None:
     effective_peaks = dict(export_peak_state.get("values") or {})
     confirmed_ready = bool(export_peak_state.get("ready"))
     _render_section_header("ส่งออกรายงาน", "สร้างรายงาน Excel และชุดไฟล์ประกอบสำหรับตรวจสอบย้อนหลัง")
-    single_export_options = _single_export_mode_options(excel_com_status)
+    is_v2_export = _is_v2_result(result)
+    movement_scheme = MOVEMENT_SCHEME_V2 if is_v2_export else MOVEMENT_SCHEME_V1
+    single_export_options = _single_export_mode_options(excel_com_status, movement_scheme)
     previous_export_mode = st.session_state.get("report_export_mode", export_mode)
     standard_decision = None
     export_preference = st.radio(
@@ -1105,16 +1110,16 @@ def render_single_export(*, context: WorkflowContext) -> None:
     )
     st.session_state["report_export_preference"] = export_preference
     if export_preference == EXPORT_PREFERENCE_STANDARD:
-        template_compatible = (
-            not _is_v2_result(result)
-            and Path(DEFAULT_TEMPLATE_PATH).exists()
-            and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
-        )
+        template_path = V2_TEMPLATE_PATH if is_v2_export else DEFAULT_TEMPLATE_PATH
+        template_map_path = V2_TEMPLATE_MAP_PATH if is_v2_export else DEFAULT_TEMPLATE_MAP_PATH
+        template_compatible = Path(template_path).exists() and Path(template_map_path).exists()
         fallback_reason = ""
         peak_binding = ()
         if template_compatible and confirmed_ready:
             try:
-                peak_binding = application_assess_standard_peak_binding(effective_peaks)
+                peak_binding = application_assess_standard_peak_binding(
+                    {**effective_peaks, "movement_code_scheme": movement_scheme}
+                )
             except (OSError, ValueError, RuntimeError, KeyError):
                 template_compatible = False
             else:
@@ -1133,9 +1138,10 @@ def render_single_export(*, context: WorkflowContext) -> None:
         use_template_report_layout = bool(standard_decision.use_template_report_layout)
         use_excel_com_native_charts = bool(standard_decision.use_excel_com_native_charts)
         st.info(
-            STANDARD_REPORT_TITLE
+            V2_TEMPLATE_TITLE if is_v2_export
+            else STANDARD_REPORT_TITLE
             if use_template_report_layout
-            else V2_GENERATED_SUMMARY_TITLE if _is_v2_result(result) else SAFE_PNG_TITLE
+            else SAFE_PNG_TITLE
         )
         if standard_decision.fallback_notice:
             st.warning(operator_fallback_message(standard_decision.fallback_notice))
@@ -1144,7 +1150,7 @@ def render_single_export(*, context: WorkflowContext) -> None:
             selected_export_mode = st.radio(
                 "Backend",
                 options=single_export_options,
-                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, _default_single_export_mode(excel_com_status))),
+                index=single_export_options.index(_coerce_export_mode(previous_export_mode, single_export_options, _default_single_export_mode(excel_com_status, movement_scheme))),
                 key="report_export_mode_control",
                 horizontal=True,
                 help="Explicit backend selection is intended for advanced users and diagnostics.",
@@ -1165,12 +1171,12 @@ def render_single_export(*, context: WorkflowContext) -> None:
     with export_status_col:
         with st.container(border=True):
             _render_section_header("รูปแบบรายงาน", "รูปแบบที่จะได้รับจากการส่งออกครั้งนี้")
-            if export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
+            if is_v2_export:
+                st.markdown(f"**{V2_TEMPLATE_TITLE}**")
+                st.caption(V2_TEMPLATE_DESCRIPTION)
+            elif export_mode == EXCEL_TEMPLATE_EXPORT_MODE:
                 st.markdown(f"**{STANDARD_REPORT_TITLE}**")
                 st.caption(STANDARD_REPORT_DESCRIPTION)
-            elif _is_v2_result(result):
-                st.markdown(f"**{V2_GENERATED_SUMMARY_TITLE}**")
-                st.caption(V2_GENERATED_SUMMARY_DESCRIPTION)
             else:
                 st.markdown(f"**{SAFE_PNG_TITLE}**")
                 st.caption(SAFE_PNG_DESCRIPTION)
@@ -1405,7 +1411,6 @@ def render_single_export(*, context: WorkflowContext) -> None:
                     "mapping_preset.mapping.json",
                     "mapping_table.xlsx",
                     "diagram/movement_diagram_data.csv",
-                    "diagram/movement_diagram.png",
                 ]
             else:
                 preview_files = [
@@ -1443,8 +1448,6 @@ def render_single_export(*, context: WorkflowContext) -> None:
             if output.get("diagram_png"):
                 st.image(output["diagram_png"], caption="Four-leg TMC movement diagram")
                 _render_download_button("ดาวน์โหลด Diagram movement (PNG)", output["diagram_png"], "tmc_movement_diagram.png", PNG_MIME)
-            elif _is_v2_result(output_result):
-                st.caption("approach_movement diagram PNG อยู่ใน Export Package ZIP ที่ path diagram/movement_diagram.png")
     else:
         _render_empty_state(
             "ยังไม่มีไฟล์ส่งออก",

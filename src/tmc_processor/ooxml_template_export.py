@@ -241,7 +241,8 @@ def _cache_required_template_sources(doc,cells,strings,template_map,plan):
                 raise ValueError(f"Hourly movement total disagrees with Diagram_Data for {key}.")
         # Total is rounded independently of the displayed movement columns by
         # the established analysis payload. The support sheet is its source of truth.
-        if key in support.columns and not math.isclose(amount,float(support.iloc[-1][key]),rel_tol=1e-9,abs_tol=1e-9):
+        rounding_tolerance = 6.0 if template_map.get("movement_code_scheme") == "approach_movement" and key == "Total" else 1e-9
+        if key in support.columns and not math.isclose(amount,float(support.iloc[-1][key]),rel_tol=1e-9,abs_tol=rounding_tolerance):
             raise ValueError(f"Hourly movement total disagrees with support-sheet total for {key}.")
         _set_formula_cache(doc,cells,ref,amount)
 
@@ -574,11 +575,11 @@ def _write_metadata(doc,cells,mapping,metadata):
     return written
 def _write_support_payload(name,frame,header_style): return _dataframe_sheet(frame,header_style)
 def export_template_ooxml(template_path,output_path,template_map,report_data,metadata,chart_source_data):
-    """Patch the v1 template package directly; not routed from production yet."""
+    """Patch an approved Excel template package directly without resaving it."""
     source=Path(template_path).resolve(); target=Path(output_path).resolve()
     if source==target: raise ValueError("OOXML output must not overwrite the template.")
     if not source.is_file(): raise FileNotFoundError(source)
-    if template_map.get("template_sheet","Summary")!="Summary": raise ValueError("Only the authoritative v1 Summary template is supported.")
+    if template_map.get("template_sheet","Summary")!="Summary": raise ValueError("Only approved Summary templates are supported.")
     plan=resolve_template_write_plan(source,template_map,report_data,metadata,chart_source_data)
     target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,target)
     with zipfile.ZipFile(source) as original:

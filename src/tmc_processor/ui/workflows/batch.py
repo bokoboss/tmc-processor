@@ -9,8 +9,8 @@ from tmc_processor.ui.components.export import (
     SAFE_PNG_DESCRIPTION,
     STANDARD_REPORT_DESCRIPTION,
     STANDARD_REPORT_TITLE,
-    V2_GENERATED_SUMMARY_DESCRIPTION,
-    V2_GENERATED_SUMMARY_TITLE,
+    V2_TEMPLATE_DESCRIPTION,
+    V2_TEMPLATE_TITLE,
     operator_fallback_message,
     operator_report_label,
 )
@@ -835,6 +835,8 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     Path = context.operations.Path
     DEFAULT_TEMPLATE_PATH = context.operations.DEFAULT_TEMPLATE_PATH
     DEFAULT_TEMPLATE_MAP_PATH = context.operations.DEFAULT_TEMPLATE_MAP_PATH
+    V2_TEMPLATE_PATH = context.operations.V2_TEMPLATE_PATH
+    V2_TEMPLATE_MAP_PATH = context.operations.V2_TEMPLATE_MAP_PATH
     BATCH_CONFIRMED_PEAKS_STATE_KEY = context.operations.BATCH_CONFIRMED_PEAKS_STATE_KEY
     BATCH_EXCEL_TEMPLATE_EXPORT_MODE = context.operations.BATCH_EXCEL_TEMPLATE_EXPORT_MODE
     BATCH_PACKAGE_MIME = context.operations.BATCH_PACKAGE_MIME
@@ -922,9 +924,9 @@ def render_batch_export(*, context: WorkflowContext) -> None:
         batch_standard_decision = _standard_report_decision(
             excel_com_status,
             template_compatible=(
-                not _is_v2_scheme(batch_mapping_scheme)
-                and Path(DEFAULT_TEMPLATE_PATH).exists()
-                and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+                Path(V2_TEMPLATE_PATH).exists() and Path(V2_TEMPLATE_MAP_PATH).exists()
+                if _is_v2_scheme(batch_mapping_scheme)
+                else Path(DEFAULT_TEMPLATE_PATH).exists() and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
             ),
         )
         batch_export_mode, standard_batch_mode_changed = _apply_standard_batch_export_mode(
@@ -960,16 +962,14 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     no_successful_files = not batch_analysis or not batch_analysis.successful_items
     peaks_ready = bool(batch_analysis and batch_analysis.successful_items) and reviewed_peak_values_complete(batch_analysis)
     output_stems_valid = all(str(row.get("output_stem", "")).strip() for row in st.session_state.get("tmc_batch_file_metadata_table") or [])
-    v2_batch_template_mode_blocked = (
-        _is_v2_scheme(batch_mapping_scheme)
-        and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
-    )
+    v2_batch_template_mode_blocked = False
     export_mode_ready = bool(
         not v2_batch_template_mode_blocked
         and (
             batch_export_mode.startswith(BATCH_SAFE_PNG_EXPORT_MODE)
             or bool(batch_standard_decision and batch_standard_decision.use_ooxml_native_template)
             or excel_com_status.available
+            or (_is_v2_scheme(batch_mapping_scheme) and batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE))
             or not batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE)
         )
     )
@@ -1033,15 +1033,15 @@ def render_batch_export(*, context: WorkflowContext) -> None:
     with batch_export_left:
         with st.container(border=True):
             _render_section_header("รูปแบบรายงาน", "รูปแบบที่จะได้รับจากการส่งออก Batch")
-            v2_generated = batch_mapping_scheme == "approach_movement"
+            v2_template = batch_mapping_scheme == "approach_movement"
             _render_status_chip(
-                V2_GENERATED_SUMMARY_TITLE if v2_generated else operator_report_label(batch_export_mode),
+                V2_TEMPLATE_TITLE if v2_template else operator_report_label(batch_export_mode),
                 "success" if export_mode_ready else "warning",
             )
-            if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
+            if v2_template:
+                st.caption(V2_TEMPLATE_DESCRIPTION)
+            elif batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE):
                 st.caption(STANDARD_REPORT_DESCRIPTION)
-            elif v2_generated:
-                st.caption(V2_GENERATED_SUMMARY_DESCRIPTION)
             else:
                 st.caption(SAFE_PNG_DESCRIPTION)
             if batch_export_mode.startswith(BATCH_EXCEL_TEMPLATE_EXPORT_MODE) and len(batch_uploads or []) > 10:
