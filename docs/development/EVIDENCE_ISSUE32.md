@@ -130,3 +130,50 @@ were not recaptured because the native Summary implementation is unchanged. The 
 `NT/frontage` row's raw label still contains `mainline`: the fixture overrides `source_stream`
 to demonstrate stream separation without renaming that raw label; it is not a production mapping rule.
 No sensitive input was used. No full local suite, push, merge or release was performed.
+
+## Legacy worksheet compatibility correction (2026-10-10)
+
+Review: https://github.com/bokoboss/tmc-processor/issues/32#issuecomment-6084971985.
+Started from clean `f614abbd4535caf0724881eab5a35095a9647b6e` on the existing Issue #32 branch.
+The user authorized this bounded correction and, after focused PASS, pushing only
+`codex/issue-32-v2-xlsx-summary` and opening a PR to `main`. Merge, tags and release remain outside scope.
+Remote `main` was verified at immutable `48db746a93c8b20f25079fa1839bffae1e8fab34` before editing.
+
+Compared the generated V2 exporter at that immutable base. Its `Hourly_Totals` uses the
+original hourly dataframe (`hour_start`, `hour_end`, `count`, `pcu`); `Peak_Summary` uses
+resolved effective Peak rows; `Movement_Code_Reference` uses the canonical V2 reference helper;
+and `Mapping_Scheme_Info` uses the mapping metadata helper (`field`, `value`). The reference
+and Peak helpers remain unchanged from that base. Mapping metadata retains the original fields
+and mapping counts while truthfully describing the approved native OOXML export and restored PNG.
+
+Implementation: four additional entries in `_v2_template_export_sheets`; no other runtime changes.
+The regression test first failed on the four missing sheets, then passed after their restoration.
+It checks all 13 original V2 sheet names plus `Summary`, the four restored column contracts,
+hourly count/PCU reconciliation, confirmed AM/PM Peak values and provenance, canonical movement
+reference values, mapping counts and the existing PNG package path.
+
+Success gates: original sheet-name/column/data compatibility, retention of all existing sheets
+and native Summary/package artifacts, focused export regressions, compile and whitespace checks.
+
+```text
+.venv/Scripts/python.exe -m pytest -q tests/test_phase_f_v2_dry_run.py tests/test_export_package.py tests/test_batch.py::test_v2_batch_template_zip_contains_authored_summary_without_raw_inputs tests/test_batch.py::test_v2_batch_confirmed_peak_override_is_used_in_export_summary tests/test_batch.py::test_v2_batch_excel_template_mode_is_supported tests/test_phase_j_ui_helpers.py::test_v2_single_ui_export_uses_authored_template_without_excel_com tests/test_phase_j_ui_helpers.py::test_v2_single_template_mode_does_not_call_excel_com tests/test_phase_j_ui_helpers.py::test_v2_single_export_never_selects_excel_com_backend --tb=short --basetemp=outputs/pytest-issue32-legacy-focused -p no:cacheprovider
+```
+
+Result: **43 passed**, 11 known openpyxl DrawingML read warnings, 136.36 seconds.
+`.venv/Scripts/python.exe -m compileall -q app.py src` and `git diff --check`: **PASS**.
+The full local suite was not run; GitHub PR CI will provide full regression evidence.
+
+An identical-input comparison with the exporter loaded from `f614abb` produced 20 prior and
+24 current worksheets. Only the four requested sheets were added. All 20 existing worksheet
+values/formulas are unchanged. Summary XML, its relationships, drawing XML/relationships,
+both chart XMLs and styles are byte-identical; package PNG and movement CSV are byte-identical;
+both XLSX ZIPs pass integrity checks. Report: `outputs/issue32_backward_compatibility_comparison.txt`.
+Existing approved screenshots and synthetic workbook are historical fidelity evidence and were
+not regenerated for this four-sheet addition.
+
+Correction files: `src/tmc_processor/exporter.py`, `tests/test_phase_f_v2_dry_run.py`, and this
+evidence document. The immutable-base patch and `outputs/issue32_diff_summary.txt` are regenerated
+after committing. The full Issue #32 diff still has 14 changed paths; no unrelated PR #31 files.
+No changes to templates, native Summary writer/verifier, calculations, stream audit, ZIP packaging,
+PNG renderer or UI are included in this correction. CI and Cloud smoke remain acceptance gates;
+this evidence does not authorize merge or release.

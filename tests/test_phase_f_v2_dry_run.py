@@ -268,6 +268,57 @@ def test_v2_dry_run_result_exports_generated_workbook_bytes() -> None:
         assert not any(name.startswith("xl/media/") for name in package.namelist())
 
 
+def test_v2_export_preserves_all_legacy_sheets_and_column_contracts() -> None:
+    result = _dry_run_with_preset()
+    mapping = _v2_preset_mapping(_raw_sheets())
+    setup = {**_setup(), "peak_selection_source": "user_confirmed"}
+    for row in result.peaks.itertuples(index=False):
+        setup[f"{row.period.lower()}_peak_start"] = row.peak_start
+        setup[f"{row.period.lower()}_peak_end"] = row.peak_end
+    workbook_bytes = export_v2_generated_workbook(result, setup=setup, mapping=mapping)
+    workbook = load_workbook(BytesIO(workbook_bytes), read_only=True, data_only=True)
+    legacy_sheets = {
+        "Export_Metadata", "PCE_Factors", "Normalized_Data", "Hourly_Totals",
+        "Hourly_Movement_PCU", "Movement_Summary", "Movement_Diagram_Data",
+        "Vehicle_Composition", "Peak_Summary", "QC_Check", "Movement_Code_Reference",
+        "Mapping_Scheme_Info", "Mapping",
+    }
+    assert legacy_sheets | {"Summary"} <= set(workbook.sheetnames)
+    assert workbook.sheetnames[0] == "Summary"
+    rows = list(workbook["Hourly_Totals"].iter_rows(values_only=True))
+    assert list(rows[0]) == ["hour_start", "hour_end", "count", "pcu"]
+    assert rows == list(workbook["Hourly_Summary"].iter_rows(values_only=True))
+    assert sum(row[2] for row in rows[1:]) == pytest.approx(result.normalized["count"].sum())
+    assert sum(row[3] for row in rows[1:]) == pytest.approx(result.normalized["pcu"].sum())
+    peak_rows = list(workbook["Peak_Summary"].iter_rows(values_only=True))
+    assert list(peak_rows[0]) == [
+        "period", "peak_mode", "peak_start", "peak_end", "hourly_pcu",
+        "max_15min_pcu", "phf", "peak_selection_source",
+    ]
+    assert [row[0] for row in peak_rows[1:]] == ["AM", "PM"]
+    for actual, expected in zip(peak_rows[1:], result.peaks.itertuples(index=False)):
+        assert actual[0] == expected.period
+        assert actual[2:4] == (expected.peak_start.strftime("%H:%M"), expected.peak_end.strftime("%H:%M"))
+        assert actual[4:7] == pytest.approx((expected.hourly_pcu, expected.max_15min_pcu, expected.phf))
+        assert actual[7] == "user_confirmed"
+    reference = list(workbook["Movement_Code_Reference"].iter_rows(values_only=True))
+    assert list(reference[0]) == [
+        "code", "approach_direction", "approach_direction_label",
+        "movement_type", "movement_type_label", "display_label",
+    ]
+    assert [row[0] for row in reference[1:]] == APPROACH_MOVEMENT_CODES
+    assert reference[1][0:5] == ("NL", "N", "Northbound", "L", "Left turn")
+    assert [cell.value for cell in workbook["Mapping_Scheme_Info"][1]] == ["field", "value"]
+    info = _sheet_records(workbook, "Mapping_Scheme_Info")
+    assert info["movement_code_scheme"] == MOVEMENT_SCHEME_V2
+    assert info["canonical_movement_key"] == "movement_code"
+    assert info["mapping_rows"] == len(mapping)
+    assert info["included_in_report_rows"] == int(mapping["include_in_report"].sum())
+    assert info["included_in_peak_rows"] == int(mapping["include_in_peak"].sum())
+    assert info["diagram_png_package_path"] == "diagram/movement_diagram.png"
+    workbook.close()
+
+
 def test_v2_authored_summary_and_source_stream_audit_reconcile_movement_and_confirmed_peaks() -> None:
     result = _dry_run_with_preset()
     duplicated = result.normalized.index[

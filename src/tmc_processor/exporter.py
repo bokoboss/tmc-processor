@@ -1634,6 +1634,10 @@ def _v2_template_export_sheets(
         "PHF_15min": phf_15min(normalized),
         "Peak_PHF": _peak_report_frame(setup, peaks),
         "Report_Text": _report_text(normalized, peaks, vehicle),
+        "Hourly_Totals": hourly,
+        "Peak_Summary": peaks,
+        "Movement_Code_Reference": _v2_movement_code_reference_frame(),
+        "Mapping_Scheme_Info": _v2_mapping_scheme_info_frame(mapping_frame),
     }
     return sheets, hourly_movement, vehicle_composition_for_report, peaks
 
