@@ -252,6 +252,7 @@ def _cache_required_template_sources(doc,cells,strings,template_map,plan):
         "F32":("J14:M14","E19:E22","J29:M29","Q21:Q24"),
     }
     for ref,areas in rollups.items():
+        if ref in {item.cell for item in plan.final_total_formulas}: continue
         cell=cells.get(ref); formula=_child(cell,MAIN_NS,"f") if cell is not None else None
         if formula is None or _text(formula)!=f"SUM({','.join(areas)})":
             raise ValueError(f"Native report rollup formula changed at Summary!{ref}.")
@@ -610,6 +611,27 @@ def export_template_ooxml(template_path,output_path,template_map,report_data,met
         movement_values={item.code:{"total_12_hour":item.total_cache,"pm_peak":item.pm_cache,"am_peak":item.am_cache} for item in plan.diagram_rows}
         _cache_summary_movement_values(summary,cells,_shared(original),template_map,plan,movement_values)
         _cache_required_template_sources(summary,cells,_shared(original),template_map,plan)
+        # Apply validated V2 rollups after legacy hourly/movement caches. Excel
+        # recalculates these same precise support sources when opening the file.
+        for item in plan.final_total_formulas:
+            cell=cells[item.cell]; formula=_child(cell,MAIN_NS,"f")
+            if formula is None or _text(formula)!=item.old_formula[1:]:
+                raise ValueError(f"Unknown V2 final total formula at Summary!{item.cell}.")
+            if item.cell=="W40":
+                # W40 masters the vehicle totals' shared group. Materialize its
+                # dependents before replacing it so their formulas stay unchanged.
+                if dict(formula.attributes.items())!={"t":"shared","ref":"W40:AJ40","si":"8"}:
+                    raise ValueError("Unknown V2 W40 shared formula group.")
+                preserved_formulas=dict(plan.preserved_formulas)
+                for ref in _range_refs("X40:AJ40"):
+                    dependent=_child(cells[ref],MAIN_NS,"f")
+                    if dependent is None or _text(dependent) or dict(dependent.attributes.items())!={"t":"shared","si":"8"}:
+                        raise ValueError(f"Unknown V2 shared formula at Summary!{ref}.")
+                    value=_cellvalue(cells[ref],_shared(original))
+                    _set_value(summary,cells[ref],preserved_formulas[ref],formula=True)
+                    _set_formula_cache(summary,cells,ref,value)
+            _set_value(summary,cell,item.new_formula,formula=True)
+            _set_formula_cache(summary,cells,item.cell,item.cache)
         replacements={summary_part:_xml(summary)}
         support=dict(plan.support_sheets); diagram_name=plan.diagram_sheet_name
         if "Summary" in support or diagram_name in support: raise ValueError("Support sheet names collide with protected worksheet names.")

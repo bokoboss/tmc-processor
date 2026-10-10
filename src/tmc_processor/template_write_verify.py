@@ -28,7 +28,7 @@ from .ooxml_template_export import (
     _text,
     _range_refs,
 )
-from .template_write_plan import TemplateWritePlan
+from .template_write_plan import TemplateWritePlan, v2_final_total_formulas
 
 
 def _expected(value):
@@ -113,9 +113,22 @@ def verify_ooxml_against_plan(
         summary = _cellmap(minidom.parseString(result.read(parts[plan.template_sheet])))
         original_summary = _cellmap(minidom.parseString(original.read(template_parts[plan.template_sheet])))
         final_writes = {write.cell: write for write in plan.summary_writes}
-        for ref, _ in plan.preserved_formulas:
+        final_totals = {item.cell: item for item in plan.final_total_formulas}
+        original_formulas = {ref: "=" + _text(_child(cell, MAIN_NS, "f")) for ref, cell in original_summary.items() if _child(cell, MAIN_NS, "f") is not None}
+        expected_totals = v2_final_total_formulas(original_formulas, dict(plan.support_sheets)) if template_map.get("movement_code_scheme") == "approach_movement" else ()
+        if plan.final_total_formulas != expected_totals:
+            issues.append("Final PCU overrides differ from the validated V2 allow-list")
+        for item in expected_totals:
+            formula = _child(summary.get(item.cell), MAIN_NS, "f")
+            if formula is None or _text(formula) != item.new_formula[1:] or not _equal(_cellvalue(summary.get(item.cell), strings), item.cache):
+                issues.append(f"{plan.template_sheet}!{item.cell}: final PCU formula/cache mismatch")
+        for ref, expanded in plan.preserved_formulas:
             before = _child(original_summary.get(ref), MAIN_NS, "f")
             after = _child(summary.get(ref), MAIN_NS, "f")
+            if "W40" in final_totals and ref in _range_refs("X40:AJ40"):
+                if before is None or dict(before.attributes.items()) != {"t": "shared", "si": "8"} or _text(before) or after is None or after.attributes.length or _text(after) != expanded[1:]:
+                    issues.append(f"{plan.template_sheet}!{ref}: shared vehicle total materialization changed formula")
+                continue
             if before is None or after is None or before.toxml() != after.toxml():
                 issues.append(f"{plan.template_sheet}!{ref}: protected formula XML changed")
         for row in range(9, 23):
@@ -165,6 +178,8 @@ def verify_ooxml_against_plan(
             if code == "time":
                 continue
             ref = f"{column}{movement_total_row}"
+            if ref in final_totals:
+                continue
             values = [_cellvalue(summary.get(f"{column}{row}"), strings) for row in range(movement_first, movement_last + 1)]
             if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
                 issues.append(f"{plan.template_sheet}!{ref}: non-numeric hourly movement source")
@@ -202,6 +217,8 @@ def verify_ooxml_against_plan(
             "F32": ("J14:M14", "E19:E22", "J29:M29", "Q21:Q24"),
         }
         for ref, areas in rollups.items():
+            if ref in final_totals:
+                continue
             sources = [_cellvalue(summary.get(source), strings) for area in areas for source in _range_refs(area)]
             if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in sources):
                 issues.append(f"{plan.template_sheet}!{ref}: movement rollup source cache missing")
@@ -248,6 +265,8 @@ def verify_ooxml_against_plan(
                 continue
             expected = sum(float(_cellvalue(summary.get(f"{column}{row}"), strings) or 0) for row in range(vehicle_first, vehicle_last + 1))
             ref = f"{column}{vehicle_table['total_row']}"
+            if ref in final_totals:
+                continue
             if not _equal(_cellvalue(summary.get(ref), strings), expected):
                 issues.append(f"{plan.template_sheet}!{ref}: stale vehicle total cache")
         for name, frame in plan.support_sheets:

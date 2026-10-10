@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from decimal import Decimal, ROUND_HALF_UP
+import math
 from numbers import Number
 from pathlib import Path
 import re
@@ -18,6 +20,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import get_column_letter, range_boundaries
 
 from .diagram import MOVEMENT_CODES
+from .movement_scheme import APPROACH_MOVEMENT_CODES
 from .report_template import (
     _column_for_key,
     _mapped_label_value,
@@ -144,6 +147,44 @@ class FormulaBinding:
 
 
 @dataclass(frozen=True)
+class FinalTotalFormula:
+    cell: str
+    old_formula: str
+    new_formula: str
+    cache: int
+
+
+def v2_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
+    """Allow only the five authored final PCU rollups to round precise sources."""
+    movement = support["Movement_Summary"]
+    if list(movement.columns) != ["movement_code_scheme", "movement_code", "approach_direction", "movement_type", "display_label", "count", "pcu"] or movement["movement_code"].tolist() != list(APPROACH_MOVEMENT_CODES):
+        raise ValueError("V2 final totals require the canonical 16-row Movement_Summary contract.")
+    amount = math.fsum(float(value) for value in movement["pcu"])
+    for name in ("Normalized_Data", "Hourly_Totals"):
+        precise = math.fsum(float(value) for value in support[name]["pcu"])
+        if not math.isfinite(precise) or not math.isclose(amount, precise, rel_tol=1e-12, abs_tol=1e-9):
+            raise ValueError(f"V2 precise Movement_Summary total disagrees with {name}.")
+    peak = support["Peak_PHF"]
+    if len(peak) != 1 or list(peak.columns)[5] != "am_peak_pcu" or list(peak.columns)[9] != "pm_peak_pcu":
+        raise ValueError("V2 final totals require the precise Peak_PHF contract.")
+    total_formula = "=ROUND(SUM('Movement_Summary'!$G$2:$G$17),0)"
+    overrides = (
+        ("F30", "=SUM(G19:G22,J16:M16,O21:O24,J27:M27)", "=ROUND('Peak_PHF'!$F$2,0)", peak.iloc[0]["am_peak_pcu"]),
+        ("F31", "=SUM(J15:M15,F19:F22,J28:M28,P21:P24)", "=ROUND('Peak_PHF'!$J$2,0)", peak.iloc[0]["pm_peak_pcu"]),
+        ("F32", "=SUM(J14:M14,E19:E22,J29:M29,Q21:Q24)", total_formula, amount),
+        ("W40", "=SUM(W28:W39)", total_formula, amount),
+        ("AM22", "=SUM(AM10:AM21)", total_formula, amount),
+    )
+    result = []
+    for cell, old, new, precise in overrides:
+        if formulas.get(cell) != old or not math.isfinite(float(precise)):
+            raise ValueError(f"Unknown V2 final total formula/source at Summary!{cell}.")
+        cache = int(Decimal(str(precise)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        result.append(FinalTotalFormula(cell, old, new, cache))
+    return tuple(result)
+
+
+@dataclass(frozen=True)
 class TemplateWritePlan:
     template_sheet: str
     summary_writes: tuple[CellWrite, ...]
@@ -155,6 +196,7 @@ class TemplateWritePlan:
     skipped_formula_writes: tuple[tuple[str, str], ...]
     peak_formula_rows: tuple[PeakFormulaRow, ...]
     formula_bindings: tuple[FormulaBinding, ...]
+    final_total_formulas: tuple[FinalTotalFormula, ...] = ()
 
     @property
     def ordered_writes(self) -> tuple[CellWrite, ...]:
@@ -395,7 +437,8 @@ def resolve_template_write_plan(
         )
         for row, code in enumerate(codes, 2)
     )
-    rebound_cells = {binding.cell for binding in bindings}
+    final_totals = v2_final_total_formulas(formulas, support) if template_map.get("movement_code_scheme") == "approach_movement" else ()
+    rebound_cells = {binding.cell for binding in bindings} | {item.cell for item in final_totals}
     preserved = tuple(sorted((cell, formula) for cell, formula in formulas.items() if not _in_ranges(cell, overwritten) and cell not in rebound_cells))
     caches = tuple(
         (key, tuple(chart_source_data.get(key, {}).get("categories", ())), tuple(chart_source_data.get(key, {}).get("values", ())))
@@ -412,4 +455,5 @@ def resolve_template_write_plan(
         tuple(skipped),
         tuple(peak_rows),
         tuple(bindings),
+        final_totals,
     )
