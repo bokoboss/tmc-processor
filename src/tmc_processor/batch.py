@@ -16,7 +16,13 @@ import pandas as pd
 from .constants import DEFAULT_PEAK_MODE, PEAK_MODE_OPTIONS
 from .charts import report_chart_pngs
 from .diagram import DiagramConfig, build_v2_movement_diagram_data, generate_four_leg_tmc_diagram, render_v2_movement_diagram_png
-from .exporter import PEAK_BINDING_FALLBACK_REASON, assess_native_template_peak_binding, export_v2_generated_workbook
+from .exporter import (
+    PEAK_BINDING_FALLBACK_REASON,
+    V2_TEMPLATE_EXPORT_MODE,
+    V2_TEMPLATE_EXPORT_TEMPLATE,
+    assess_native_template_peak_binding,
+    export_v2_generated_workbook,
+)
 from .export_package import build_export_summary_text
 from .importer import load_detected_sheets
 from .mapping import clean_mapping, validate_mapping_scheme
@@ -39,7 +45,7 @@ BATCH_PACKAGE_MIME = "application/zip"
 SAFE_BATCH_EXPORT_MODE = "Safe PNG Export Mode - Batch v1"
 BATCH_EXCEL_TEMPLATE_EXPORT_MODE = "Excel Template Mode"
 BATCH_SAFE_PNG_EXPORT_MODE = "Safe PNG Export Mode"
-BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH = "Excel Template Mode สำหรับ Batch approach_movement ยังไม่รองรับในเวอร์ชันนี้ กรุณาใช้ Safe PNG Export Mode"
+BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH = ""
 BATCH_STALE_MESSAGE_TH = "ข้อมูล Batch มีการเปลี่ยนแปลง กรุณาวิเคราะห์ Batch ใหม่"
 BATCH_SUMMARY_COLUMNS = [
     "file_name",
@@ -518,7 +524,7 @@ def _export_used_from_warnings(requested_mode: str, export_warnings: Iterable[wa
 def _batch_template_version(mapping_preset: dict[str, Any] | None, movement_code_scheme: str) -> str:
     if mapping_preset and str(mapping_preset.get("template_version") or "").strip():
         return str(mapping_preset.get("template_version") or "").strip()
-    return "generated_approach_movement_v2" if movement_code_scheme == MOVEMENT_SCHEME_V2 else TEMPLATE_VERSION
+    return V2_TEMPLATE_EXPORT_TEMPLATE if movement_code_scheme == MOVEMENT_SCHEME_V2 else TEMPLATE_VERSION
 
 
 def _resolve_batch_scheme(
@@ -1003,9 +1009,6 @@ def _process_one_file_v2(
     suggested_pm_peak: str = "",
 ) -> tuple[BatchSummaryRow, _BatchFileArtifacts, list[dict[str, str]]]:
     export_mode_requested = _base_export_mode_label(export_mode)
-    if export_mode_requested == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
-        raise ValueError(BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH)
-
     output_stem = safe_output_stem(item.output_stem or item.file_name, folder_name)
     per_file_setup = {
         **setup,
@@ -1040,7 +1043,7 @@ def _process_one_file_v2(
         result,
         setup=per_file_setup,
         mapping=active_mapping,
-        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_mode=V2_TEMPLATE_EXPORT_MODE,
         source_file_name=item.file_name,
         generated_at=generated_at,
     )
@@ -1067,11 +1070,11 @@ def _process_one_file_v2(
         detected_sheet_names=detected_sheets,
         peak_settings=per_file_setup,
         export_settings={
-            "use_template_report_layout": False,
+            "use_template_report_layout": True,
             "use_excel_com_native_charts": False,
-            "template_version": "generated_approach_movement_v2",
+            "template_version": V2_TEMPLATE_EXPORT_TEMPLATE,
             "export_mode_requested": export_mode_requested,
-            "export_mode_used": BATCH_SAFE_PNG_EXPORT_MODE,
+            "export_mode_used": V2_TEMPLATE_EXPORT_MODE,
         },
         pce_factors=result.pce_factors,
         source_file_name=Path(item.file_name).name,
@@ -1080,7 +1083,7 @@ def _process_one_file_v2(
     summary_text = build_export_summary_text(
         setup=per_file_setup,
         source_file_name=item.file_name,
-        export_mode=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_mode=V2_TEMPLATE_EXPORT_MODE,
         peaks=result.peaks,
         mapping=active_mapping,
         qc=result.qc,
@@ -1088,13 +1091,13 @@ def _process_one_file_v2(
         pce_factors=result.pce_factors,
         export_settings={
             "movement_code_scheme": MOVEMENT_SCHEME_V2,
-            "template_version": "generated_approach_movement_v2",
+            "template_version": V2_TEMPLATE_EXPORT_TEMPLATE,
             "export_mode_requested": export_mode_requested,
-            "export_mode_used": BATCH_SAFE_PNG_EXPORT_MODE,
+            "export_mode_used": V2_TEMPLATE_EXPORT_MODE,
             "export_status": "success",
             "export_error": "",
         },
-        template_version="generated_approach_movement_v2",
+        template_version=V2_TEMPLATE_EXPORT_TEMPLATE,
         generated_at=generated_at,
     )
     summary_text = "\n".join(
@@ -1104,7 +1107,7 @@ def _process_one_file_v2(
             f"survey_date_text: {per_file_setup.get('survey_date_text', '')}",
             f"output_stem: {output_stem}",
             f"export_mode_requested: {export_mode_requested}",
-            f"export_mode_used: {BATCH_SAFE_PNG_EXPORT_MODE}",
+            f"export_mode_used: {V2_TEMPLATE_EXPORT_MODE}",
             "export_status: success",
             "export_error: ",
             "",
@@ -1117,11 +1120,11 @@ def _process_one_file_v2(
         output_stem=output_stem,
         folder_name=folder_name,
         movement_code_scheme=MOVEMENT_SCHEME_V2,
-        template_version="generated_approach_movement_v2",
+        template_version=V2_TEMPLATE_EXPORT_TEMPLATE,
         status="success",
         review_state="confirmed",
         export_mode_requested=export_mode_requested,
-        export_mode_used=BATCH_SAFE_PNG_EXPORT_MODE,
+        export_mode_used=V2_TEMPLATE_EXPORT_MODE,
         export_status="success",
         export_error="",
         suggested_AM_peak=suggested_am_peak,
@@ -1137,7 +1140,7 @@ def _process_one_file_v2(
         QC_info=counts["info"],
         export_file=f"{folder_name}/{output_stem}_report.xlsx",
         generated_report_filename=f"{output_stem}_report.xlsx",
-        notes=item.notes or "approach_movement Safe PNG/generated Batch export.",
+        notes=item.notes or "approach_movement Excel template export.",
     )
     artifact = _BatchFileArtifacts(
         folder_name=folder_name,
@@ -1358,8 +1361,8 @@ def generate_batch_zip_from_reviewed_peaks(
     template_version = getattr(analysis, "template_version", "") or _batch_template_version(None, movement_code_scheme)
     setup["movement_code_scheme"] = movement_code_scheme
     requested_mode = export_mode_requested or _base_export_mode_label(export_mode)
-    if movement_code_scheme == MOVEMENT_SCHEME_V2 and _base_export_mode_label(export_mode) == BATCH_EXCEL_TEMPLATE_EXPORT_MODE:
-        raise ValueError(BATCH_V2_TEMPLATE_MODE_UNSUPPORTED_TH)
+    if movement_code_scheme == MOVEMENT_SCHEME_V2:
+        template_version = V2_TEMPLATE_EXPORT_TEMPLATE
     for item in analysis.items:
         if item.status != "success":
             rows.append(

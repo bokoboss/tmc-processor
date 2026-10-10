@@ -119,7 +119,7 @@ def preflight_template_peak_binding(
 ) -> tuple[PeakBindingMatch, ...]:
     """Read the native Summary time rows without changing the workbook."""
     hourly_map = template_map["hourly_movement_table"]
-    helper_column = str(template_map["movement_diagram_cells"]["movement_value_rows"]["helper_column"])
+    helper_column = str(template_map["movement_diagram_cells"]["movement_value_rows"].get("helper_column") or "U")
     workbook = load_workbook(template_path, read_only=True, data_only=False)
     try:
         summary = workbook[str(template_map.get("template_sheet") or "Summary")]
@@ -242,7 +242,7 @@ def resolve_template_write_plan(
             }
             for table in (template_map["hourly_movement_table"], template_map["hourly_vehicle_class_table"])
         }
-        helper_column = str(template_map["movement_diagram_cells"]["movement_value_rows"]["helper_column"])
+        helper_column = str(template_map["movement_diagram_cells"]["movement_value_rows"].get("helper_column") or "U")
         if helper_column != "U" or [summary[f"{helper_column}{row}"].value for row in range(9, 23)] != list(range(1, 15)):
             raise ValueError("Authoritative Summary!U9:U22 helper sequence must be 1..14.")
     finally:
@@ -284,8 +284,9 @@ def resolve_template_write_plan(
         end = metadata.get(f"{period}_peak_end")
         return f"{start}-{end}" if start and end else "-"
 
-    provenance = str(metadata.get("peak_selection_source") or "").strip() or "-"
-    add("A3", f"Peak used for export: AM {peak_label('am')}; PM {peak_label('pm')} ({provenance})", "effective_peak_label", force=True)
+    if str(template_map.get("movement_code_scheme") or "") != "approach_movement":
+        provenance = str(metadata.get("peak_selection_source") or "").strip() or "-"
+        add("A3", f"Peak used for export: AM {peak_label('am')}; PM {peak_label('pm')} ({provenance})", "effective_peak_label", force=True)
 
     def add_table(table: dict[str, Any], frame: pd.DataFrame, source_name: str) -> None:
         first = int(table["first_data_row"])
@@ -355,7 +356,8 @@ def resolve_template_write_plan(
             total = f"=HLOOKUP({header_cell},{lookup_range},${helper_column}${hourly_map['total_row']},FALSE)"
             if formulas.get(total_cell) != total:
                 raise ValueError(f"Unknown native total HLOOKUP formula at Summary!{total_cell}.")
-    if mapped_codes != set(MOVEMENT_CODES) or len(bindings) != 32 or len({item.cell for item in bindings}) != 32:
+    expected_codes = set(report_data.get("diagram_movement_codes") or template_map.get("movement_code_order") or MOVEMENT_CODES)
+    if mapped_codes != expected_codes or len(bindings) != 32 or len({item.cell for item in bindings}) != 32:
         raise ValueError("Native Peak formula map must contain 16 unique movements and 32 AM/PM cells.")
     support = report_data.get("sheets") or {}
     vehicle = report_data.get("hourly_vehicle_class")
@@ -378,7 +380,7 @@ def resolve_template_write_plan(
             for index, ref in enumerate(refs):
                 add(ref, series[index] if index < len(series) else "", f"chart.{data_key}.{kind}.{index}")
 
-    codes = tuple(report_data.get("diagram_movement_codes") or MOVEMENT_CODES)
+    codes = tuple(report_data.get("diagram_movement_codes") or template_map.get("movement_code_order") or MOVEMENT_CODES)
     diagram_values = movement_values_by_code(hourly, list(codes), metadata)
     diagram_rows = tuple(
         DiagramRow(

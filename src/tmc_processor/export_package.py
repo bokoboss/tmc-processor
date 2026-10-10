@@ -21,7 +21,7 @@ from .pcu import pce_factor_traceability_frame
 
 
 PACKAGE_MIME = "application/zip"
-V2_GENERATED_TEMPLATE_VERSION = "generated_approach_movement_v2"
+V2_GENERATED_TEMPLATE_VERSION = "four_leg_approach_movement_v2"
 V2_MOVEMENT_DIAGRAM_DATA_SHEET_NAME = "Movement_Diagram_Data"
 
 
@@ -227,7 +227,7 @@ def _workbook_sheet_dataframe(workbook_bytes: bytes, sheet_name: str) -> pd.Data
 def create_v2_generated_export_package_zip(
     *,
     workbook_bytes: bytes,
-    workbook_filename: str = "approach_movement_v2_generated_workbook.xlsx",
+    workbook_filename: str = "approach_movement_v2_template_workbook.xlsx",
     setup: dict[str, Any] | None = None,
     peaks: pd.DataFrame | None = None,
     mapping: pd.DataFrame | None = None,
@@ -235,10 +235,10 @@ def create_v2_generated_export_package_zip(
     mapping_preset_bytes: bytes | None = None,
     mapping_preset_filename: str | None = None,
     source_file_name: str | None = None,
-    export_mode: str = "Safe PNG Export Mode",
+    export_mode: str = "Excel Template Mode",
     generated_at: datetime | str | None = None,
 ) -> bytes:
-    """Package a v2 generated workbook and traceability text without raw input files."""
+    """Package the authored-template V2 workbook and traceability text."""
 
     package_setup = {**(setup or {}), "movement_code_scheme": MOVEMENT_SCHEME_V2}
     summary = build_export_summary_text(
@@ -252,7 +252,7 @@ def create_v2_generated_export_package_zip(
         export_settings={
             "movement_code_scheme": MOVEMENT_SCHEME_V2,
             "template_version": V2_GENERATED_TEMPLATE_VERSION,
-            "v2_export_scope": "generated workbook with table-based movement diagram data and package PNG; template/native export unsupported",
+            "v2_export_scope": "authored V2 Summary template populated through direct OOXML; no Excel COM required",
         },
         template_version=V2_GENERATED_TEMPLATE_VERSION,
         generated_at=generated_at,

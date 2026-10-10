@@ -129,12 +129,19 @@ from tmc_processor.movement_scheme import (
     movement_scheme_status_label,
     normalize_movement_code_scheme,
 )
-from tmc_processor.report_template import DEFAULT_TEMPLATE_MAP_PATH, DEFAULT_TEMPLATE_PATH, load_template_map
+from tmc_processor.report_template import (
+    DEFAULT_TEMPLATE_MAP_PATH,
+    DEFAULT_TEMPLATE_PATH,
+    V2_TEMPLATE_MAP_PATH,
+    V2_TEMPLATE_PATH,
+    load_template_map,
+)
 from tmc_processor.exporter import (
     EXCEL_TEMPLATE_EXPORT_MODE as EXPORTER_EXCEL_TEMPLATE_EXPORT_MODE,
     PEAK_BINDING_FALLBACK_REASON,
     SAFE_PNG_EXPORT_MODE as EXPORTER_SAFE_PNG_EXPORT_MODE,
     STANDARD_REPORT_EXPORT_MODE,
+    V2_TEMPLATE_EXPORT_TEMPLATE,
     export_v2_generated_workbook,
     export_v2_template_workbook_com,
     standard_report_export_decision,
@@ -1080,21 +1087,27 @@ def _store_workflow_state(state: WorkflowState) -> None:
 def _workflow_export_payload(
     setup: dict[str, object] | None,
     *,
+    movement_code_scheme: str | None = None,
     export_mode: str | None,
     source_file_name: str | None = None,
     extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
     setup = setup or {}
+    movement_code_scheme = normalize_movement_code_scheme(
+        movement_code_scheme or setup.get("movement_code_scheme") or MOVEMENT_SCHEME_V1
+    )
+    template_path = V2_TEMPLATE_PATH if movement_code_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_PATH
+    template_map_path = V2_TEMPLATE_MAP_PATH if movement_code_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_MAP_PATH
     payload: dict[str, object] = {
         "metadata": {field: setup.get(field, "") for field in WORKFLOW_EXPORT_METADATA_FIELDS},
         "export_mode": str(export_mode or ""),
         "source_file_name": str(source_file_name or ""),
-        "template_version": TEMPLATE_VERSION,
-        "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
-        "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
-        "template_path": str(DEFAULT_TEMPLATE_PATH),
-        "template_map_path": str(DEFAULT_TEMPLATE_MAP_PATH),
-        "use_template_report_layout": _use_template_layout_for_export(export_mode),
+        "template_version": V2_TEMPLATE_EXPORT_TEMPLATE if movement_code_scheme == MOVEMENT_SCHEME_V2 else TEMPLATE_VERSION,
+        "template_name": Path(template_path).name,
+        "template_map_name": Path(template_map_path).name,
+        "template_path": str(template_path),
+        "template_map_path": str(template_map_path),
+        "use_template_report_layout": movement_code_scheme == MOVEMENT_SCHEME_V2 or _use_template_layout_for_export(export_mode),
     }
     if extra:
         payload["extra"] = extra
@@ -1139,6 +1152,7 @@ def _single_workflow_revisions(
         movement_code_scheme=movement_code_scheme,
         export_config=_workflow_export_payload(
             setup,
+            movement_code_scheme=movement_code_scheme,
             export_mode=export_mode,
             source_file_name=source_file_name,
         ),
@@ -1172,6 +1186,7 @@ def _batch_workflow_revisions(
         metadata_rows=metadata_rows,
         export_config=_workflow_export_payload(
             setup,
+            movement_code_scheme=movement_code_scheme,
             export_mode=export_mode,
             extra={
                 "metadata_rows": metadata_rows,
@@ -1565,8 +1580,6 @@ def _v2_native_template_block_reason(
     use_template_report_layout: bool,
     use_excel_com_native_charts: bool,
 ) -> str:
-    if (export_mode == EXCEL_TEMPLATE_EXPORT_MODE or use_template_report_layout) and not use_excel_com_native_charts:
-        return V2_EXCEL_TEMPLATE_MODE_BLOCK_MESSAGE
     return ""
 
 
@@ -1582,24 +1595,11 @@ def _export_single_file_for_ui(
     generated_at: str,
 ) -> bytes:
     if _is_v2_result(result):
-        block_reason = _v2_native_template_block_reason(export_mode, use_template_report_layout, use_excel_com_native_charts)
-        if block_reason:
-            raise ValueError(block_reason)
-        if use_template_report_layout:
-            return application_export_single_template_com(
-                result,
-                setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
-                mapping=mapping,
-                export_mode=export_mode,
-                source_file_name=source_file_name,
-                generated_at=generated_at,
-                _backend=export_v2_template_workbook_com,
-            )
         return application_export_single_generated(
             result,
             setup={**setup, "movement_code_scheme": MOVEMENT_SCHEME_V2},
             mapping=mapping,
-            export_mode=export_mode,
+            export_mode=EXCEL_TEMPLATE_EXPORT_MODE,
             source_file_name=source_file_name,
             generated_at=generated_at,
             _backend=export_v2_generated_workbook,
@@ -3251,10 +3251,12 @@ def derive_single_workflow_state(uploaded_name: str | None, export_mode: str | N
     output_ready = st.session_state.get("tmc_output") is not None
     peak_state = _single_effective_peak_state()
     peaks_ready = bool(peak_state["ready"])
+    report_template_path = V2_TEMPLATE_PATH if mapping_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_PATH
+    report_template_map_path = V2_TEMPLATE_MAP_PATH if mapping_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_MAP_PATH
     standard_native = (
         st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD
-        and Path(DEFAULT_TEMPLATE_PATH).exists()
-        and Path(DEFAULT_TEMPLATE_MAP_PATH).exists()
+        and Path(report_template_path).exists()
+        and Path(report_template_map_path).exists()
     )
     excel_ready = standard_native or bool(getattr(excel_com_status, "available", False)) or export_mode != EXCEL_TEMPLATE_EXPORT_MODE
     preset_info = st.session_state.get("tmc_mapping_preset_apply_info") or {}
@@ -3496,22 +3498,32 @@ def _probe_excel_com_for_ui(force: bool = False) -> ExcelComStatus:
     return st.session_state[status_key]
 
 
-def _single_export_mode_options(excel_com_status: ExcelComStatus) -> list[str]:
+def _single_export_mode_options(
+    excel_com_status: ExcelComStatus,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> list[str]:
+    if _is_v2_scheme(movement_code_scheme):
+        return [EXCEL_TEMPLATE_EXPORT_MODE]
     return [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE] if excel_com_status.available else [SAFE_PNG_EXPORT_MODE]
 
 
 def _batch_export_mode_options(excel_com_status: ExcelComStatus, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> list[str]:
     if _is_v2_scheme(movement_code_scheme):
-        return [BATCH_SAFE_PNG_EXPORT_LABEL]
+        return [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL]
     return [BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, BATCH_SAFE_PNG_EXPORT_LABEL] if excel_com_status.available else [BATCH_SAFE_PNG_EXPORT_LABEL]
 
 
-def _default_single_export_mode(excel_com_status: ExcelComStatus) -> str:
+def _default_single_export_mode(
+    excel_com_status: ExcelComStatus,
+    movement_code_scheme: str = MOVEMENT_SCHEME_V1,
+) -> str:
+    if _is_v2_scheme(movement_code_scheme):
+        return EXCEL_TEMPLATE_EXPORT_MODE
     return EXCEL_TEMPLATE_EXPORT_MODE if excel_com_status.available else SAFE_PNG_EXPORT_MODE
 
 
 def _default_batch_export_mode(excel_com_status: ExcelComStatus, movement_code_scheme: str = MOVEMENT_SCHEME_V1) -> str:
-    return BATCH_SAFE_PNG_EXPORT_LABEL if _is_v2_scheme(movement_code_scheme) or not excel_com_status.available else BATCH_EXCEL_TEMPLATE_EXPORT_LABEL
+    return BATCH_EXCEL_TEMPLATE_EXPORT_LABEL if _is_v2_scheme(movement_code_scheme) or excel_com_status.available else BATCH_SAFE_PNG_EXPORT_LABEL
 
 
 def _standard_report_decision(
@@ -3752,6 +3764,10 @@ def _sync_single_workflow_from_state(
 
 def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | None) -> dict[str, object]:
     setup = get_current_setup_from_state(uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""))
+    movement_code_scheme = _current_mapping_scheme()
+    template_path = V2_TEMPLATE_PATH if movement_code_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_PATH
+    template_map_path = V2_TEMPLATE_MAP_PATH if movement_code_scheme == MOVEMENT_SCHEME_V2 else DEFAULT_TEMPLATE_MAP_PATH
+    template_version = V2_TEMPLATE_EXPORT_TEMPLATE if movement_code_scheme == MOVEMENT_SCHEME_V2 else TEMPLATE_VERSION
     peak_settings = {
         "peak_mode": setup.get("peak_mode", DEFAULT_PEAK_MODE),
         "am_peak_window_start": setup.get("am_peak_window_start", AM_WINDOW[0]),
@@ -3784,18 +3800,18 @@ def _build_session_from_state(uploaded_name: str | None, uploaded_size: int | No
             "show_u_turn": bool(setup.get("show_u_turn", True)),
         },
         mapping=_current_mapping_for_session(),
-        movement_code_scheme=_current_mapping_scheme(),
+        movement_code_scheme=movement_code_scheme,
         detected_sheet_names=st.session_state.get("tmc_detected_sheet_names", []),
         pce_factors=_current_pce_factors_from_state(),
         peak_settings=peak_settings,
         export_settings={
-            "use_template_report_layout": _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
-            "use_excel_com_native_charts": _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
-            "template_version": TEMPLATE_VERSION,
-            "template_name": Path(DEFAULT_TEMPLATE_PATH).name,
-            "template_path": str(DEFAULT_TEMPLATE_PATH),
-            "template_map_name": Path(DEFAULT_TEMPLATE_MAP_PATH).name,
-            "template_map_path": str(DEFAULT_TEMPLATE_MAP_PATH),
+            "use_template_report_layout": movement_code_scheme == MOVEMENT_SCHEME_V2 or _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
+            "use_excel_com_native_charts": movement_code_scheme != MOVEMENT_SCHEME_V2 and _use_template_layout_for_export(str(_state_value("report_export_mode", SAFE_PNG_EXPORT_MODE))),
+            "template_version": template_version,
+            "template_name": Path(template_path).name,
+            "template_path": str(template_path),
+            "template_map_name": Path(template_map_path).name,
+            "template_map_path": str(template_map_path),
         },
         source_file_name=uploaded_name or st.session_state.get("tmc_loaded_source_file_name", ""),
         source_file_size=uploaded_size,
@@ -5328,6 +5344,8 @@ def _workflow_operations() -> WorkflowOperations:
         DEFAULT_PEAK_MODE=DEFAULT_PEAK_MODE,
         DEFAULT_TEMPLATE_MAP_PATH=DEFAULT_TEMPLATE_MAP_PATH,
         DEFAULT_TEMPLATE_PATH=DEFAULT_TEMPLATE_PATH,
+        V2_TEMPLATE_MAP_PATH=V2_TEMPLATE_MAP_PATH,
+        V2_TEMPLATE_PATH=V2_TEMPLATE_PATH,
         DiagramConfig=DiagramConfig,
         EXCEL_MIME=EXCEL_MIME,
         EXCEL_TEMPLATE_EXPORT_MODE=EXCEL_TEMPLATE_EXPORT_MODE,
@@ -5341,6 +5359,7 @@ def _workflow_operations() -> WorkflowOperations:
         MAPPING_SOURCE_USER_EDITOR=MAPPING_SOURCE_USER_EDITOR,
         MOVEMENT_SCHEMES=MOVEMENT_SCHEMES,
         MOVEMENT_SCHEME_V2=MOVEMENT_SCHEME_V2,
+        MOVEMENT_SCHEME_V1=MOVEMENT_SCHEME_V1,
         MappingPresetError=MappingPresetError,
         PACKAGE_MIME=PACKAGE_MIME,
         PEAK_BINDING_FALLBACK_REASON=PEAK_BINDING_FALLBACK_REASON,
@@ -5598,23 +5617,33 @@ def _run_streamlit_app() -> None:
     _ensure_pce_factor_state()
     if active_tab == "Analyze":
         _rehydrate_analyze_setup_widgets()
-    single_export_options = _single_export_mode_options(excel_com_status)
+    current_scheme = _current_mapping_scheme()
+    single_export_options = _single_export_mode_options(excel_com_status, current_scheme)
     if st.session_state.get("report_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
-        single_export_options = [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
+        single_export_options = (
+            [EXCEL_TEMPLATE_EXPORT_MODE]
+            if _is_v2_scheme(current_scheme)
+            else [EXCEL_TEMPLATE_EXPORT_MODE, SAFE_PNG_EXPORT_MODE]
+        )
     export_mode = _coerce_export_mode(
         st.session_state.get("report_export_mode"),
         single_export_options,
-        _default_single_export_mode(excel_com_status),
+        _default_single_export_mode(excel_com_status, current_scheme),
     )
     st.session_state["report_export_mode"] = export_mode
     use_excel_com_native_charts = _use_excel_native_charts_for_export(export_mode, excel_com_status)
-    batch_export_options = _batch_export_mode_options(excel_com_status)
+    batch_scheme = _current_mapping_scheme() if not is_single_file_mode else MOVEMENT_SCHEME_V1
+    batch_export_options = _batch_export_mode_options(excel_com_status, batch_scheme)
     if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
-        batch_export_options = [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
+        batch_export_options = (
+            [BATCH_EXCEL_TEMPLATE_EXPORT_MODE]
+            if _is_v2_scheme(batch_scheme)
+            else [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
+        )
     st.session_state["tmc_batch_export_mode"] = _coerce_export_mode(
         st.session_state.get("tmc_batch_export_mode"),
         batch_export_options,
-        _default_batch_export_mode(excel_com_status),
+        _default_batch_export_mode(excel_com_status, batch_scheme),
     )
 
     if is_single_file_mode:
@@ -5665,7 +5694,7 @@ def _run_streamlit_app() -> None:
             batch_export_options = _batch_export_mode_options(excel_com_status, batch_mapping_scheme)
             if st.session_state.get("tmc_batch_export_preference", EXPORT_PREFERENCE_STANDARD) == EXPORT_PREFERENCE_STANDARD:
                 batch_export_options = (
-                    [BATCH_SAFE_PNG_EXPORT_MODE]
+                    [BATCH_EXCEL_TEMPLATE_EXPORT_MODE]
                     if _is_v2_scheme(batch_mapping_scheme)
                     else [BATCH_EXCEL_TEMPLATE_EXPORT_MODE, BATCH_SAFE_PNG_EXPORT_MODE]
                 )

@@ -174,8 +174,18 @@ def verify_ooxml_against_plan(
                 item = diagram_by_code.get(code)
                 if item is None or not _equal(expected, item.total_cache):
                     issues.append(f"{plan.template_sheet}!{ref}: movement total disagrees with Diagram_Data for {code}")
-            if hourly_support is not None and code in hourly_support.columns and not _equal(expected, hourly_support.iloc[-1][code]):
-                issues.append(f"{plan.template_sheet}!{ref}: total disagrees with Hourly_Movement_PCU support data")
+            if hourly_support is not None and code in hourly_support.columns:
+                support_total = hourly_support.iloc[-1][code]
+                # V2's authored cells display integer PCU values; summing its 12
+                # hourly display values can differ from the precise support total
+                # by at most half a PCU per hour.
+                rounded_v2_total = (
+                    code == "Total"
+                    and template_map.get("movement_code_scheme") == "approach_movement"
+                    and math.isclose(expected, float(support_total), rel_tol=1e-9, abs_tol=6.0)
+                )
+                if not _equal(expected, support_total) and not rounded_v2_total:
+                    issues.append(f"{plan.template_sheet}!{ref}: total disagrees with Hourly_Movement_PCU support data")
             cell = summary.get(ref)
             formula = _child(cell, MAIN_NS, "f") if cell is not None else None
             if formula is None or (_text(formula) and _text(formula) != f"SUM({column}{movement_first}:{column}{movement_last})") or (not _text(formula) and formula.getAttribute("t") != "shared"):

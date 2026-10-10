@@ -11,6 +11,11 @@ STANDARD_REPORT_TITLE = "รายงานมาตรฐาน — แนะ�
 STANDARD_REPORT_DESCRIPTION = "รายงาน Excel ตามรูปแบบมาตรฐาน พร้อมกราฟและแผนผัง"
 SAFE_PNG_TITLE = "รายงานสำรอง"
 SAFE_PNG_DESCRIPTION = "ใช้รูปภาพสำหรับกราฟและแผนผังเพื่อความเข้ากันได้"
+V2_TEMPLATE_TITLE = "V2 Excel Template"
+V2_TEMPLATE_DESCRIPTION = (
+    "ใช้ Summary ที่ออกแบบใน Excel ต้นฉบับ พร้อมแผนผัง ลูกศร กราฟ และรูปแบบเดิม "
+    "รายละเอียดแยกตาม source_stream อยู่ใน Movement_Aggregation_Audit"
+)
 FALLBACK_MESSAGE = "ระบบใช้รูปแบบรายงานสำรองสำหรับการส่งออกครั้งนี้"
 PEAK_FALLBACK_MESSAGE = "ระบบใช้รูปแบบรายงานสำรอง เนื่องจากช่วง Peak ที่ยืนยันไม่ตรงกับช่วงเวลาที่ Excel Template ปัจจุบันรองรับ"
 
