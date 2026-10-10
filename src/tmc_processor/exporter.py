@@ -274,6 +274,7 @@ def _v2_export_metadata_frame(
             ("summary_sheet", "Summary"),
             ("summary_diagram", "authored_v2_template_shapes_arrows_and_charts"),
             ("summary_source_stream_detail", "Movement_Source_Stream_Audit"),
+            ("summary_pcu_rounding", "Final PCU totals aggregate precise Movement_Summary / effective Peak_PHF values, then use Excel ROUND once (half away from zero). Independently rounded movement/hourly subtotals may not add to the rounded grand total; no residual is distributed."),
             ("diagram_export_supported", "authored_excel_template"),
             ("diagram_export_artifact", "Summary worksheet drawing1.xml"),
             ("diagram_png_package_path", "diagram/movement_diagram.png"),
