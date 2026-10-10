@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_FILES = (
     "LICENSE", "USER_GUIDE.md", "app.py", "pyproject.toml",
     "start_tmc_processor.bat", ".streamlit/config.toml",
+    "assets/support_qr.png",
     "templates/four_leg_tmc_report_template.xlsx",
     "templates/four_leg_tmc_report_template_map.json",
     "templates/four_leg_tmc_report_template_approach_v2.xlsx",

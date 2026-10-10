@@ -5,7 +5,7 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `1.0.1` (current published stable release)
+- Package/application version: `1.1.0` (release-preparation branch; `v1.0.1` remains the latest published stable release until approval and publication)
 - Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
@@ -15,13 +15,14 @@
 - Accepted released baseline before Issue #30: `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827` (`v1.0.1`).
 - v1.0.1 qualification: full automated suite 504 passed; GitHub Actions CI #113 passed on Windows / Python 3.10 and 3.12.
 - Before the separately approved Issue #30 web-app enhancement, the project was in maintenance mode.
-- Current task: Issue #30 Web App W0-W1 (Linux hosting readiness and Support view).
+- Accepted Issue #36 release baseline: `main@203bc5f3f584d0245f46c27d58da74c3d973fd65` (PRs #31, #33, and #35 merged; v1.0.1 remains the latest published release).
+- Current task: Issue #36 v1.1.0 release preparation, with calculation, mapping, Peak, export, template, drawing, and chart behavior protected.
 - Accepted UX/product baseline: `main@ff26e48a904d4dae53c9d0f92ecf853f86ea93a9` from PR #25 (UX-8).
 - PR #25 qualification: full automated suite 451 passed, 0 failed; CI passed on Windows / Python 3.10 and 3.12.
 - Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
 - GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
-- Current release: `v1.0.1` is published and stable.
-- Post-release operating mode before Issue #30: maintenance mode.
+- Current published release: `v1.0.1` is stable; `v1.1.0` is not tagged or published during preparation.
+- Streamlit Community Cloud is deployed at https://tmc-process.streamlit.app/ from `main`; the accepted v1.1.0 branch must pass review and CI before deployment changes.
 
 ## Product workflow
 Canonical operator flow for Single and Batch:
@@ -129,6 +130,12 @@ Changes must not alter the following without explicit approval and qualification
 | CI | GitHub Actions Windows Python 3.10 / 3.12 | Yes |
 
 ## Release history
+### v1.0.1
+Published stable maintenance release from `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`.
+
+### v1.1.0 (preparation)
+Release preparation is based on accepted `main@203bc5f3f584d0245f46c27d58da74c3d973fd65`. It aligns package/runtime version, packages the supplied Support QR in the Windows bundle, and records the hosted readiness, V2 Summary and round-once PCU work. It remains unpublished until PR review, CI, merge, and separate release approval.
+
 ### v1.0.0
 Stable closure release after UX-0 through UX-8 modernization and qualification.
 
@@ -152,7 +159,7 @@ Preserved as:
 The legacy snapshot is historical and must not be moved or rewritten.
 
 ## Known limitations / backlog
-- Issue #23 remains open pending acceptance of the clarified fixed-hour contract. Non-hour-aligned rolling Peaks are outside that contract; proposed disposition is NOT PLANNED / NO LONGER APPLICABLE after merge/release acceptance.
+- Issue #23 was closed as `not_planned` after the fixed-hour Peak contract was accepted. Non-hour-aligned rolling Peaks are outside the supported contract.
 - Batch Project Session is intentionally disabled because the current session format cannot round-trip Batch uploads and Batch Mapping Presets.
 - UX-8 live Batch qualification used successful demo items; failed/excluded outcomes were covered by existing automated behavior but not recreated in that final UX browser smoke.
 - `WorkflowContext` / `WorkflowOperations` retain a relatively broad dependency surface from UX-6; avoid expanding it without architectural review.
@@ -167,4 +174,4 @@ The legacy snapshot is historical and must not be moved or rewritten.
 - Implementation changes require evidence appropriate to affected risk areas before merge/release.
 
 ## Current next objective
-Complete the separately approved Issue #30 web-hosting readiness and Support view while preserving the accepted `v1.0.1` engineering behavior.
+Complete Issue #36 release preparation from the accepted `203bc5f3f584d0245f46c27d58da74c3d973fd65` baseline without changing validated engineering or export behavior. Merge, tag, and publish remain separate approval gates.
