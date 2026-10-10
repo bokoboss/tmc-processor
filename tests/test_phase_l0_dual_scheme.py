@@ -4,6 +4,7 @@ import json
 from io import BytesIO
 
 import pandas as pd
+import pytest
 
 import app
 from tmc_processor.excel_com_export import ExcelComStatus
@@ -447,11 +448,25 @@ def test_single_file_export_default_is_safe_png_when_excel_com_unavailable() -> 
     )
 
 
-def test_approach_movement_batch_export_default_is_safe_png() -> None:
-    status = ExcelComStatus(available=True, reason="ok")
+@pytest.mark.parametrize("available", [True, False])
+def test_approach_movement_batch_export_default_is_template_without_com_dependency(available: bool) -> None:
+    status = ExcelComStatus(available=available, reason="ok" if available else "missing")
 
-    assert app._batch_export_mode_options(status, MOVEMENT_SCHEME_V2) == [app.BATCH_SAFE_PNG_EXPORT_LABEL]
-    assert app._default_batch_export_mode(status, MOVEMENT_SCHEME_V2) == app.BATCH_SAFE_PNG_EXPORT_LABEL
+    assert app._batch_export_mode_options(status, MOVEMENT_SCHEME_V2) == [app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL]
+    assert app._default_batch_export_mode(status, MOVEMENT_SCHEME_V2) == app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_from_to_batch_export_modes_preserve_com_based_selection(available: bool) -> None:
+    status = ExcelComStatus(available=available, reason="ok" if available else "missing")
+    expected_options = (
+        [app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL, app.BATCH_SAFE_PNG_EXPORT_LABEL]
+        if available else [app.BATCH_SAFE_PNG_EXPORT_LABEL]
+    )
+    expected_default = app.BATCH_EXCEL_TEMPLATE_EXPORT_LABEL if available else app.BATCH_SAFE_PNG_EXPORT_LABEL
+
+    assert app._batch_export_mode_options(status, MOVEMENT_SCHEME_V1) == expected_options
+    assert app._default_batch_export_mode(status, MOVEMENT_SCHEME_V1) == expected_default
 
 
 def test_export_template_paths_are_scheme_specific() -> None:
