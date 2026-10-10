@@ -12,6 +12,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SUPPORT_QR = ROOT / "assets" / "support_qr.png"
 spec = importlib.util.spec_from_file_location("windows_release", ROOT / "scripts/build_windows_release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
@@ -42,6 +43,87 @@ def test_runtime_bundle_is_complete_deterministic_and_private_files_stay_out(tmp
         expected_sources = {p.relative_to(source).as_posix() for p in (source / "src/tmc_processor").rglob("*.py")}
         assert names == set(release.RUNTIME_FILES) | expected_sources
         assert all(b"PRIVATE_SENTINEL" not in archive.read(n) for n in archive.namelist())
+        tracked_qr = subprocess.check_output(["git", "-C", str(ROOT), "show", "HEAD:assets/support_qr.png"])
+        assert SUPPORT_QR.read_bytes() == tracked_qr
+        assert archive.read(f"{prefix}assets/support_qr.png") == tracked_qr
+        assert {name.split("/", 1)[1] for name in archive.namelist() if "/assets/" in name} == {
+            "assets/support_qr.png"
+        }
+
+
+def test_extracted_windows_bundle_resolves_support_qr_and_contains_v1_v2_runtime(tmp_path):
+    bundle = release.build(ROOT, tmp_path / "dist")[0]
+    with zipfile.ZipFile(bundle) as archive:
+        archive.extractall(tmp_path / "extracted")
+
+    package_root = tmp_path / "extracted" / bundle.stem
+    extracted_qr = package_root / "assets" / "support_qr.png"
+    assert extracted_qr.read_bytes() == SUPPORT_QR.read_bytes()
+
+    for path in (
+        "start_tmc_processor.bat",
+        "templates/four_leg_tmc_report_template.xlsx",
+        "templates/four_leg_tmc_report_template_map.json",
+        "templates/four_leg_tmc_report_template_approach_v2.xlsx",
+        "templates/four_leg_tmc_report_template_approach_v2_map.json",
+    ):
+        assert (package_root / path).is_file()
+
+    support_path = package_root / "src" / "tmc_processor" / "ui" / "components" / "support.py"
+    support_spec = importlib.util.spec_from_file_location("extracted_support", support_path)
+    assert support_spec is not None and support_spec.loader is not None
+    extracted_support = importlib.util.module_from_spec(support_spec)
+    support_spec.loader.exec_module(extracted_support)
+
+    assert extracted_support.SUPPORT_QR_PATH == extracted_qr
+    assert extracted_support.resolve_support_qr_path() == extracted_qr
+
+
+def test_missing_required_support_qr_fails_before_build(tmp_path):
+    source = tmp_path / "source"
+    for name in release.RUNTIME_FILES:
+        if name == "assets/support_qr.png":
+            continue
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    shutil.copytree(ROOT / "src/tmc_processor", source / "src/tmc_processor", ignore=shutil.ignore_patterns("__pycache__"))
+
+    output = tmp_path / "dist"
+    with pytest.raises(FileNotFoundError):
+        release.build(source, output)
+    assert not output.exists()
+
+
+def test_runtime_bundle_version_and_filename_are_consistent(tmp_path):
+    from tmc_processor.metadata import APP_VERSION
+
+    assert APP_VERSION == "1.1.0"
+    bundle = release.build(ROOT, tmp_path / "dist")[0]
+    assert bundle.name == "TMC-Processor-v1.1.0-Windows.zip"
+    with zipfile.ZipFile(bundle) as archive:
+        prefix = f"{bundle.stem}/"
+        import tomllib
+
+        pyproject = tomllib.loads(archive.read(f"{prefix}pyproject.toml").decode("utf-8"))
+        assert pyproject["project"]["version"] == APP_VERSION
+
+
+def test_application_version_stamp_uses_release_package_version(monkeypatch):
+    from tmc_processor.ui import app_shell
+
+    rendered = []
+
+    class RecordingStreamlit:
+        def markdown(self, value, *, unsafe_allow_html):
+            assert unsafe_allow_html is True
+            rendered.append(value)
+
+    monkeypatch.setattr(app_shell, "st", RecordingStreamlit())
+    app_shell._render_version_stamp()
+
+    assert len(rendered) == 1
+    assert "TMC Processor v1.1.0" in rendered[0]
 
 
 @pytest.mark.parametrize("path", [

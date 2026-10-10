@@ -12,6 +12,7 @@ from test_phase_f_v2_dry_run import (
     V2_TEMPLATE_WORKBOOK,
 )
 from tmc_processor.exporter import export_v2_generated_workbook
+from tmc_processor.metadata import APP_VERSION
 from tmc_processor.peaks import confirmed_peak_phf
 from tmc_processor.summaries import hourly_movement_pcu, hourly_summary, movement_summary
 from tmc_processor.exporter import _v2_template_export_sheets, _native_chart_source_data
@@ -35,6 +36,12 @@ def _assert_totals(result, expected_total, expected_am, expected_pm):
     payload = export_v2_generated_workbook(result, setup=_confirmed_setup())
     cached = load_workbook(BytesIO(payload), data_only=True)
     formulas = load_workbook(BytesIO(payload), data_only=False)
+    export_metadata = {
+        row[0]: row[1]
+        for row in formulas["Export_Metadata"].iter_rows(min_row=2, values_only=True)
+        if row[0]
+    }
+    assert export_metadata["app_version"] == APP_VERSION
     for ref in ("F32", "W40", "AM22"):
         assert cached["Summary"][ref].value == expected_total
         assert formulas["Summary"][ref].value == "=ROUND(SUM('Movement_Summary'!$G$2:$G$17),0)"
