@@ -100,7 +100,25 @@ Local supplementary commands: `.venv/Scripts/python.exe outputs/issue34/qualify.
 
 ## Remaining gates and limitations
 
-- Real Excel recalculation is pending. Excel 16.0 COM launch succeeded after elevation. The concrete hidden/read-only checker at outputs/issue34/excel_recalc.py opens only generated demo, eight edge and three local regression outputs with CorruptLoad=0, runs CalculateFullRebuild, compares five final totals and original vehicle caches, checks 35 shape objects/two charts, and closes without saving. Automatic permission review timed out twice on executing this script; user guidance was requested. No real Excel recalc/viewer/no-repair success is claimed yet.
-- CI and independent review remain PR gates. This branch is proposed as a draft while the Excel gate is unresolved; no acceptance, merge, tag, release or issue closure is performed.
+- Real Excel recalculation remains blocked. Following explicit approval for ONE bounded, non-elevated check, the checker was inspected and hardened: fixed list of 12 generated qualification XLSX files, separate hidden DispatchEx instance, ReadOnly=True, UpdateLinks=0, AskToUpdateLinks=False, EnableEvents=False, AutomationSecurity=3, CorruptLoad=0, repair-mode/formula/cache/shape/chart checks, Close(SaveChanges=False), and cleanup restricted to its own instance. A 180-second watchdog targets only that instance's PID. Input hashes guard against modification; evidence JSON uses exclusive creation, not overwrite. No deletion, network access or global Excel process termination is present. Production code was not changed.
+- The single approved command, `.venv/Scripts/python.exe outputs/issue34/excel_recalc.py`, ran without elevation and exited 1 at line 14 (`DispatchEx('Excel.Application')`), before any workbook opened: `pywintypes.com_error: (-2147024891, 'Access is denied.', None, None)`. No Excel instance handle/PID was obtained, no calculation or workbook save occurred, and no retry/elevation was attempted. Earlier Excel 16.0 launch evidence required elevation and does not qualify this approved check. No real Excel recalculation/viewer/no-repair success is claimed.
+
+| Requested real Excel verification | Expected | Observed in approved run |
+|---|---|---|
+| Demo F32 / W40 / AM22 | 23,959 / 23,959 / 23,959 PCU | Not observed; Excel instance creation denied |
+| Demo F30 / F31 | 2,981 / 3,153 PCU | Not observed; no workbook opened |
+| Vehicle-class formulas and caches | Original formulas and unchanged values | Not observed |
+| Native shapes / charts; repair status | 35 shape objects / 2 charts; no repair warning | Not observed |
+| Eight fractional edge cases and three qualified local workbooks | Recalculated totals equal recorded expectations | Not observed |
+
+The existing 136 focused passes and package/cache comparisons remain the available evidence; they do not substitute for the blocked real Excel gate.
+
+## User acceptance and independent workbook review
+
+- User Acceptance: the user opened the generated `demo.xlsx` in Microsoft Excel and confirmed it works. This records user-attested usability; no screenshot or direct observation of Excel's recalculated in-memory state was supplied.
+- Independent Workbook Review: the actual uploaded `demo.xlsx` was inspected as raw ZIP/OOXML without opening or saving it through an Excel library. ZIP CRC passed; the workbook contains 24 worksheets, with Summary first. The five formulas and saved cached values were correct: F30=2,981; F31=3,153; F32/W40/AM22=23,959. Precise source totals reconcile to 23,959.041 PCU; AM/PM Peak sources are 2,980.827 / 3,153.213 PCU. Vehicle-class formulas/caches are intact. The drawing and chart structures remain present (33 shape objects, two connectors, two graph frames, and two charts); DrawingML and chart hashes match the existing evidence above.
+- The independent review verifies saved formulas, caches, workbook structure, and the user's reported Excel usability. It does not directly prove that Excel performed a new calculation in memory after opening. Automated Excel COM recalculation remains unverified because `DispatchEx('Excel.Application')` failed with Access Denied before opening any workbook, as recorded above. No COM retry was performed.
+
+- The prior GitHub Actions run #38018859554 passed all three Windows/Linux jobs at the accepted implementation HEAD. The documentation-only follow-up does not rerun the local full suite; GitHub Actions for the pushed commit is the regression gate before merge. PR #35 is Ready for Review. No merge, tag, release or issue closure is performed.
 - Cloud compatibility is covered by the unchanged direct OOXML path and focused COM-independent tests; no live Cloud redeployment/browser acceptance was performed.
 - Legacy diagnostic V2 COM export is outside this direct OOXML fix. V1 compatibility is covered by the existing focused tests.
