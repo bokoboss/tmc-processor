@@ -10,12 +10,12 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 
 ## Streamlit Community Cloud deployment
 
-Production hosting uses **Streamlit Community Cloud**. After PR #31 passes final
-evidence review and is approved and merged, sign in at
-[share.streamlit.io](https://share.streamlit.io/) and authorize GitHub access.
-Create an app with repository `bokoboss/tmc-processor`, branch `main`, entrypoint
-`app.py`, and explicitly choose **Python 3.12** in Advanced settings. Select the
-public subdomain in the deployment form; no production URL has been assigned here.
+Production hosting uses **Streamlit Community Cloud** at
+[tmc-process.streamlit.app](https://tmc-process.streamlit.app/). The deployment
+was established from PR #31 on `main`; the current published release remains
+v1.0.1 while v1.1.0 preparation is under review. After the approved v1.1.0 PR is
+merged, Community Cloud will deploy the new `main` revision. The app uses entry
+point `app.py` and Python 3.12.
 
 Root `requirements.txt` installs `-e .`, keeping dependencies authoritative in
 the setuptools-style `pyproject.toml` and making the `src/` package importable.
@@ -42,8 +42,9 @@ sizes before release acceptance. Community Cloud processes files on a third-part
 US-hosted service. Session uploads are ephemeral and can be lost on restart or
 redeploy; the app does not intentionally save them to a durable project store.
 Export processing can use short-lived temporary files. Download outputs locally.
-Merge, tag/release `v1.1.0`, and Issue #30 closure require final evidence review;
-deployment preparation alone does not qualify a public deployment.
+The current deployment is available at the URL above. The v1.1.0 merge, tag,
+release, and Issue #36 closure remain gated on PR review, CI, and release
+evidence; this preparation does not publish a release.
 
 ## Legacy version
 
@@ -281,7 +282,7 @@ Real-workbook and Excel/native-template qualification เป็น local/manual 
 
 หลัง `v1.0.0` โครงการเข้าสู่ maintenance mode: แก้บั๊กหรือทำ enhancement แบบมี issue/acceptance แยกเป็นงาน ๆ โดยไม่เปลี่ยน validated behavior โดยไม่จำเป็น
 
-[Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) ยังคงเปิดไว้จนกว่า PR นี้จะได้รับการยอมรับและ merge และเผยแพร่ v1.0.1 โดยข้อกำหนดผลิตภัณฑ์ที่ชัดเจนแล้วรองรับเฉพาะ Peak เต็มชั่วโมง จึงไม่ต้องปรับ native template เพื่อรองรับ rolling Peak และจะเสนอปิด Issue เป็น NOT PLANNED / NO LONGER APPLICABLE หลัง release acceptance
+[Issue #23](https://github.com/bokoboss/tmc-processor/issues/23) ถูกปิดเป็น `not_planned` หลังยืนยันข้อกำหนดผลิตภัณฑ์ว่ารองรับ Peak เต็มชั่วโมงเท่านั้น จึงไม่ต้องปรับ native template เพื่อรองรับ rolling Peak ที่ไม่ตรงชั่วโมง
 
 ## License
 

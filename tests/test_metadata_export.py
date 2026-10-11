@@ -15,6 +15,7 @@ import pandas as pd
 from tmc_processor.batch import BatchItem, process_batch_files
 from tmc_processor.exporter import export_workbook
 from tmc_processor.mapping_preset import load_mapping_preset
+from tmc_processor.metadata import APP_VERSION
 from tmc_processor.pipeline import process_tmc
 from tmc_processor.session import apply_session_to_state, build_project_session, session_from_json, session_to_json_bytes
 
@@ -128,6 +129,7 @@ def test_safe_png_workbook_exports_setup_metadata_to_metadata_and_setup_sheets()
     export_metadata = _sheet_records(workbook, "Export_Metadata")
 
     assert export_metadata["report_title"] == "รายงานทดสอบ Metadata Export"
+    assert export_metadata["app_version"] == APP_VERSION
     assert export_metadata["survey_date"] == "วันทดสอบ 1 มกราคม 2569"
     assert export_metadata["responsible_party"] == "ผู้รับผิดชอบทดสอบ"
     assert export_metadata["caption_text"] == "คำบรรยายรายงานทดสอบ"
