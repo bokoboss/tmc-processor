@@ -24,11 +24,17 @@ class _FacadeModule(types.ModuleType):
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
-        if name != "_app_shell" and hasattr(_app_shell, name):
+        if (
+            name != "_app_shell"
+            and not (name.startswith("__") and name.endswith("__"))
+            and hasattr(_app_shell, name)
+        ):
             setattr(_app_shell, name, value)
 
 
-sys.modules[__name__].__class__ = _FacadeModule
+# Streamlit executes this file as __main__; only imports need the legacy facade.
+if __name__ == "app":
+    sys.modules[__name__].__class__ = _FacadeModule
 
 
 if __name__ == "__main__":

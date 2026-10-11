@@ -67,13 +67,21 @@ jobs:
           python -m pip check
           python -c "import tmc_processor; import importlib.util; assert importlib.util.find_spec('win32com') is None"
 
-      - name: Execute app.py entrypoint without Excel COM
+      - name: Execute app.py entrypoint and reruns without Excel COM
         run: |
           python - <<'PY'
+          import sys
+          import types
           from streamlit.testing.v1 import AppTest
-          app = AppTest.from_file("app.py", default_timeout=60).run()
-          assert not app.exception, [error.message for error in app.exception]
-          print("app.py executed without exceptions")
+          from tmc_processor.ui import app_shell
+          app = AppTest.from_file("app.py", default_timeout=60)
+          for execution in range(3):
+              app.run()
+              assert not app.exception, [error.message for error in app.exception]
+              assert app.file_uploader
+              assert type(sys.modules["__main__"]) is types.ModuleType
+              assert type(app_shell) is types.ModuleType
+              print(f"app.py execution {execution + 1}: no exceptions; module classes unchanged")
           PY
 
       - name: Install test dependencies
