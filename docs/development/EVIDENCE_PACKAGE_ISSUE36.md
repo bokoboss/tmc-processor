@@ -6,6 +6,7 @@
 - Issue: https://github.com/bokoboss/tmc-processor/issues/36
 - Accepted baseline: `main@203bc5f3f584d0245f46c27d58da74c3d973fd65`
 - Branch: `codex/issue-36-release-v1.1.0`
+- Final PR head at this evidence update: `136bc153fab3c044c44374db946e1bb3af7c4bda`
 - Scope: package version alignment, Windows Support QR packaging regression,
   focused tests, stale release/deployment documentation, and candidate release
   bundles.
@@ -26,12 +27,19 @@ All commands ran on Windows with the repository `.venv` Python 3.12.10.
 | Synthetic demo smoke | `python scripts/smoke_demo.py` | PASS; 4 raw sheets, 2,304 normalized rows, AM 08:00 / PM 17:00, workbook generated |
 | Compile | `python -m compileall -q app.py src scripts` | PASS |
 | Whitespace | `git diff --check` | PASS; Git emitted only its informational LF-to-CRLF notice for the edited V2 test file |
+| Full GitHub CI | Workflow run [#127](https://github.com/bokoboss/tmc-processor/actions/runs/38126634857) | PASS: Linux web runtime (Python 3.12), pytest (Python 3.10), pytest (Python 3.12) |
 | Candidate ZIP build | `python scripts/build_windows_release.py --demo --output dist/issue36-v1.1.0-candidate` | PASS; both ZIPs and manifests generated |
 | ZIP integrity/manifest | independent CRC, member list, per-file byte count/SHA, archive SHA, prohibited-content, version and extraction checks | PASS for both archives |
 
 The complete `test_support_view.py` run was started but manually stopped after
 its third test remained active for over a minute. The focused Support QR/dialog
-tests passed; the repository PR CI remains a required full-suite gate.
+tests passed. The full repository suite subsequently passed in all three CI
+jobs listed above.
+
+The first CI run exposed two test-only issues: an old `1.0.1` assertion and a
+Python 3.10 import of stdlib-only `tomllib`. Both were corrected in commit
+`136bc153fab3c044c44374db946e1bb3af7c4bda`; the focused regression tests passed
+locally and the complete follow-up CI run passed.
 
 ## QR provenance
 
@@ -60,6 +68,7 @@ contains only the allowlisted synthetic `samples/demo/` files.
 - `pyproject.toml`
 - `scripts/build_windows_release.py`
 - `tests/test_windows_release_bundle.py`
+- `tests/test_export_package.py`
 - `tests/test_metadata_export.py`
 - `tests/test_v2_pcu_rounding.py`
 - `README.md`
@@ -69,8 +78,9 @@ contains only the allowlisted synthetic `samples/demo/` files.
 
 ## Pending gates and limitations
 
-- PR creation and all required GitHub CI jobs are pending at this evidence
-  checkpoint.
+- PR #37 is open and all required CI jobs passed on head
+  `136bc153fab3c044c44374db946e1bb3af7c4bda`. ChatGPT review and user approval
+  remain required before merge.
 - The live Streamlit app remains on the accepted current `main` version until
   merge; the v1.1.0 Cloud banner/export smoke and operator Support/session check
   require the separately approved post-merge deployment.
