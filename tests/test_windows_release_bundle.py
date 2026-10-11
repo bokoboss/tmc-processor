@@ -103,7 +103,10 @@ def test_runtime_bundle_version_and_filename_are_consistent(tmp_path):
     assert bundle.name == "TMC-Processor-v1.1.0-Windows.zip"
     with zipfile.ZipFile(bundle) as archive:
         prefix = f"{bundle.stem}/"
-        import tomllib
+        try:
+            import tomllib
+        except ModuleNotFoundError:  # Python 3.10
+            import tomli as tomllib
 
         pyproject = tomllib.loads(archive.read(f"{prefix}pyproject.toml").decode("utf-8"))
         assert pyproject["project"]["version"] == APP_VERSION
