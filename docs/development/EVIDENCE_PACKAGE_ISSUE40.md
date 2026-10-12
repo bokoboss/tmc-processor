@@ -30,7 +30,8 @@ earlier opening failed, close Issue #40, or approve release #36.
 - No changes to `app.py`, production source, templates, tests, calculations,
   Mapping, QC, Peak, WorkflowState, diagrams, charts or export routing.
 - Routing and success gates: see `ISSUE40_EXECUTION_CONTRACT.md`.
-- PR and head/CI identifiers: recorded in the draft PR and its checks.
+- Draft review PR: https://github.com/bokoboss/tmc-processor/pull/41.
+  Head/CI identifiers are recorded in that PR's checks.
 
 The evidence directory contained the extracted originals and README; the
 original reproduction ZIP was absent. The four supplied binary SHA-256 values
@@ -45,6 +46,7 @@ openpyxl or another workbook writer.
 | Supplied error screenshot | 13980 | `d5d13ca72d219676e85259684f8d2f9417f0058da21e73d7c042989f1b526094` |
 | Fresh local native V2 | 275084 | `4ee56b6eadb11fdd17b116879ce204c1365c31ee58de24b3706f21fe3393d827` |
 | Fresh public Cloud native V2 | 275214 | `ad029b172dd633dc33abe043cf01cf7547e46710ad38a582e12d6a1deb53ffe2` |
+| Fresh local native V1 | 249195 | `912389996ce42bb4e862eadeddb3d960c85785e40b2ea09749c1f072c5dcd2d8` |
 
 ## Microsoft Excel GUI evidence
 
@@ -63,6 +65,7 @@ prohibit automating security permission actions.
 | Issue #32 control | Protected View; no error/repair prompt | PASS after user enabled editing; `ReadOnly=False` |
 | Fresh local baseline V2 | Normal opening immediately; no Protected View or repair prompt | PASS; `ReadOnly=False` |
 | Fresh actual Cloud download | Protected View; no error/repair prompt | PASS after user enabled editing; `ReadOnly=False` |
+| Fresh local native V1 | Normal opening immediately; no Protected View or repair prompt | PASS; `ReadOnly=False`; numerical caveat below |
 
 The original files carried Internet zone metadata. It was recorded, not removed;
 no Trust Center, Windows or Excel security settings were changed. The fresh
@@ -79,7 +82,8 @@ performed a repair. Originals were not overwritten or saved.
 Local GUI captures include `cloud_protected_view.png`,
 `cloud_original_editable_open.png`, `issue32_control_open.png`,
 `new_native_v2_baseline_open.png`, `cloud_open_and_repair_result.png`, and
-`fresh_cloud_editable_open.png`. Corresponding accessibility text and live
+`fresh_cloud_editable_open.png`, plus `fresh_local_native_v1_open.png`.
+Corresponding accessibility text and live
 Excel value readings are included in the ignored local evidence archive.
 
 ## Cloud and engineering reconciliation
@@ -114,6 +118,16 @@ using Excel's Ctrl+Alt+F9 before final readings.
 | Native Excel charts | 2, with 12 category/value points each |
 | Excel formula error cells | None across all worksheets (`SpecialCells` formula/error scan) |
 
+The separately generated native V1 control opened normally with 19 sheets,
+33 top-level Excel shapes and two charts, and no formula error cells. Its
+existing legacy diagram total `F32` recalculates to **23956**, while `W40` and
+`AM22` are **23959**; AM/PM are 2981/3153. V1 `F32` adds individually rounded
+diagram movement totals, whereas the supporting precise total is 23959.041.
+This is a baseline rounding discrepancy, not an opening error or a change made
+by this work. It is retained and explicitly reported for review; full V1
+numerical acceptance is not claimed from the opening test. No protected V1
+formula was changed to conceal the discrepancy.
+
 V1/V2, PCE factors, physical Mapping, NT stream aggregation, fixed-hour Peak,
 Summary rounding and supporting exports are additionally covered by existing
 focused/full regressions. The three protected private real workbooks were
@@ -145,7 +159,7 @@ Commands were run from the repository using its existing Python 3.12 environment
 | Gate | Command/method | Result |
 | --- | --- | --- |
 | V1 native fidelity | `python -m pytest tests/test_ooxml_template_export.py -q --basetemp=dist/issue40-evidence/pytest-baseline` | 31 passed, 2 existing DrawingML warnings |
-| Focused data/export | `python -m pytest tests/test_v2_pcu_rounding.py tests/test_pce_factors.py tests/test_physical_mapping.py tests/test_phase_l0_dual_scheme.py tests/test_phase_f_v2_dry_run.py -q --basetemp=dist/issue40-evidence/focused-temp --tb=short` | See final local log / PR |
+| Focused data/export | `python -m pytest tests/test_v2_pcu_rounding.py tests/test_pce_factors.py tests/test_physical_mapping.py tests/test_phase_l0_dual_scheme.py tests/test_phase_f_v2_dry_run.py -q --basetemp=dist/issue40-evidence/focused-temp --tb=short` | **119 passed, 18 warnings**, 195.41 seconds |
 | Full suite | `python -u -m pytest -q --basetemp=dist/issue40-evidence/pytest-full-native --tb=short` | **551 passed, 30 warnings**, 488.34 seconds; no skips/failures |
 | Compile | `python -m compileall -q app.py src` | PASS |
 | Whitespace | `git diff --check` | PASS |
@@ -168,8 +182,10 @@ are supplemental and are not presented as Excel GUI proof.
 - Verified GUI qualification covers this installed M365 build, these exact
   artifacts and the public synthetic V2 workflow. It does not certify all Excel
   builds, all workbooks or the historical download/open route.
-- V1 is covered by the existing native-export tests/full suite, not a new V1
-  GUI acceptance run in this investigation.
+- V1 native GUI opening passes, but its existing diagram-total rounding
+  discrepancy (23956 versus 23959 in this demo) remains outside the demonstrated
+  Excel-opening failure. A separate numerical scope decision is needed before
+  changing protected V1 reporting formulas.
 - Browser console retains Cloud shell user-details 404s and shell iframe
   warnings; the app workflow completed and downloaded the report. No application
   exception appeared in the exercised flow.
