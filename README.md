@@ -2,9 +2,15 @@
 
 TMC Processor เป็นโปรแกรมบน Streamlit สำหรับประมวลผลข้อมูล Turning Movement Count (TMC) จากไฟล์ Excel ให้เป็นตารางสรุป ข้อมูล PCU/PCE ช่วงเร่งด่วน และ Excel Report ที่พร้อมนำไปใช้ต่อในงานรายงานจราจร
 
-รุ่นปัจจุบัน: **`v1.0.1` — published stable**; `v1.1.0` อยู่ระหว่างเตรียมและตรวจหลักฐานก่อนเผยแพร่
+รุ่นปัจจุบัน: **[`v1.1.0` — Stable / Latest](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)** เผยแพร่แล้ว
 
-ผู้ใช้ทั่วไป: ดาวน์โหลด Windows ZIP จาก [latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest) และดูวิธีเปิดโปรแกรมด้านล่าง
+**เริ่มใช้งานทันที:**
+
+- [ทดลองบน Streamlit Cloud](https://tmc-process.streamlit.app/)
+- [ดาวน์โหลด Windows ZIP](https://github.com/bokoboss/tmc-processor/releases/download/v1.1.0/TMC-Processor-v1.1.0-Windows.zip)
+- [ดาวน์โหลด Demo ZIP](https://github.com/bokoboss/tmc-processor/releases/download/v1.1.0/TMC-Processor-v1.1.0-Demo-Files.zip)
+
+v1.1.0 เพิ่ม Native V2 Summary, Support QR และการรวม PCU แบบ round-once ใน V2 Summary พร้อม Demo ZIP สำหรับทดลองด้วยข้อมูลสังเคราะห์
 
 โค้ดรุ่นปัจจุบันอยู่บน branch `main`
 
@@ -12,10 +18,10 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 
 Production hosting uses **Streamlit Community Cloud** at
 [tmc-process.streamlit.app](https://tmc-process.streamlit.app/). The deployment
-was established from PR #31 on `main`; the current published release remains
-v1.0.1 while v1.1.0 preparation is under review. After the approved v1.1.0 PR is
-merged, Community Cloud will deploy the new `main` revision. The app uses entry
-point `app.py` and Python 3.12.
+was established from PR #31 on `main`; v1.1.0 is the current published stable
+release. Its accepted release commit is
+[`1514b142e566f1edf64ac1ba5aaf6b5a1523541b`](https://github.com/bokoboss/tmc-processor/commit/1514b142e566f1edf64ac1ba5aaf6b5a1523541b).
+The app uses entry point `app.py` and Python 3.12.
 
 Root `requirements.txt` installs `-e .`, keeping dependencies authoritative in
 the setuptools-style `pyproject.toml` and making the `src/` package importable.
@@ -42,9 +48,8 @@ sizes before release acceptance. Community Cloud processes files on a third-part
 US-hosted service. Session uploads are ephemeral and can be lost on restart or
 redeploy; the app does not intentionally save them to a durable project store.
 Export processing can use short-lived temporary files. Download outputs locally.
-The current deployment is available at the URL above. The v1.1.0 merge, tag,
-release, and Issue #36 closure remain gated on PR review, CI, and release
-evidence; this preparation does not publish a release.
+The v1.1.0 release is published and the release CI and Cloud acceptance passed.
+The deployment is available at the URL above.
 
 ## Legacy version
 
@@ -95,6 +100,15 @@ Canonical workflow ของโปรแกรมคือ:
 - Demo files สำหรับทดลองโดยไม่ต้องมีไฟล์สำรวจจริง
 - Windows launcher ผ่าน `start_tmc_processor.bat`
 
+## ไฮไลต์ v1.1.0
+
+- Native V2 Summary สร้าง Summary sheet พร้อมกราฟ 2 รายการใน Excel template เดิม รวม 24 worksheets
+- V2 Summary รวม PCU แบบ round-once; Demo ได้ค่า F30=2,981, F31=3,153 และ F32/W40/AM22=23,959 จากยอดละเอียด 23,959.041
+- หน้าต่าง Support แสดง QR ที่แนบมากับ Windows ZIP โดยไม่รบกวนสถานะงาน
+- CI ทั้ง 3 jobs และ Cloud acceptance ผ่านแล้ว; Issue [#36](https://github.com/bokoboss/tmc-processor/issues/36), [#38](https://github.com/bokoboss/tmc-processor/issues/38) และ [#40](https://github.com/bokoboss/tmc-processor/issues/40) ปิดแล้ว
+
+ข้อจำกัดที่ทราบ: Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) ยังเปิดอยู่ — V1 Summary แสดงยอด PCU ใน F32 เป็น 23,956 ขณะที่ยอดสนับสนุน W40/AM22 เป็น 23,959 สำหรับ Demo; ยังไม่มีการเปลี่ยนสูตร V1. ข้อผิดพลาดเปิดไฟล์ Excel ที่เคยรายงานใน #40 ไม่เกิดซ้ำในการตรวจด้วย M365 ปัจจุบันและมีการยอมรับ V2 Cloud workbook แล้ว แต่ไม่ได้ยืนยันว่าแก้สาเหตุเดิมหรือรับรอง Excel ทุกเวอร์ชัน
+
 ## คำแนะนำการใช้งาน
 
 แนะนำให้ใช้ Single workflow เป็น workflow หลักสำหรับการจัดทำรายงาน เนื่องจากตรวจสอบ Mapping, Peak, QC และรายงานได้ละเอียดที่สุด
@@ -109,9 +123,8 @@ Peak Hour ใช้ช่วงเต็มชั่วโมงเท่าน�
 
 ## สำหรับผู้ใช้ทั่วไป — ดาวน์โหลด Windows ZIP
 
-1. เปิด [GitHub Releases → latest stable release](https://github.com/bokoboss/tmc-processor/releases/latest)
-   แล้วเลือก `TMC-Processor-vX.Y.Z-Windows.zip` ใน Assets (เช่น `TMC-Processor-v1.0.0-Windows.zip`)
-2. แตก ZIP ทั้งหมดลงในโฟลเดอร์ที่เขียนไฟล์ได้ แล้วเปิดโฟลเดอร์ `TMC-Processor-vX.Y.Z-Windows`
+1. ดาวน์โหลด [TMC-Processor-v1.1.0-Windows.zip](https://github.com/bokoboss/tmc-processor/releases/download/v1.1.0/TMC-Processor-v1.1.0-Windows.zip) จาก [Release v1.1.0](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)
+2. แตก ZIP ทั้งหมดลงในโฟลเดอร์ที่เขียนไฟล์ได้ แล้วเปิดโฟลเดอร์ `TMC-Processor-v1.1.0-Windows`
 3. ดับเบิลคลิก `start_tmc_processor.bat` และรอให้โปรแกรมเปิดใน browser
 
 ต้องใช้ **Windows และ Python 3.10 หรือใหม่กว่า** (เลือก `Add python.exe to PATH` ตอนติดตั้ง)
@@ -123,7 +136,7 @@ Microsoft Excel เป็น optional integration ไม่ใช่ข้อก
 ไฟล์ผลลัพธ์บันทึกผ่านปุ่มดาวน์โหลดไปยังโฟลเดอร์ดาวน์โหลดของ browser หรือตำแหน่งที่ผู้ใช้เลือก
 ตรวจข้อมูลส่วนตัวในไฟล์สำรวจและผลลัพธ์ก่อนส่งต่อ
 
-Windows ZIP และ Demo ZIP ต้องแนบใน Release Assets โดยผู้ดูแล หากยังไม่มี Asset ที่ต้องการ ให้รอผู้ดูแลเผยแพร่
+ดาวน์โหลด [Demo ZIP](https://github.com/bokoboss/tmc-processor/releases/download/v1.1.0/TMC-Processor-v1.1.0-Demo-Files.zip) แยกจาก Windows ZIP เพื่อทดลองด้วยไฟล์สังเคราะห์
 GitHub Source code ZIP เป็น source snapshot สำหรับผู้พัฒนา ไม่ใช่ Windows bundle นี้
 
 ## Workflow แบบไฟล์เดียว
@@ -169,7 +182,7 @@ Batch ZIP จะมี `batch_summary.xlsx` ซึ่งรวม `Batch_QC` แ
 
 ## ทดลองใช้ด้วย Demo files
 
-ดาวน์โหลด `TMC-Processor-vX.Y.Z-Demo-Files.zip` แยกจาก Release Assets แล้วแตกไฟล์
+ดาวน์โหลด [TMC-Processor-v1.1.0-Demo-Files.zip](https://github.com/bokoboss/tmc-processor/releases/download/v1.1.0/TMC-Processor-v1.1.0-Demo-Files.zip) แล้วแตกไฟล์
 ไฟล์สังเคราะห์ใน `samples/demo/` ของ Demo ZIP ไม่รวมอยู่ใน Windows runtime ZIP และไม่จำเป็นต่อการเปิดโปรแกรม
 
 ไฟล์ตัวอย่างอยู่ใน `samples/demo/`
