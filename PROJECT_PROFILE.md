@@ -5,24 +5,26 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `1.1.0` (release-preparation branch; `v1.0.1` remains the latest published stable release until approval and publication)
+- Package/application version: `1.1.0` — published Stable/Latest release [`v1.1.0`](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)
 - Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
 - Installed workflow version: `v1.4.1`
 
 ## Current accepted baseline and release state
-- Accepted released baseline before Issue #30: `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827` (`v1.0.1`).
-- v1.0.1 qualification: full automated suite 504 passed; GitHub Actions CI #113 passed on Windows / Python 3.10 and 3.12.
+- Current published and accepted release baseline: `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b` (`v1.1.0`, Stable/Latest, published 2026-10-12).
+- v1.1.0 GitHub Actions CI run [#38263923359](https://github.com/bokoboss/tmc-processor/actions/runs/38263923359) passed all 3 jobs; Streamlit Community Cloud acceptance passed at https://tmc-process.streamlit.app/.
+- Issue #36 release publication, Issue #38 Cloud rerun fix, and Issue #40 Excel interoperability investigation are closed. Issue #42 remains open as a documented V1 Summary PCU discrepancy.
+- Historical v1.0.1 baseline before Issue #30: `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`; its full suite had 504 passed and CI #113 passed on Windows / Python 3.10 and 3.12.
 - Before the separately approved Issue #30 web-app enhancement, the project was in maintenance mode.
-- Accepted Issue #36 release baseline: `main@203bc5f3f584d0245f46c27d58da74c3d973fd65` (PRs #31, #33, and #35 merged; v1.0.1 remains the latest published release).
-- Current task: Issue #36 v1.1.0 release preparation, with calculation, mapping, Peak, export, template, drawing, and chart behavior protected.
+- Historical Issue #36 preparation baseline: `main@203bc5f3f584d0245f46c27d58da74c3d973fd65` (PRs #31, #33, and #35 had merged at that point).
+- v1.1.0 release includes version alignment, Windows Support QR packaging, hosted Streamlit readiness, Native V2 Summary and round-once V2 Summary PCU. Calculation, Mapping, QC, Peak and V1 behavior remain protected.
 - Accepted UX/product baseline: `main@ff26e48a904d4dae53c9d0f92ecf853f86ea93a9` from PR #25 (UX-8).
 - PR #25 qualification: full automated suite 451 passed, 0 failed; CI passed on Windows / Python 3.10 and 3.12.
 - Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
 - GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
-- Current published release: `v1.0.1` is stable; `v1.1.0` is not tagged or published during preparation.
-- Streamlit Community Cloud is deployed at https://tmc-process.streamlit.app/ from `main`; the accepted v1.1.0 branch must pass review and CI before deployment changes.
+- Current published release: `v1.1.0` is Stable/Latest at `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b`.
+- Streamlit Community Cloud is deployed at https://tmc-process.streamlit.app/; the v1.1.0 Cloud operator acceptance passed.
 
 ## Product workflow
 Canonical operator flow for Single and Batch:
@@ -130,11 +132,13 @@ Changes must not alter the following without explicit approval and qualification
 | CI | GitHub Actions Windows Python 3.10 / 3.12 | Yes |
 
 ## Release history
-### v1.0.1
-Published stable maintenance release from `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`.
+### v1.1.0
+Published Stable/Latest on 2026-10-12 from accepted `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b`. [GitHub Release](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0). Windows and Demo ZIP assets were published. All 3 CI jobs and Streamlit Cloud acceptance passed.
 
-### v1.1.0 (preparation)
-Release preparation is based on accepted `main@203bc5f3f584d0245f46c27d58da74c3d973fd65`. It aligns package/runtime version, packages the supplied Support QR in the Windows bundle, and records the hosted readiness, V2 Summary and round-once PCU work. It remains unpublished until PR review, CI, merge, and separate release approval.
+Release highlights: Native V2 Summary, the supplied Support QR in the Windows bundle, and round-once PCU totals in the V2 Summary. The synthetic demo V2 workbook has 24 worksheets and two charts. V1 Summary PCU total discrepancy remains tracked by open Issue #42.
+
+### v1.0.1
+Historical published stable maintenance release from `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`.
 
 ### v1.0.0
 Stable closure release after UX-0 through UX-8 modernization and qualification.
@@ -160,6 +164,8 @@ The legacy snapshot is historical and must not be moved or rewritten.
 
 ## Known limitations / backlog
 - Issue #23 was closed as `not_planned` after the fixed-hour Peak contract was accepted. Non-hour-aligned rolling Peaks are outside the supported contract.
+- Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) remains open: on the synthetic demo, V1 Summary F32 displays 23,956 PCU while supporting total cells W40/AM22 display 23,959. V2 Summary uses its separately accepted round-once totals. V1 formulas and templates remain unchanged pending separate investigation and approval.
+- The Excel GUI opening rejection reported during Issue #40 investigation was not reproduced in the later current-M365 acceptance; the V2 Cloud workbook was accepted. The original cause was not established, and universal Excel compatibility is not claimed.
 - Batch Project Session is intentionally disabled because the current session format cannot round-trip Batch uploads and Batch Mapping Presets.
 - UX-8 live Batch qualification used successful demo items; failed/excluded outcomes were covered by existing automated behavior but not recreated in that final UX browser smoke.
 - `WorkflowContext` / `WorkflowOperations` retain a relatively broad dependency surface from UX-6; avoid expanding it without architectural review.
@@ -174,4 +180,4 @@ The legacy snapshot is historical and must not be moved or rewritten.
 - Implementation changes require evidence appropriate to affected risk areas before merge/release.
 
 ## Current next objective
-Complete Issue #36 release preparation from the accepted `203bc5f3f584d0245f46c27d58da74c3d973fd65` baseline without changing validated engineering or export behavior. Merge, tag, and publish remain separate approval gates.
+Issue #36 v1.1.0 publication is complete. The next project priority is the separately scoped investigation in open Issue #42; preserve the current V1/V2 report contracts until an explicit change is accepted and qualified.
