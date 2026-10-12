@@ -123,6 +123,10 @@ The separately generated native V1 control opened normally with 19 sheets,
 existing legacy diagram total `F32` recalculates to **23956**, while `W40` and
 `AM22` are **23959**; AM/PM are 2981/3153. V1 `F32` adds individually rounded
 diagram movement totals, whereas the supporting precise total is 23959.041.
+Its live `F32` formula is `SUM(J14:M14,E19:E22,J29:M29,Q21:Q24)`;
+the nonzero HLOOKUP subtotal values are 12499, 6095 and 5362. These legacy
+subtotals sum displayed hourly movement values rather than the precise
+support-sheet total used by V2's final rollup.
 This is a baseline rounding discrepancy, not an opening error or a change made
 by this work. It is retained and explicitly reported for review; full V1
 numerical acceptance is not claimed from the opening test. No protected V1
