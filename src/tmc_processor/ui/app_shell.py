@@ -71,7 +71,8 @@ from tmc_processor.export_package import (
     create_v2_generated_export_package_zip,
     safe_package_filename,
 )
-from tmc_processor.importer import detect_raw_direction_sheet_names, load_detected_sheet_details, preview_detected_sheets
+from tmc_processor.importer import detect_raw_direction_sheet_names, preview_from_details
+from tmc_processor.application.workbook_import import SINGLE_WORKBOOK_CACHE_KEY, single_workbook_details
 from tmc_processor.mapping import (
     apply_saved_mapping_to_sheets,
     PHYSICAL_APPROACH_OPTIONS,
@@ -786,6 +787,8 @@ def _consume_upload_clear_request(*, state_key: str, widget_key: str, request_ke
 
 
 def _clear_single_source_upload() -> None:
+    st.session_state.pop(SINGLE_WORKBOOK_CACHE_KEY, None)
+    st.session_state["tmc_detected_sheet_names"] = []
     _bump_upload_widget_revision(SINGLE_SOURCE_UPLOAD_WIDGET_KEY)
     _request_upload_clear(
         state_key=SINGLE_SOURCE_UPLOAD_STATE_KEY,
@@ -5726,15 +5729,15 @@ def _run_streamlit_app() -> None:
     preview_summary = pd.DataFrame()
     previews: dict[str, pd.DataFrame] = {}
     parsed_details = {}
+    if uploaded_file is None:
+        single_workbook_details(None, st.session_state)
+        st.session_state["tmc_detected_sheet_names"] = []
     if uploaded_file is not None:
-        excel_buffer = BytesIO(file_bytes)
         try:
-            detected_sheet_names = detect_raw_direction_sheet_names(excel_buffer)
+            parsed_details = single_workbook_details(file_bytes, st.session_state)
+            detected_sheet_names = list(parsed_details)
             st.session_state["tmc_detected_sheet_names"] = list(detected_sheet_names)
-            excel_buffer.seek(0)
-            preview_summary, previews = preview_detected_sheets(excel_buffer)
-            excel_buffer.seek(0)
-            parsed_details = load_detected_sheet_details(excel_buffer)
+            preview_summary, previews = preview_from_details(parsed_details)
         except Exception as exc:  # pragma: no cover - UI guardrail
             st.error(f"ไม่สามารถอ่านไฟล์ Workbook ได้: {exc}")
             st.stop()
