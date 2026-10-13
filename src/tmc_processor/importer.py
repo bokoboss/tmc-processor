@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import math
 from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
@@ -225,6 +226,16 @@ def _numeric_count(value: object) -> float:
     return 0.0 if pd.isna(numeric) else float(numeric)
 
 
+def count_input_status(value: object) -> str:
+    """Classify the source value before the legacy zero fallback erases it."""
+    if pd.isna(value) or _text(value) == "":
+        return "blank"
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric) or not math.isfinite(float(numeric)):
+        return "invalid"
+    return "zero" if float(numeric) == 0 else "numeric"
+
+
 def parse_raw_count_sheet(raw: pd.DataFrame, raw_sheet: str) -> ParsedSheet:
     raw_direction = extract_raw_direction(raw_sheet) or ""
     first_data_row, time_start_col, time_end_col = _locate_count_table(raw)
@@ -254,10 +265,15 @@ def parse_raw_count_sheet(raw: pd.DataFrame, raw_sheet: str) -> ParsedSheet:
                     "time_end": time_end,
                     "vehicle_class": vehicle["vehicle_class"],
                     "count": _numeric_count(row.iloc[int(vehicle["column"])]),
+                    "source_row": row_idx + 1,
+                    "source_column": int(vehicle["column"]) + 1,
+                    "source_count_raw": row.iloc[int(vehicle["column"])],
+                    "source_count_status": count_input_status(row.iloc[int(vehicle["column"])]),
                 }
             )
 
-    data = pd.DataFrame(rows, columns=["raw_sheet", "raw_direction", "time_start", "time_end", "vehicle_class", "count"])
+    data = pd.DataFrame(rows, columns=["raw_sheet", "raw_direction", "time_start", "time_end", "vehicle_class", "count",
+                                      "source_row", "source_column", "source_count_raw", "source_count_status"])
     debug_vehicle_columns = [
         {**vehicle, "column": int(vehicle["column"]) + 1}
         for vehicle in vehicle_columns
@@ -270,7 +286,8 @@ def load_detected_sheet_details(excel_file: str | Path | BinaryIO) -> dict[str, 
     sheet_names = detect_raw_direction_sheet_names(excel_file)
     if hasattr(excel_file, "seek"):
         excel_file.seek(0)
-    raw_sheets = pd.read_excel(excel_file, sheet_name=sheet_names, header=None)
+    # Preserve text such as "N/A" for invalid-count QC while keeping empty header cells fillable.
+    raw_sheets = pd.read_excel(excel_file, sheet_name=sheet_names, header=None, keep_default_na=False, na_values=[""])
     return {name: parse_raw_count_sheet(raw, name) for name, raw in raw_sheets.items()}
 
 
