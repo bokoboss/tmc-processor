@@ -242,3 +242,67 @@ def test_project_session_round_trip_excludes_cache_and_preserves_reuse(app_test,
     assert state[SINGLE_WORKBOOK_CACHE_KEY] == cached
     assert reuse(payload, state)["ทิศ 1"].data["count"].sum() == 40
     assert io_counts["parses"] == 1
+
+
+def test_parser_revision_change_reparses_once_then_reuses(io_counts, monkeypatch):
+    import hashlib
+    from tmc_processor.application import workbook_import
+    payload, state = workbook(), {}
+    monkeypatch.setattr(workbook_import, "SINGLE_WORKBOOK_PARSER_REVISION", 1, raising=False)
+    reuse(payload, state)
+    reuse(payload, state)
+    assert io_counts["parses"] == 1
+
+    monkeypatch.setattr(workbook_import, "SINGLE_WORKBOOK_PARSER_REVISION", 2, raising=False)
+    refreshed = reuse(payload, state)
+    assert refreshed["ทิศ 1"].data["count"].tolist() == [10] * 4
+    assert io_counts["parses"] == 2
+    reuse(payload, state)
+    assert io_counts["parses"] == 2
+    assert state[workbook_import.SINGLE_WORKBOOK_CACHE_KEY][0] == 2
+    assert state[workbook_import.SINGLE_WORKBOOK_CACHE_KEY][1] == hashlib.sha256(payload).hexdigest()
+
+
+def test_revisionless_legacy_entry_with_stale_details_is_evicted(io_counts):
+    import hashlib
+    import pickle
+    from tmc_processor.application.workbook_import import SINGLE_WORKBOOK_CACHE_KEY
+    payload, state = workbook(10), {}
+    stale = reuse(workbook(99), {})
+    # Legacy tuple shape: (source digest, serialized details), without revision.
+    state[SINGLE_WORKBOOK_CACHE_KEY] = (hashlib.sha256(payload).hexdigest(), pickle.dumps(stale))
+
+    current = reuse(payload, state)
+
+    assert current["ทิศ 1"].data["count"].tolist() == [10] * 4
+    assert io_counts["parses"] == 2  # stale fixture plus exactly one parse of current bytes
+    assert len(state[SINGLE_WORKBOOK_CACHE_KEY]) == 3
+
+
+def test_corrupt_cached_payload_is_evicted_and_source_is_reparsed(io_counts):
+    import hashlib
+    from tmc_processor.application import workbook_import
+    payload, state = workbook(10), {}
+    revision = getattr(workbook_import, "SINGLE_WORKBOOK_PARSER_REVISION", 1)
+    state[workbook_import.SINGLE_WORKBOOK_CACHE_KEY] = (
+        revision, hashlib.sha256(payload).hexdigest(), b"not a valid pickle",
+    )
+
+    current = reuse(payload, state)
+
+    assert current["ทิศ 1"].data["count"].tolist() == [10] * 4
+    assert io_counts["parses"] == 1
+    assert len(state[workbook_import.SINGLE_WORKBOOK_CACHE_KEY]) == 3
+
+
+def test_corrupt_cache_does_not_hide_invalid_original_workbook_error():
+    import hashlib
+    import pytest
+    from tmc_processor.application.workbook_import import SINGLE_WORKBOOK_CACHE_KEY
+    invalid = b"invalid original workbook"
+    state = {SINGLE_WORKBOOK_CACHE_KEY: (hashlib.sha256(invalid).hexdigest(), b"corrupt cache payload")}
+
+    with pytest.raises(ValueError):
+        reuse(invalid, state)
+
+    assert SINGLE_WORKBOOK_CACHE_KEY not in state
