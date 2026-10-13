@@ -122,6 +122,10 @@ def _source_integrity_issues(
         sources[sheet] = source
         if sheet in report_sheets:
             observed_starts.update(int(value) for value in source.loc[source["_valid_interval"], "_start"])
+        else:
+            # Excluded sheets do not contribute to report calculations, so their
+            # source defects must not create actionable report QC or block review.
+            continue
 
         for (start, end), interval in source.groupby(["_start", "_end"], dropna=False, sort=False):
             label = f"time={minutes_to_time(int(start)).strftime('%H:%M') if pd.notna(start) else '?'}-" \

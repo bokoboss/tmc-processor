@@ -248,6 +248,51 @@ def test_excluded_report_source_does_not_impose_coverage_on_included_sources():
     assert "source_missing_interval" not in set(result.qc.check)
 
 
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "duration", "misaligned", "blank", "invalid"],
+                         ids=["missing", "duplicate", "bad-duration", "misaligned", "blank-count", "invalid-count"])
+def test_report_excluded_source_defects_do_not_block_batch_bulk_acceptance_or_exports(defect):
+    from tmc_processor.batch import (BatchItem, analyze_batch_files, batch_analysis_qc_rows,
+                                     bulk_accept_clean_files, generate_batch_zip_from_reviewed_peaks)
+
+    tables = vendor_sources()
+    tables["ทิศ 2"] = vendor_sources(defect)["ทิศ 1"]
+    payload = BytesIO()
+    with pd.ExcelWriter(payload, engine="openpyxl") as writer:
+        for sheet, table in tables.items():
+            table.to_excel(writer, sheet_name=sheet, header=False, index=False)
+
+    selected = mapping()
+    included = selected[selected.raw_sheet == "ทิศ 1"].iloc[[0]].copy()
+    second_movement = included.copy()
+    second_movement["raw_direction"] = "alternate"
+    second_movement["movement_code"] = "EW"
+    selected = pd.concat([included, second_movement, selected[selected.raw_sheet == "ทิศ 2"]], ignore_index=True)
+    selected.loc[selected.raw_sheet == "ทิศ 2", "include_in_report"] = False
+    analysis = analyze_batch_files([BatchItem("excluded-defect.xlsx", payload.getvalue())],
+                                   mapping=selected, setup={}, peak_windows=WINDOWS)
+    item = analysis.items[0]
+    assert item.status == "success", item.notes
+    assert not item.qc.category.eq("source_integrity").any(), item.qc.to_string()
+    assert item.QC_errors == 0 and item.QC_warnings == 0
+    assert [candidate.file_name for candidate in bulk_accept_clean_files(analysis)] == ["excluded-defect.xlsx"]
+    assert item.confirmed_AM_peak and item.confirmed_PM_peak
+    assert not any(row["category"] == "source_integrity" for row in batch_analysis_qc_rows(analysis))
+
+    result = generate_batch_zip_from_reviewed_peaks(analysis, setup={}, peak_windows=WINDOWS,
+                                                   use_template_report_layout=False)
+    summary = result.summary_rows[0]
+    assert summary.status == "success", summary.notes
+    with ZipFile(BytesIO(result.package_bytes)) as archive:
+        workbook = load_workbook(BytesIO(archive.read(summary.export_file)), read_only=True, data_only=True)
+        rows = list(workbook["QC_Check"].values)
+        records = [dict(zip(rows[0], row)) for row in rows[1:]]
+        assert not any(row["category"] == "source_integrity" for row in records)
+        summary_book = load_workbook(BytesIO(archive.read("batch_summary.xlsx")), read_only=True, data_only=True)
+        batch_rows = list(summary_book["Batch_QC"].values)
+        batch_records = [dict(zip(batch_rows[0], row)) for row in batch_rows[1:]]
+        assert not any(row["category"] == "source_integrity" for row in batch_records)
+
+
 def test_confirmed_peak_requires_each_included_source_even_if_all_omit_a_slot():
     raw = sources("missing")
     raw["ทิศ 2"] = raw["ทิศ 2"][raw["ทิศ 2"].time_start != time(7, 15)]

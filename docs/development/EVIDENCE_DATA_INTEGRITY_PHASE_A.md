@@ -10,6 +10,14 @@ Three-workbook validation after the remediation passed exact baseline frame/expo
 
 The current full-suite invocation was attempted but did not complete in this environment: the pre-existing repeated Streamlit `AppTest` case (`tests/test_app_runtime.py::test_apptest_fresh_loads_and_reruns_preserve_module_classes`) remained active without returning within the extended wait; it was interrupted. A second suite run excluding that one case also remained in long-running UI integration tests and was interrupted before summary. This is not recorded as a passing full-suite result. The prior Phase A 593-test pass predates this severity-only remediation; hosted CI for the new remediation commit is the remaining full-suite gate.
 
+## Independent-review remediation: report-excluded source diagnostics
+
+Review finding: source duration, alignment, duplicate and count checks ran for every detected sheet even when the mapping excluded that sheet from report calculations. Those errors propagated to Batch QC and blocked bulk acceptance. The fix now limits source-integrity diagnostics to report-included sheets; excluded sheets are still parsed for normal mapping behavior, and the existing mapping-level `source_row_excluded_from_report` info remains. Included-source checks and cross-sheet coverage semantics are unchanged.
+
+RED/GREEN: a two-sheet Batch workbook has one valid included source and one deliberately excluded defective source. Before the fix, duplicate, invalid count and malformed duration in the excluded sheet each produced a source-integrity error. After the fix, the regression covers missing, duplicate, malformed-duration, misaligned, blank and invalid-count cases: none create actionable source-integrity findings, the clean included source remains bulk-eligible, and QC_Check / Batch_QC exports contain no excluded-sheet source-integrity rows. Existing included-source regressions continue to assert all integrity errors; the blank-only info regression remains in the focused set.
+
+Final focused suite after both review remediations: 69 passed, 1 existing non-finite-input PHF RuntimeWarning. Three-protected-workbook parity: exact frames and export-content parity, 3/3 Batch analyses. Compile and whitespace checks passed. The complete Windows local suite was attempted with verbose progress and collected 597 tests, but remained on the unchanged repeated Streamlit AppTest (`test_apptest_fresh_loads_and_reruns_preserve_module_classes`) for more than ten minutes without returning; it was interrupted. Earlier rerun excluding that test also stalled in UI integration tests. This local runtime limitation is recorded as unresolved rather than a passing full-suite result; hosted CI for the final commit remains the full-suite gate.
+
 Date: 2026-10-13 (Asia/Bangkok). Scope: source-data diagnostics only.
 
 ## Provenance and scope
@@ -90,7 +98,7 @@ Repeated copies of a physical source cell also produce a duplicate error even wh
 
 | Gate | Command/method | Result |
 | --- | --- | --- |
-| Remediation focused GREEN | `.venv/Scripts/python.exe -m pytest tests/test_source_integrity.py tests/test_qc_checks.py tests/test_ux4_ux5.py -q` | **63 passed**, 1 existing non-finite PHF RuntimeWarning. Includes blank-only eligibility and info visibility/export regressions. |
+| Final remediation focused GREEN | `.venv/Scripts/python.exe -m pytest tests/test_source_integrity.py tests/test_qc_checks.py tests/test_ux4_ux5.py -q` | **69 passed**, 1 existing non-finite PHF RuntimeWarning. Covers both review remediations and existing Batch warning/error eligibility. |
 | First GREEN | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py -q` | 15 passed; `outputs/phase_a_green.txt`. |
 | Expanded focused | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py tests/test_qc_checks.py -q` | 44 passed, 1 warning, 13.37 seconds; `outputs/phase_a_focused.txt`. |
 | Native template QC | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py::test_native_template_export_retains_actionable_source_qc -q` | 1 passed, 6.95 seconds; `outputs/phase_a_native_qc.txt`. |
