@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from .constants import BASE_INTERVAL_MINUTES, NORMALIZED_COLUMNS, VEHICLE_CLASSES
+from .importer import count_input_status
 from .mapping import normalize_mapping_for_scheme
 from .movement_scheme import MOVEMENT_SCHEME_V2, parse_approach_movement_code
 from .pcu import add_pcu
@@ -49,6 +50,35 @@ def _extract_times(row: pd.Series, start_col: str | None, end_col: str | None, i
     if start is not None and end is None:
         end = add_minutes(start, BASE_INTERVAL_MINUTES)
     return start, end
+
+
+def source_count_rows(raw: pd.DataFrame) -> pd.DataFrame:
+    """Expose source observations once, before mapping fans them out."""
+    if PARSED_RAW_COLUMNS.issubset(raw.columns):
+        source = raw.copy()
+        if "source_count_raw" not in source:
+            source["source_count_raw"] = source["count"]
+        if "source_count_status" not in source:
+            source["source_count_status"] = source["source_count_raw"].map(count_input_status)
+        return source
+
+    raw = raw.copy()
+    raw.columns = [_normalize_column_name(column) for column in raw.columns]
+    vehicle_cols = _vehicle_columns(raw)
+    start_col = _find_column(list(raw.columns), TIME_START_ALIASES)
+    end_col = _find_column(list(raw.columns), TIME_END_ALIASES)
+    interval_col = _find_column(list(raw.columns), INTERVAL_ALIASES)
+    rows = []
+    for position, (_, row) in enumerate(raw.iterrows(), start=1):
+        start, end = _extract_times(row, start_col, end_col, interval_col)
+        if start is None:
+            continue
+        for column in vehicle_cols:
+            value = row[column]
+            rows.append(dict(time_start=start, time_end=end, vehicle_class=column, count=value,
+                             source_row=position, source_column=list(raw.columns).index(column) + 1,
+                             source_count_raw=value, source_count_status=count_input_status(value)))
+    return pd.DataFrame(rows)
 
 
 def _source_stream(map_row: pd.Series) -> str:

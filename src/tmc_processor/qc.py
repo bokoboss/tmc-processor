@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
-from .constants import AM_WINDOW, DEFAULT_PCE_FACTORS, PM_WINDOW, VEHICLE_CLASSES
+from .constants import AM_WINDOW, BASE_INTERVAL_MINUTES, DEFAULT_PCE_FACTORS, PM_WINDOW, VEHICLE_CLASSES
 from .mapping import clean_mapping
+from .normalizer import source_count_rows
 from .pcu import PceFactorIssue, normalize_pce_factors
 from .time_utils import minutes_to_time, time_to_minutes
 
@@ -89,6 +91,98 @@ def _time_range_text(start_minute: int) -> str:
     return f"{minutes_to_time(start_minute).strftime('%H:%M')}-{minutes_to_time(start_minute + 60).strftime('%H:%M')}"
 
 
+def _source_location(row: pd.Series) -> str:
+    source_row, column = row.get("source_row"), row.get("source_column")
+    location = f"row={int(source_row)}" if pd.notna(source_row) else "row provenance unavailable"
+    if pd.notna(source_row) and pd.notna(column):
+        location += f"; cell={get_column_letter(int(column))}{int(source_row)}"
+    return location
+
+
+def _source_integrity_issues(
+    raw_sheets: dict[str, pd.DataFrame], mapping: pd.DataFrame, peaks: pd.DataFrame | None,
+) -> list[dict[str, str]]:
+    """Inspect physical observations, never mapped/aggregated movement rows."""
+    issues = []
+    sources = {}
+    included = mapping[mapping["include_in_report"]]
+    peak_sheets = set(included.loc[included["include_in_peak"], "raw_sheet"])
+    report_sheets = set(included["raw_sheet"])
+    observed_starts: set[int] = set()
+
+    for sheet, raw in raw_sheets.items():
+        source = source_count_rows(raw)
+        if source.empty:
+            sources[sheet] = source
+            continue
+        source["_start"] = source["time_start"].map(time_to_minutes)
+        source["_end"] = source["time_end"].map(time_to_minutes)
+        source["_duration"] = (source["_end"] - source["_start"]) % (24 * 60)
+        source["_valid_interval"] = (source["_duration"] == BASE_INTERVAL_MINUTES) & (source["_start"] % BASE_INTERVAL_MINUTES == 0)
+        sources[sheet] = source
+        if sheet in report_sheets:
+            observed_starts.update(int(value) for value in source.loc[source["_valid_interval"], "_start"])
+
+        for (start, end), interval in source.groupby(["_start", "_end"], dropna=False, sort=False):
+            label = f"time={minutes_to_time(int(start)).strftime('%H:%M') if pd.notna(start) else '?'}-" \
+                    f"{minutes_to_time(int(end)).strftime('%H:%M') if pd.notna(end) else '?'}"
+            row_locations = "; ".join(dict.fromkeys(interval.apply(_source_location, axis=1)))
+            detail = f"{label}; {row_locations}"
+            first = interval.iloc[0]
+            if first["_duration"] != BASE_INTERVAL_MINUTES:
+                issues.append(_issue("source_invalid_interval_duration", "error",
+                                     "Source interval must last 15 minutes. Correct its start/end cells.",
+                                     raw_sheet=sheet, category="source_integrity", affected_field="time_end",
+                                     detail=detail))
+            if pd.notna(start) and int(start) % BASE_INTERVAL_MINUTES:
+                issues.append(_issue("source_misaligned_interval", "error",
+                                     "Source interval is off the 15-minute grid. Align its time cells with the other sources.",
+                                     raw_sheet=sheet, category="source_integrity", affected_field="time_start",
+                                     detail=detail))
+            # Multiple classes/columns in one physical row are one observation.
+            if "source_row" in interval and interval["source_row"].notna().all():
+                cell_key = "source_column" if "source_column" in interval else "vehicle_class"
+                duplicate = (interval["source_row"].nunique() > 1
+                             or interval.duplicated(["source_row", cell_key]).any())
+            else:
+                duplicate = interval["vehicle_class"].duplicated().any()
+            if duplicate:
+                issues.append(_issue("source_duplicate_interval", "error",
+                                     "Repeated source interval can inflate totals. Verify and remove unintended duplicate rows in the source workbook.",
+                                     raw_sheet=sheet, category="source_integrity", affected_field="time_start",
+                                     detail=detail))
+            for status, check, severity, message in [
+                ("blank", "source_blank_count", "warning", "Blank source count uses the existing zero fallback; confirm whether an explicit zero was intended."),
+                ("invalid", "source_invalid_count", "error", "Invalid source count is not a measured zero. Correct the source count cell and re-analyze."),
+            ]:
+                affected = interval[interval["source_count_status"] == status]
+                if not affected.empty:
+                    cells = "; ".join(f"{_source_location(row)}; class={row['vehicle_class']}; value={row['source_count_raw']!r}"
+                                      for _, row in affected.iterrows())
+                    issues.append(_issue(check, severity, message, raw_sheet=sheet,
+                                         category="source_integrity", affected_field="count", detail=f"{label}; {cells}"))
+
+    peak_starts: dict[int, list[str]] = {}
+    if peaks is not None:
+        for _, peak in peaks.iterrows():
+            start, end = time_to_minutes(peak["peak_start"]), time_to_minutes(peak["peak_end"])
+            if start is not None and end is not None:
+                for minute in range(start, end, BASE_INTERVAL_MINUTES):
+                    peak_starts.setdefault(minute, []).append(str(peak["period"]))
+
+    for sheet in sorted(report_sheets & sources.keys()):
+        source = sources[sheet]
+        present = set(source.loc[source["_valid_interval"], "_start"]) if not source.empty else set()
+        expected = observed_starts | (set(peak_starts) if sheet in peak_sheets else set())
+        for minute in sorted(expected - present):
+            periods = ",".join(peak_starts.get(minute, [])) if sheet in peak_sheets else ""
+            issues.append(_issue("source_missing_interval", "error",
+                                 "Source lacks a valid 15-minute interval present in another included sheet or required by the selected peak. Verify the source workbook; no counts were interpolated.",
+                                 raw_sheet=sheet, category="source_integrity", affected_field="time_start",
+                                 detail=f"time={minutes_to_time(minute).strftime('%H:%M')}-{minutes_to_time(minute + BASE_INTERVAL_MINUTES).strftime('%H:%M')}; affected_peaks={periods}"))
+    return issues
+
+
 def run_qc(
     detected_sheets: list[str],
     mapping: pd.DataFrame,
@@ -104,6 +198,8 @@ def run_qc(
     original_mapping = mapping.copy()
     mapping = clean_mapping(mapping)
     issues: list[dict[str, str]] = []
+    if raw_sheets is not None:
+        issues.extend(_source_integrity_issues(raw_sheets, mapping, peaks))
 
     for issue in pce_factor_issues or ():
         issues.append(
