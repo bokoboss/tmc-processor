@@ -99,8 +99,8 @@ def extract_raw_direction(sheet_name: str) -> str | None:
 
 
 def detect_raw_direction_sheet_names(excel_file: str | Path | BinaryIO) -> list[str]:
-    workbook = pd.ExcelFile(excel_file)
-    return [name for name in workbook.sheet_names if extract_raw_direction(name) is not None]
+    with pd.ExcelFile(excel_file) as workbook:
+        return [name for name in workbook.sheet_names if extract_raw_direction(name) is not None]
 
 
 def _text(value: object) -> str:
@@ -283,11 +283,10 @@ def parse_raw_count_sheet(raw: pd.DataFrame, raw_sheet: str) -> ParsedSheet:
 
 
 def load_detected_sheet_details(excel_file: str | Path | BinaryIO) -> dict[str, ParsedSheet]:
-    sheet_names = detect_raw_direction_sheet_names(excel_file)
-    if hasattr(excel_file, "seek"):
-        excel_file.seek(0)
-    # Preserve text such as "N/A" for invalid-count QC while keeping empty header cells fillable.
-    raw_sheets = pd.read_excel(excel_file, sheet_name=sheet_names, header=None, keep_default_na=False, na_values=[""])
+    with pd.ExcelFile(excel_file) as workbook:
+        sheet_names = [name for name in workbook.sheet_names if extract_raw_direction(name) is not None]
+        # Preserve text such as "N/A" for invalid-count QC while keeping empty header cells fillable.
+        raw_sheets = pd.read_excel(workbook, sheet_name=sheet_names, header=None, keep_default_na=False, na_values=[""])
     return {name: parse_raw_count_sheet(raw, name) for name, raw in raw_sheets.items()}
 
 
@@ -298,7 +297,11 @@ def load_detected_sheets(excel_file: str | Path | BinaryIO) -> dict[str, pd.Data
 def preview_detected_sheets(excel_file: str | Path | BinaryIO, preview_rows: int = 5) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     if hasattr(excel_file, "seek"):
         excel_file.seek(0)
-    detected = load_detected_sheet_details(excel_file)
+    return preview_from_details(load_detected_sheet_details(excel_file), preview_rows)
+
+
+def preview_from_details(detected: dict[str, ParsedSheet], preview_rows: int = 5) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """Build the existing preview from details already parsed for this run."""
     summary = [
         DetectedSheet(
             raw_sheet=name,
@@ -308,5 +311,5 @@ def preview_detected_sheets(excel_file: str | Path | BinaryIO, preview_rows: int
         ).__dict__
         for name, parsed in detected.items()
     ]
-    previews = {name: parsed.raw.head(preview_rows) for name, parsed in detected.items()}
+    previews = {name: parsed.raw.head(preview_rows).copy(deep=True) for name, parsed in detected.items()}
     return pd.DataFrame(summary), previews
