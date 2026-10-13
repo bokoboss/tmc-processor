@@ -152,7 +152,7 @@ def _source_integrity_issues(
                                      raw_sheet=sheet, category="source_integrity", affected_field="time_start",
                                      detail=detail))
             for status, check, severity, message in [
-                ("blank", "source_blank_count", "warning", "Blank source count uses the existing zero fallback; confirm whether an explicit zero was intended."),
+                ("blank", "source_blank_count", "info", "Blank source count uses the existing zero fallback; confirm whether an explicit zero was intended."),
                 ("invalid", "source_invalid_count", "error", "Invalid source count is not a measured zero. Correct the source count cell and re-analyze."),
             ]:
                 affected = interval[interval["source_count_status"] == status]

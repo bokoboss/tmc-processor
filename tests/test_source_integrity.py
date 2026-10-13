@@ -71,7 +71,7 @@ def process(raw, confirmed=False, export=False):
     ("duplicate", "source_duplicate_interval", "error"),
     ("duration", "source_invalid_interval_duration", "error"),
     ("misaligned", "source_misaligned_interval", "error"),
-    ("blank", "source_blank_count", "warning"),
+    ("blank", "source_blank_count", "info"),
     ("invalid", "source_invalid_count", "error"),
 ])
 def test_source_defect_is_visible_for_both_peak_paths(defect, check, severity, confirmed):
@@ -150,16 +150,44 @@ def test_batch_analysis_confirmation_and_export_keep_source_checks(defect, check
                                                    use_template_report_layout=False)
     summary = result.summary_rows[0]
     assert summary.status == "success", summary.notes
-    assert summary.QC_errors > 0 if defect != "blank" else summary.QC_warnings > 0
+    assert summary.QC_errors > 0 if defect != "blank" else summary.QC_info > 0
     assert check in {row["check"] for row in result.qc_rows}
     with ZipFile(BytesIO(result.package_bytes)) as archive:
         workbook = load_workbook(BytesIO(archive.read(summary.export_file)), read_only=True, data_only=True)
         rows = list(workbook["QC_Check"].values)
         records = [dict(zip(rows[0], row)) for row in rows[1:]]
-        assert any(row["check"] == check and row["raw_sheet"] == "ทิศ 1" for row in records)
+        exported = next(row for row in records if row["check"] == check and row["raw_sheet"] == "ทิศ 1")
+        if defect == "blank":
+            assert exported["severity"] == "info"
         summary_book = load_workbook(BytesIO(archive.read("batch_summary.xlsx")), read_only=True, data_only=True)
         qc_rows = list(summary_book["Batch_QC"].values)
-        assert check in [dict(zip(qc_rows[0], row))["check"] for row in qc_rows[1:]]
+        batch_records = [dict(zip(qc_rows[0], row)) for row in qc_rows[1:]]
+        assert check in [row["check"] for row in batch_records]
+        if defect == "blank":
+            assert any(row["check"] == check and row["severity"] == "info" for row in batch_records)
+
+
+def test_blank_only_batch_qc_remains_visible_without_blocking_bulk_acceptance():
+    from tmc_processor.batch import (BatchItem, analyze_batch_files, batch_analysis_qc_rows,
+                                     eligible_clean_batch_items)
+
+    payload = BytesIO()
+    with pd.ExcelWriter(payload, engine="openpyxl") as writer:
+        for sheet, table in vendor_sources("blank").items():
+            table.to_excel(writer, sheet_name=sheet, header=False, index=False)
+    batch_mapping = mapping()
+    batch_mapping.loc[batch_mapping.raw_sheet == "ทิศ 2", "movement_code"] = "EW"
+    analysis = analyze_batch_files([BatchItem("blank-only.xlsx", payload.getvalue())],
+                                   mapping=batch_mapping, setup={}, peak_windows=WINDOWS)
+    item = analysis.items[0]
+    assert item.status == "success"
+    assert item.QC_errors == 0 and item.QC_warnings == 0 and item.QC_info > 0
+    assert [candidate.file_name for candidate in eligible_clean_batch_items(analysis)] == ["blank-only.xlsx"]
+    rows = batch_analysis_qc_rows(analysis)
+    blank = next(row for row in rows if row["check"] == "source_blank_count")
+    assert blank["severity"] == "info"
+    assert blank["raw_sheet"] == "ทิศ 1"
+    assert "C3" in blank["detail"]
 
 
 @pytest.mark.parametrize("defect,check", [("missing", "source_missing_interval"),

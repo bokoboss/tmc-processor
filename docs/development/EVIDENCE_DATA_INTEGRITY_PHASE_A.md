@@ -1,5 +1,15 @@
 # Data Integrity QC Hardening — Phase A
 
+## Independent-review remediation: blank QC severity
+
+Review finding: ordinary `source_blank_count` records were `warning`, causing Batch's unchanged clean-file eligibility rule to reject files with otherwise valid suggested Peaks. The Phase A fix changes only this severity to `info`; source count status, message/detail, sheet/time/class/cell provenance, exports, calculations, and eligibility rules remain unchanged. Blank info stays visible in Single QC, Batch review, `QC_Check`, and `Batch_QC`. Invalid/non-finite counts and interval integrity defects remain errors; existing warning/error eligibility gates are unchanged.
+
+RED/GREEN: before the change, the added blank-only Batch regression failed because the item had nonzero QC warnings and was ineligible. After the change, the focused suite passed (63 passed, 1 pre-existing PHF RuntimeWarning). It confirms blank-only eligibility, QC info severity/provenance, and exported blank visibility. Existing Batch eligibility tests continue to prove warnings and errors disqualify bulk acceptance. Source integrity regressions cover both automatically detected and explicitly confirmed Peaks.
+
+Three-workbook validation after the remediation passed exact baseline frame/export-content parity and 3/3 Batch analyses. Blank finding counts are unchanged; the former 960 / 720 / 576 warnings are now 960 / 720 / 576 info findings (2,256 total). No errors were introduced for those workbooks. Compile and whitespace checks are rerun for this remediation.
+
+The current full-suite invocation was attempted but did not complete in this environment: the pre-existing repeated Streamlit `AppTest` case (`tests/test_app_runtime.py::test_apptest_fresh_loads_and_reruns_preserve_module_classes`) remained active without returning within the extended wait; it was interrupted. A second suite run excluding that one case also remained in long-running UI integration tests and was interrupted before summary. This is not recorded as a passing full-suite result. The prior Phase A 593-test pass predates this severity-only remediation; hosted CI for the new remediation commit is the remaining full-suite gate.
+
 Date: 2026-10-13 (Asia/Bangkok). Scope: source-data diagnostics only.
 
 ## Provenance and scope
@@ -69,7 +79,7 @@ New checks:
 | `source_duplicate_interval` | error | Repeated physical source rows at the same interval; inspect/remove unintended duplicates upstream. |
 | `source_invalid_interval_duration` | error | Duration differs from 15 minutes; correct source times. |
 | `source_misaligned_interval` | error | Start is off the quarter-hour grid; correct source times. |
-| `source_blank_count` | warning | Original blank, with class and cell when available; verify whether explicit zero was intended. |
+| `source_blank_count` | info | Original blank, with class and cell when available; verify whether explicit zero was intended. Info remains visible in Single/Batch QC and exports, while preserving Batch bulk-accept eligibility. |
 | `source_invalid_count` | error | Non-numeric/non-finite source value, class and cell; correct the source value. |
 
 Duplicate detection uses physical row identity for imported/wide inputs, treating all classes/columns in one row as one interval observation. Legacy long frames without row identity use repeated class records within an interval. Mapping rows are never used as source observations. Report-excluded sheets do not impose survey coverage on included sheets. Peak-required coverage applies only to sources included in peak calculation.
@@ -80,12 +90,13 @@ Repeated copies of a physical source cell also produce a duplicate error even wh
 
 | Gate | Command/method | Result |
 | --- | --- | --- |
+| Remediation focused GREEN | `.venv/Scripts/python.exe -m pytest tests/test_source_integrity.py tests/test_qc_checks.py tests/test_ux4_ux5.py -q` | **63 passed**, 1 existing non-finite PHF RuntimeWarning. Includes blank-only eligibility and info visibility/export regressions. |
 | First GREEN | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py -q` | 15 passed; `outputs/phase_a_green.txt`. |
 | Expanded focused | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py tests/test_qc_checks.py -q` | 44 passed, 1 warning, 13.37 seconds; `outputs/phase_a_focused.txt`. |
 | Native template QC | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py::test_native_template_export_retains_actionable_source_qc -q` | 1 passed, 6.95 seconds; `outputs/phase_a_native_qc.txt`. |
-| Final focused | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py tests/test_qc_checks.py -q` | 50 passed, 1 warning, 19.20 seconds; `outputs/phase_a_focused_final.txt`. |
+| Final focused before blank-severity remediation | `.venv/Scripts/python.exe -X utf8 -m pytest tests/test_source_integrity.py tests/test_qc_checks.py -q` | 50 passed, 1 warning, 19.20 seconds; `outputs/phase_a_focused_final.txt`. |
 | Initial full GREEN | `.venv/Scripts/python.exe -X utf8 -m pytest --basetemp=outputs/phase_a_green_tmp -vv` | 587 passed, 0 failed/skipped, 31 warnings, 503.86 seconds; `outputs/phase_a_full_suite.txt`. This invocation predates the last loader/duplicate changes; the final run qualifies those. |
-| Final full suite | `.venv/Scripts/python.exe -X utf8 -m pytest --basetemp=outputs/phase_a_final_tmp -vv` | **593 passed, 0 failed/skipped**, 31 warnings, 519.26 seconds; `outputs/phase_a_final_suite.txt`. Includes all 551 pre-existing tests and 42 new regression cases. |
+| Final full suite before blank-severity remediation | `.venv/Scripts/python.exe -X utf8 -m pytest --basetemp=outputs/phase_a_final_tmp -vv` | **593 passed, 0 failed/skipped**, 31 warnings, 519.26 seconds; `outputs/phase_a_final_suite.txt`. Includes all 551 pre-existing tests and 42 new regression cases. |
 | Compile | `.venv/Scripts/python.exe -X utf8 -m compileall -q app.py src` | Passed. |
 | Whitespace | `git diff --check` | Passed. |
 | Real baseline/fixed | `.venv/Scripts/python.exe -X utf8 outputs/phase_a_real_validation.py baseline`, then `green` | Exact frame/export-content parity; 3/3 Batch analysis passed. Repeated after the loader fix with the same result (`outputs/phase_a_real_final.txt`). |
@@ -106,7 +117,7 @@ Original local workbooks were read without modification from ignored `samples/ra
 
 SHA-256 comparison of the original source workbooks before/after also passed for all three files. The final comparison was repeated after both final runtime changes and still passed (`outputs/phase_a_real_final.txt`).
 
-| Workbook | Sheets | Normalized rows | Vehicles | PCU | New blank warnings | New interval/invalid errors |
+| Workbook | Sheets | Normalized rows | Vehicles | PCU | New blank info | New interval/invalid errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Kabin Buri | 24 | 13,824 | 82,621 | 87,023.550 | 960 | 0 |
 | Bo Phloi | 15 | 8,640 | 16,905 | 14,032.315 | 720 | 0 |
@@ -124,10 +135,10 @@ Tracked runtime diff: three files, 146 insertions and 3 deletions. The new regre
 ## Known limitations and remaining approvals
 
 - QC is advisory. The accepted zero fallback and aggregation still operate; invalid counts/duplicates/incomplete coverage can still yield biased exported totals. Operators must fix source workbooks and re-analyze.
-- Many legacy workbooks encode empty counts as blanks. Warnings can be numerous (consolidated per sheet/interval/state, with affected cells in detail). Existing Batch “accept clean files” excludes files with warnings/errors; individual confirmation/export remains available. Suppression or changed blank semantics requires a separate design decision.
+- Many legacy workbooks encode empty counts as blanks. Informational findings can be numerous (consolidated per sheet/interval/state, with affected cells in detail); they remain visible in QC but do not disqualify Batch bulk acceptance. Existing warnings and errors still disqualify bulk acceptance; individual confirmation/export remains available.
 - Coverage uses the observed union of included report sources plus selected peak intervals. A slot absent from every sheet outside a selected peak cannot be inferred without an authoritative expected survey schedule. Deliberately staggered source coverage needs separate policy if it should be accepted.
 - Physical row/cell provenance is exact for workbook imports; direct wide frames report one-based data-row/column positions, not guaranteed original Excel row offsets. Long frames created without provenance cannot recover original cells or distinguish repeated same-class columns from repeated observations.
 - Existing time parsing/truncation, skipped unparseable source rows, multi-day handling and blank/invalid coercion were not redesigned. No automatic interpolation or deletion was introduced.
-- Excel error cells and formula cells without cached values can be surfaced by pandas as missing values and receive a blank-count warning. Literal text NA markers are covered; reconstructing Excel error codes/formula-cache state is outside this parser change.
+- Excel error cells and formula cells without cached values can be surfaced by pandas as missing values and receive a blank-count info finding. Literal text NA markers are covered; reconstructing Excel error codes/formula-cache state is outside this parser change.
 - Hosted CI and independent review are pending. No release, deployment or merge is authorized.
 - Commit, push to `codex/data-integrity-qc-phase-a`, and PR creation were explicitly authorized after the local gates passed. No other branch or main history is in scope.
