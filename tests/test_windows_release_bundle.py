@@ -98,9 +98,9 @@ def test_missing_required_support_qr_fails_before_build(tmp_path):
 def test_runtime_bundle_version_and_filename_are_consistent(tmp_path):
     from tmc_processor.metadata import APP_VERSION
 
-    assert APP_VERSION == "1.1.0"
+    assert APP_VERSION == "1.2.0"
     bundle = release.build(ROOT, tmp_path / "dist")[0]
-    assert bundle.name == "TMC-Processor-v1.1.0-Windows.zip"
+    assert bundle.name == "TMC-Processor-v1.2.0-Windows.zip"
     with zipfile.ZipFile(bundle) as archive:
         prefix = f"{bundle.stem}/"
         try:
@@ -126,7 +126,7 @@ def test_application_version_stamp_uses_release_package_version(monkeypatch):
     app_shell._render_version_stamp()
 
     assert len(rendered) == 1
-    assert "TMC Processor v1.1.0" in rendered[0]
+    assert "TMC Processor v1.2.0" in rendered[0]
 
 
 @pytest.mark.parametrize("path", [

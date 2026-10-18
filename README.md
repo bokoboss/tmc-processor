@@ -4,6 +4,10 @@ TMC Processor เป็นโปรแกรมบน Streamlit สำหรั�
 
 รุ่นปัจจุบัน: **[`v1.1.0` — Stable / Latest](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)** เผยแพร่แล้ว
 
+รุ่นเตรียมเผยแพร่: **v1.2.0 — unreleased candidate** อยู่ระหว่างตรวจรับโดยอิสระ ยังไม่สร้าง tag หรือเผยแพร่ Release ดู [release notes](docs/releases/v1.2.0.md) และ [ผล qualification / GO–NO-GO](docs/development/EVIDENCE_RELEASE_V1_2_0.md)
+
+Candidate นี้รวม Phase A source QC, Phase B การใช้ผลอ่าน Excel ซ้ำใน Single session และการแก้ V1 Native OOXML final PCU totals ของ Issue #42 ที่รับเข้า main แล้ว การเตรียม release เปลี่ยนเฉพาะ version และเอกสาร ไม่เพิ่ม feature หรือเปลี่ยน calculation
+
 **เริ่มใช้งานทันที:**
 
 - [ทดลองบน Streamlit Cloud](https://tmc-process.streamlit.app/)
@@ -50,6 +54,10 @@ redeploy; the app does not intentionally save them to a durable project store.
 Export processing can use short-lived temporary files. Download outputs locally.
 The v1.1.0 release is published and the release CI and Cloud acceptance passed.
 The deployment is available at the URL above.
+These acceptance results apply to v1.1.0. The live deployed revision and production
+Cloud acceptance of the v1.2.0 candidate have not been verified in this preparation;
+Linux CI and local startup do not establish that acceptance. No deployment is part
+of release preparation.
 
 ## Legacy version
 
@@ -107,7 +115,11 @@ Canonical workflow ของโปรแกรมคือ:
 - หน้าต่าง Support แสดง QR ที่แนบมากับ Windows ZIP โดยไม่รบกวนสถานะงาน
 - CI ทั้ง 3 jobs และ Cloud acceptance ผ่านแล้ว; Issue [#36](https://github.com/bokoboss/tmc-processor/issues/36), [#38](https://github.com/bokoboss/tmc-processor/issues/38) และ [#40](https://github.com/bokoboss/tmc-processor/issues/40) ปิดแล้ว
 
-ข้อจำกัดที่ทราบ: Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) ยังเปิดอยู่ — V1 Summary แสดงยอด PCU ใน F32 เป็น 23,956 ขณะที่ยอดสนับสนุน W40/AM22 เป็น 23,959 สำหรับ Demo; ยังไม่มีการเปลี่ยนสูตร V1. ข้อผิดพลาดเปิดไฟล์ Excel ที่เคยรายงานใน #40 ไม่เกิดซ้ำในการตรวจด้วย M365 ปัจจุบันและมีการยอมรับ V2 Cloud workbook แล้ว แต่ไม่ได้ยืนยันว่าแก้สาเหตุเดิมหรือรับรอง Excel ทุกเวอร์ชัน
+ข้อจำกัดใน **published v1.1.0**: V1 Summary แสดงยอด PCU ใน F32 เป็น 23,956 ขณะที่ W40/AM22 เป็น 23,959 สำหรับ Demo ข้อมูลนี้เป็นประวัติของรุ่นที่เผยแพร่แล้ว Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) ปิดแล้วผ่าน PR #48 บน accepted main และ v1.2.0 candidate โดย V1 Native OOXML final totals ใช้ยอดละเอียดแล้ว round ครั้งเดียว (Demo day 1 = 23,959; day 2 = 23,590) รายละเอียด movement/hour ยัง round แยกและอาจบวกไม่เท่า final total โดยไม่จัดสรรเศษกลับไป รายงาน Safe PNG และ legacy COM generation ไม่อยู่ใน scope การแก้ #42
+
+ข้อจำกัดที่ยังคงอยู่: Original Excel print settings อาจแบ่งเป็นสองหน้า A4 landscape; มีการตรวจ Fit Sheet on One Page preview แล้ว แต่ความอ่านง่ายบน A4 ต้องทำ UX follow-up แยก Batch Project Session ยังไม่รองรับ ส่วน Excel GUI qualification ครอบคลุมเฉพาะ demo V1/V2 และ M365 ที่บันทึกไว้ ไม่รับรองทุกเวอร์ชันหรือ printer ข้อผิดพลาดเปิดไฟล์ที่เคยรายงานใน #40 ไม่เกิดซ้ำใน M365 ที่ตรวจภายหลัง แต่ยังไม่ทราบสาเหตุเดิม ดู [ขอบเขตและข้อจำกัด candidate](docs/releases/v1.2.0.md#known-limitations-and-acceptance-boundaries)
+
+Candidate smoke พบ `###` ในพื้นที่ final total ของ V1 ที่ worksheet zoom 55% จึงยังไม่รับรองความอ่านง่ายทุกมุมมอง Native V1/V2 ผ่าน COM recalculation ของยอดรวมแล้ว; Safe PNG เปิดได้และไม่พบ formula errors แต่ COM calculation state ยังค้าง pending รายละเอียดและ acceptance exceptions อยู่ใน [release evidence](docs/development/EVIDENCE_RELEASE_V1_2_0.md)
 
 ## คำแนะนำการใช้งาน
 

@@ -5,16 +5,19 @@
 - Repository URL: https://github.com/bokoboss/tmc-processor
 - Authoritative local path: `C:\MyRD\tmc-processor-public`
 - Primary branch: `main`
-- Package/application version: `1.1.0` — published Stable/Latest release [`v1.1.0`](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)
+- Package/application version: `1.2.0` — unreleased candidate for independent acceptance; published Stable/Latest remains [`v1.1.0`](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0)
 - Legacy public beta: `v0.2.0`, preserved at branch `legacy/v0.2.0`
 - Installed workflow source: https://github.com/bokoboss/engineering-development-workflow
 - Installed workflow revision: `3547ae260feacf8fc9a102b2abfdb13881e36dab`
 - Installed workflow version: `v1.4.1`
 
 ## Current accepted baseline and release state
-- Current published and accepted release baseline: `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b` (`v1.1.0`, Stable/Latest, published 2026-10-12).
+- Current accepted implementation baseline: `main@3f5a0f8e92893ac5f8b3174d47081d350a636133`, including Phase A (PR #45), Phase B (PR #47) and Issue #42 (PR #48).
+- Accepted-main post-merge [CI #39120306254](https://github.com/bokoboss/tmc-processor/actions/runs/39120306254) passed Windows Python 3.10/3.12 and Linux Python 3.12.
+- Current published release baseline: `1514b142e566f1edf64ac1ba5aaf6b5a1523541b` (`v1.1.0`, Stable/Latest, published 2026-10-12). v1.2.0 is not tagged or published; see [candidate notes](docs/releases/v1.2.0.md) and [qualification evidence](docs/development/EVIDENCE_RELEASE_V1_2_0.md).
 - v1.1.0 GitHub Actions CI run [#38263923359](https://github.com/bokoboss/tmc-processor/actions/runs/38263923359) passed all 3 jobs; Streamlit Community Cloud acceptance passed at https://tmc-process.streamlit.app/.
-- Issue #36 release publication, Issue #38 Cloud rerun fix, and Issue #40 Excel interoperability investigation are closed. Issue #42 remains open as a documented V1 Summary PCU discrepancy.
+- Issue #36 release publication, Issue #38 Cloud rerun fix, Issue #40 Excel interoperability investigation, and Issue #42 V1 final-total precision correction are closed. The v1.1.0 discrepancy is historical; the accepted correction is limited to V1 Native OOXML final totals.
+- Phase A adds advisory source-integrity QC with blank counts at info severity and report-excluded sources omitted from actionable source diagnostics. Phase B adds bounded session-local Single import reuse keyed by content and parser revision; no Batch cache or readiness contract change.
 - Historical v1.0.1 baseline before Issue #30: `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`; its full suite had 504 passed and CI #113 passed on Windows / Python 3.10 and 3.12.
 - Before the separately approved Issue #30 web-app enhancement, the project was in maintenance mode.
 - Historical Issue #36 preparation baseline: `main@203bc5f3f584d0245f46c27d58da74c3d973fd65` (PRs #31, #33, and #35 had merged at that point).
@@ -24,7 +27,7 @@
 - Repository housekeeping baseline before v1.0.0 preparation: `main@6ac5914574a66f881b3cad0671caedd5014d94da` after PR #26 preserved the legacy version and refreshed README legacy links.
 - GitHub Actions CI #106 passed on Windows / Python 3.10 and 3.12 for that housekeeping baseline.
 - Current published release: `v1.1.0` is Stable/Latest at `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b`.
-- Streamlit Community Cloud is deployed at https://tmc-process.streamlit.app/; the v1.1.0 Cloud operator acceptance passed.
+- Streamlit Community Cloud is deployed at https://tmc-process.streamlit.app/; v1.1.0 Cloud operator acceptance passed. The live deployment revision and v1.2.0 production Cloud acceptance have not been verified in this preparation; no deploy is authorized.
 
 ## Product workflow
 Canonical operator flow for Single and Batch:
@@ -132,10 +135,13 @@ Changes must not alter the following without explicit approval and qualification
 | CI | GitHub Actions Windows Python 3.10 / 3.12 | Yes |
 
 ## Release history
+### v1.2.0 candidate (unreleased)
+Prepared for independent engineering/release acceptance from `main@3f5a0f8e92893ac5f8b3174d47081d350a636133`. Carries accepted Phase A source QC, Phase B import reuse and Issue #42 V1 Native OOXML precision. Package version and documentation only change during preparation. Candidate Windows/Demo ZIPs are local source distributions; Windows requires Python >=3.10. [Notes](docs/releases/v1.2.0.md), [evidence](docs/development/EVIDENCE_RELEASE_V1_2_0.md). No publication, tag or production Cloud acceptance is implied.
+
 ### v1.1.0
 Published Stable/Latest on 2026-10-12 from accepted `main@1514b142e566f1edf64ac1ba5aaf6b5a1523541b`. [GitHub Release](https://github.com/bokoboss/tmc-processor/releases/tag/v1.1.0). Windows and Demo ZIP assets were published. All 3 CI jobs and Streamlit Cloud acceptance passed.
 
-Release highlights: Native V2 Summary, the supplied Support QR in the Windows bundle, and round-once PCU totals in the V2 Summary. The synthetic demo V2 workbook has 24 worksheets and two charts. V1 Summary PCU total discrepancy remains tracked by open Issue #42.
+Release highlights: Native V2 Summary, the supplied Support QR in the Windows bundle, and round-once PCU totals in the V2 Summary. The synthetic demo V2 workbook has 24 worksheets and two charts. The V1 Summary discrepancy was present in this published release; Issue #42 subsequently closed via PR #48 on accepted main, without changing the published v1.1.0 artifacts.
 
 ### v1.0.1
 Historical published stable maintenance release from `main@39c1ba906dcc284b714e5980b9ef9e23dfe47827`.
@@ -164,7 +170,9 @@ The legacy snapshot is historical and must not be moved or rewritten.
 
 ## Known limitations / backlog
 - Issue #23 was closed as `not_planned` after the fixed-hour Peak contract was accepted. Non-hour-aligned rolling Peaks are outside the supported contract.
-- Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) remains open: on the synthetic demo, V1 Summary F32 displays 23,956 PCU while supporting total cells W40/AM22 display 23,959. V2 Summary uses its separately accepted round-once totals. V1 formulas and templates remain unchanged pending separate investigation and approval.
+- Issue [#42](https://github.com/bokoboss/tmc-processor/issues/42) is closed on accepted main: V1 Native OOXML final Summary F30/F31/F32/W40/AM22 round precise sources once (demo day 1 grand total 23,959; day 2 23,590). Detailed independently rounded movement/hour values may be non-additive. V2, Safe PNG and legacy COM generation were outside that correction. Original template binaries remain unchanged.
+- Original Excel print settings may paginate to two A4 landscape pages. Fit Sheet on One Page preview was manually verified during #42 acceptance; default A4 readability remains a separate UX follow-up, with no template print-setting change in this candidate.
+- #42's earlier in-repo evidence says GUI pending; the later accepted merge record at `3f5a0f8` records manual V1/V2 opening, recalculation, charts and one-page preview. This inherited scope does not certify every candidate export, printer or Excel build. Candidate V1 GUI smoke reproduced `###` in the final-total area at the observed 55% worksheet view. Candidate native V1/V2 COM totals passed; Safe PNG opening/error scans passed but complete COM recalculation remained pending. See release evidence for scope and acceptance exceptions.
 - The Excel GUI opening rejection reported during Issue #40 investigation was not reproduced in the later current-M365 acceptance; the V2 Cloud workbook was accepted. The original cause was not established, and universal Excel compatibility is not claimed.
 - Batch Project Session is intentionally disabled because the current session format cannot round-trip Batch uploads and Batch Mapping Presets.
 - UX-8 live Batch qualification used successful demo items; failed/excluded outcomes were covered by existing automated behavior but not recreated in that final UX browser smoke.
@@ -180,4 +188,4 @@ The legacy snapshot is historical and must not be moved or rewritten.
 - Implementation changes require evidence appropriate to affected risk areas before merge/release.
 
 ## Current next objective
-Issue #36 v1.1.0 publication is complete. The next project priority is the separately scoped investigation in open Issue #42; preserve the current V1/V2 report contracts until an explicit change is accepted and qualified.
+Prepare v1.2.0 for independent engineering and release acceptance, with complete package/test evidence and an explicit GO/NO-GO decision. Commit/push only `codex/release-v1.2.0-preparation` and open a PR to main. No merge, tag, publication, deploy or branch deletion. Preserve accepted Phase A/B/#42 behavior and the untracked Issue #42 investigation/local outputs. Production Cloud acceptance remains unverified; print-readability improvements require separate scope.
