@@ -4,7 +4,7 @@
 
 - Repository: `C:\MyRD\tmc-processor-public` (`origin` is `https://github.com/bokoboss/tmc-processor.git`).
 - Accepted baseline: `63a10ab9acbc33cd81ed851197da440786c2cae9` (`origin/main`).
-- Follow-up branch: `codex/issue42-v1-precision`, PR #48 targeting `main`. The branch started this follow-up at `072a86db95fa381da8298ee42225425f8f81d864`; the source-integrity remediation and updated evidence are submitted together on that PR.
+- Follow-up branch: `codex/issue42-v1-precision`, PR #48 targeting `main`. The branch started this follow-up at `072a86db95fa381da8298ee42225425f8f81d864`; source-integrity remediation commit: `f82ee6dea1842b04c9a69ccc213701a0d7a4c402`. CI run [39113820033](https://github.com/bokoboss/tmc-processor/actions/runs/39113820033) was triggered on that exact commit and was in progress when this evidence was updated.
 - Issue #42’s full discussion was reviewed; the latest approval accepts the five-cell V1 Native OOXML policy with the documented scope boundaries and the requested regression/Excel gates. Accepted-baseline post-merge CI run `38417068041` had all three jobs successful.
 - Scope: V1 Native OOXML final totals and the narrow proof for its existing rounded-hour-total fallback. V2, Safe PNG, legacy COM generation, source/Peak calculations, templates and Phase A/B behavior were not changed.
 - PR #48 review remediation adds precise per-hour normalized-source reconciliation and duplicate canonical `Movement_Summary` group rejection. The five final formulas, templates, HLOOKUPs, shared formulas, Peak/PHF calculations and all other export paths remain unchanged.
@@ -64,4 +64,4 @@ The Codex Computer Use inventory exposed no desktop apps (only browser surfaces)
 
 Changed runtime files: `src/tmc_processor/exporter.py`, `src/tmc_processor/ooxml_template_export.py`, `src/tmc_processor/template_write_plan.py`, `src/tmc_processor/template_write_verify.py`. Added regression tests: `tests/test_v1_pcu_rounding.py`. Added this evidence document. No original template, Safe PNG, legacy COM generator, V2 or calculation-core file was changed.
 
-The pre-existing untracked investigation document remains untouched. The accepted base branch was not modified. Final PR head and hosted CI run/status are provided in the PR #48 handoff. Local `git diff --check` and `compileall` passed. GUI qualification remains pending as detailed above.
+The pre-existing untracked investigation document remains untouched. The accepted base branch was not modified. The exact current PR head and any follow-up CI run caused by this evidence update are reported in the PR #48 handoff. Local `git diff --check` and `compileall` passed. GUI qualification remains pending as detailed above.
