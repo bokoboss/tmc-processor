@@ -206,6 +206,79 @@ def test_variable_movement_summary_rows_and_source_contract_rejections():
         v1_final_total_formulas(formulas, corrupted)
 
 
+def _v1_contract_fixture():
+    raw = load_detected_sheets(DEMO / "DEMO_TMC1_FourLeg.xlsx")
+    mapping = read_mapping_excel(DEMO / "DEMO_TMC1_FourLeg_mapping.xlsx")
+    setup = {"am_peak_start": "08:00", "am_peak_end": "09:00",
+             "pm_peak_start": "17:00", "pm_peak_end": "18:00",
+             "peak_selection_source": "user_confirmed"}
+    result = process_tmc(raw, mapping, setup, detected_sheets=list(raw),
+                         confirmed_peak_periods=AM_PM, generate_workbook=False)
+    normalized = result.normalized.copy()
+    movement = movement_summary(normalized)
+    support = {
+        "Movement_Summary": movement,
+        "Normalized_Data": normalized,
+        "Hourly_Summary": hourly_summary(normalized),
+        "Peak_PHF": _peak_report_frame(setup, result.peaks),
+    }
+    source = load_workbook(DEFAULT_TEMPLATE_PATH, read_only=True, data_only=False)
+    try:
+        formulas = {ref: source["Summary"][ref].value for ref in ("F30", "F31", "F32", "W40", "AM22")}
+    finally:
+        source.close()
+    return formulas, support
+
+
+def test_rejects_balanced_per_hour_source_redistribution():
+    formulas, support = _v1_contract_fixture()
+    corrupted = {name: frame.copy() for name, frame in support.items()}
+    hourly = corrupted["Hourly_Summary"]
+    # These two demo hours remain on the same displayed integer after the
+    # balanced shift, and the precise survey grand total remains unchanged.
+    first, second = 0, 1
+    before = hourly["pcu"].copy()
+    displayed_before = [round(value) for value in before]
+    hourly.loc[first, "pcu"] += 0.1
+    hourly.loc[second, "pcu"] -= 0.1
+    assert math_fsum(hourly["pcu"]) == pytest.approx(math_fsum(before), abs=1e-9)
+    assert [round(value) for value in hourly["pcu"]] == displayed_before
+    with pytest.raises(ValueError, match="hourly.*Normalized_Data|Normalized_Data.*hour"):
+        v1_final_total_formulas(formulas, corrupted)
+
+
+def test_rejects_duplicate_movement_summary_group_rows():
+    formulas, support = _v1_contract_fixture()
+    corrupted = {name: frame.copy() for name, frame in support.items()}
+    movement = corrupted["Movement_Summary"]
+    group_keys = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type",
+                  "include_in_peak", "include_in_report"]
+    index = movement["pcu"].astype(float).idxmax()
+    duplicate = movement.loc[[index]].copy()
+    movement.loc[index, "pcu"] = float(duplicate.iloc[0]["pcu"]) / 2
+    duplicate.loc[:, "pcu"] = float(duplicate.iloc[0]["pcu"]) / 2
+    corrupted["Movement_Summary"] = pd.concat([movement, duplicate], ignore_index=True)
+    assert corrupted["Movement_Summary"].duplicated(subset=group_keys).any()
+    assert math_fsum(corrupted["Movement_Summary"]["pcu"]) == pytest.approx(
+        math_fsum(support["Movement_Summary"]["pcu"]), abs=1e-9
+    )
+    with pytest.raises(ValueError, match="duplicate.*group|group.*duplicate"):
+        v1_final_total_formulas(formulas, corrupted)
+
+
+def test_preserves_a_legitimate_zero_traffic_hour():
+    formulas, support = _v1_contract_fixture()
+    with_zero_hour = {name: frame.copy() for name, frame in support.items()}
+    zero_hour = pd.DataFrame([{
+        "hour_start": "06:00", "hour_end": "07:00", "count": 0, "pcu": 0.0,
+    }], columns=["hour_start", "hour_end", "count", "pcu"])
+    with_zero_hour["Hourly_Summary"] = pd.concat(
+        [zero_hour, with_zero_hour["Hourly_Summary"]], ignore_index=True
+    )
+    result = v1_final_total_formulas(formulas, with_zero_hour)
+    assert len(result) == 5
+
+
 def test_native_verifier_rejects_corrupted_v1_final_cache(monkeypatch, tmp_path):
     import tmc_processor.template_write_plan as write_plan_module
 

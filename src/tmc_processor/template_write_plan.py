@@ -196,7 +196,7 @@ def v1_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
         "include_in_peak", "include_in_report", "count", "pcu",
     ] or movement.empty:
         raise ValueError("V1 final totals require the exported Movement_Summary schema and at least one data row.")
-    if normalized is None or not {"movement_code", "output_movement_code", "from_leg", "to_leg", "turn_type", "facility_type", "include_in_peak", "include_in_report", "pcu"}.issubset(normalized.columns):
+    if normalized is None or not {"movement_code", "output_movement_code", "from_leg", "to_leg", "turn_type", "facility_type", "include_in_peak", "include_in_report", "time_start", "pcu"}.issubset(normalized.columns):
         raise ValueError("V1 final totals require the exported Normalized_Data source contract.")
     if hourly is None or list(hourly.columns) != ["hour_start", "hour_end", "count", "pcu"]:
         raise ValueError("V1 final totals require the exported Hourly_Summary schema.")
@@ -226,6 +226,8 @@ def v1_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
     # report groups; this prevents a stale, duplicated, or missing support row
     # from silently changing the validated dynamic SUMIFS range.
     group_keys = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type", "include_in_peak", "include_in_report"]
+    if movement.duplicated(subset=group_keys, keep=False).any():
+        raise ValueError("V1 Movement_Summary contains duplicate canonical group keys.")
     grouped_source = normalized.copy()
     output_code = grouped_source["output_movement_code"].fillna("").astype(str).str.strip()
     source_code = grouped_source["movement_code"].fillna("").astype(str).str.strip()
@@ -249,6 +251,35 @@ def v1_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
         raise ValueError("V1 reported Movement_Summary PCU disagrees with Normalized_Data.")
     if not math.isclose(hourly_total, normalized_total, rel_tol=1e-12, abs_tol=1e-9):
         raise ValueError("V1 Hourly_Summary PCU disagrees with Normalized_Data.")
+
+    normalized_by_hour = {}
+    for time_start, pcu in zip(normalized["time_start"], normalized["pcu"]):
+        minute = time_to_minutes(time_start)
+        if minute is None:
+            raise ValueError("V1 Normalized_Data contains an invalid source hour.")
+        hour_start = (minute // 60) * 60
+        normalized_by_hour.setdefault(hour_start, []).append(float(pcu))
+    normalized_by_hour = {hour: math.fsum(values) for hour, values in normalized_by_hour.items()}
+
+    summary_by_hour = {}
+    for row in hourly.itertuples(index=False):
+        start = time_to_minutes(row.hour_start)
+        end = time_to_minutes(row.hour_end)
+        if start is None or end is None or start % 60 != 0 or end != (start + 60) % (24 * 60):
+            raise ValueError("V1 Hourly_Summary contains an invalid hourly interval.")
+        if start in summary_by_hour:
+            raise ValueError("V1 Hourly_Summary contains duplicate hourly intervals.")
+        summary_by_hour[start] = float(row.pcu)
+    # Compare every source and summary hour independently. The 1e-12 relative
+    # and 1e-9 absolute tolerance accommodates only binary floating summation
+    # noise; it cannot hide a rounded or redistributed PCU contribution.
+    for hour in normalized_by_hour.keys() | summary_by_hour.keys():
+        precise_source = normalized_by_hour.get(hour, 0.0)
+        precise_summary = summary_by_hour.get(hour, 0.0)
+        if not math.isclose(precise_source, precise_summary, rel_tol=1e-12, abs_tol=1e-9):
+            raise ValueError(
+                f"V1 Hourly_Summary PCU disagrees with Normalized_Data for source hour {hour:04d}."
+            )
 
     if not all(math.isfinite(float(peak.iloc[0][name])) for name in ("am_peak_pcu", "pm_peak_pcu")):
         raise ValueError("V1 final totals require finite effective Peak_PHF PCU values.")
