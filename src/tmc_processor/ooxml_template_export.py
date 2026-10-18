@@ -12,7 +12,7 @@ from xml.dom import Node, minidom
 import pandas as pd
 from openpyxl.utils.cell import get_column_letter, range_boundaries
 from .diagram import MOVEMENT_CODES
-from .report_template import _mapped_label_value, _metadata_values, movement_values_by_code
+from .report_template import _mapped_label_value, _metadata_values, _normalise_time_label, movement_values_by_code
 from .template_write_plan import resolve_template_write_plan
 MAIN_NS="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 DOC_REL_NS="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -241,8 +241,9 @@ def _cache_required_template_sources(doc,cells,strings,template_map,plan):
                 raise ValueError(f"Hourly movement total disagrees with Diagram_Data for {key}.")
         # Total is rounded independently of the displayed movement columns by
         # the established analysis payload. The support sheet is its source of truth.
-        rounding_tolerance = 6.0 if template_map.get("movement_code_scheme") == "approach_movement" and key == "Total" else 1e-9
-        if key in support.columns and not math.isclose(amount,float(support.iloc[-1][key]),rel_tol=1e-9,abs_tol=rounding_tolerance):
+        if key in support.columns and key == "Total" and template_map.get("movement_code_scheme") != "approach_movement" and plan.final_total_formulas:
+            _prove_v1_hourly_rounding_accumulation(cells,strings,template_map,plan)
+        elif key in support.columns and not math.isclose(amount,float(support.iloc[-1][key]),rel_tol=1e-9,abs_tol=6.0 if template_map.get("movement_code_scheme") == "approach_movement" and key == "Total" else 1e-9):
             raise ValueError(f"Hourly movement total disagrees with support-sheet total for {key}.")
         _set_formula_cache(doc,cells,ref,amount)
 
@@ -575,13 +576,64 @@ def _write_metadata(doc,cells,mapping,metadata):
         if _put_summary(doc,cells,ref,value,mapping,intent=intent,preserve=True): written.append(ref)
     return written
 def _write_support_payload(name,frame,header_style): return _dataframe_sheet(frame,header_style)
-def export_template_ooxml(template_path,output_path,template_map,report_data,metadata,chart_source_data):
+def _prove_v1_hourly_rounding_accumulation(cells,strings,template_map,plan):
+    """Prove Total differs only because each fixed hour is rounded for display."""
+    from .template_write_plan import v1_final_total_formulas
+    support=dict(plan.support_sheets)
+    hourly=support.get("Hourly_Summary")
+    movement=support.get("Hourly_Movement_PCU")
+    normalized=support.get("Normalized_Data")
+    originals={item.cell:item.old_formula for item in plan.final_total_formulas}
+    if hourly is None or movement is None or normalized is None:
+        raise ValueError("V1 hourly-rounding proof requires precise summary support sheets.")
+    # Re-run the strict schema/source proof so this exception is available only
+    # after every precise V1 final-total source has been validated.
+    v1_final_total_formulas(originals,support)
+    if "Total" not in movement.columns or movement.empty:
+        raise ValueError("V1 hourly-rounding proof requires Hourly_Movement_PCU Total values.")
+    precise_by_hour={}
+    for row in hourly.itertuples(index=False):
+        start_minute=_time_minutes(row.hour_start); end_minute=_time_minutes(row.hour_end)
+        if start_minute is None or end_minute is None:
+            raise ValueError("Invalid V1 Hourly_Summary time interval.")
+        label=f"{start_minute//60:02}:{start_minute%60:02}-{end_minute//60:02}:{end_minute%60:02}"
+        if label in precise_by_hour:
+            raise ValueError("Duplicate V1 precise Hourly_Summary interval.")
+        precise_by_hour[label]=float(row.pcu)
+    table=template_map["hourly_movement_table"]
+    first=int(table["first_data_row"]); last=int(table["last_data_row"])
+    time_column=table["time_column"]; total_column=table["columns"]["Total"]
+    seen=set()
+    for row in range(first,last+1):
+        label=_normalise_time_label(_cellvalue(cells.get(f"{time_column}{row}"),strings))
+        if not label or label in seen:
+            raise ValueError("V1 displayed hour labels are missing or duplicated.")
+        seen.add(label)
+        exact=precise_by_hour.get(label,0.0)
+        displayed=_cellvalue(cells.get(f"{total_column}{row}"),strings)
+        expected=int(round(exact))
+        if not isinstance(displayed,(int,float)) or isinstance(displayed,bool) or float(displayed)!=expected:
+            raise ValueError(f"V1 displayed hourly Total disagrees with its precise Hourly_Summary source at Summary!{total_column}{row} ({label}).")
+    if set(precise_by_hour)-seen:
+        raise ValueError("V1 precise Hourly_Summary contains intervals outside the fixed Summary table.")
+    total_row=movement.iloc[-1]["Total"]
+    precise_total=math.fsum(float(value) for value in normalized["pcu"])
+    if int(total_row)!=int(round(precise_total)):
+        raise ValueError("V1 Hourly_Movement_PCU grand Total disagrees with its precise source.")
+
+
+def _time_minutes(value):
+    from .time_utils import time_to_minutes
+    return time_to_minutes(value)
+
+
+def export_template_ooxml(template_path,output_path,template_map,report_data,metadata,chart_source_data,*,apply_v1_precision=False):
     """Patch an approved Excel template package directly without resaving it."""
     source=Path(template_path).resolve(); target=Path(output_path).resolve()
     if source==target: raise ValueError("OOXML output must not overwrite the template.")
     if not source.is_file(): raise FileNotFoundError(source)
     if template_map.get("template_sheet","Summary")!="Summary": raise ValueError("Only approved Summary templates are supported.")
-    plan=resolve_template_write_plan(source,template_map,report_data,metadata,chart_source_data)
+    plan=resolve_template_write_plan(source,template_map,report_data,metadata,chart_source_data,apply_v1_precision=apply_v1_precision)
     target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,target)
     with zipfile.ZipFile(source) as original:
         names=set(original.namelist()); parts=_sheet_parts(original); summary_part=parts.get("Summary")
@@ -616,17 +668,17 @@ def export_template_ooxml(template_path,output_path,template_map,report_data,met
         for item in plan.final_total_formulas:
             cell=cells[item.cell]; formula=_child(cell,MAIN_NS,"f")
             if formula is None or _text(formula)!=item.old_formula[1:]:
-                raise ValueError(f"Unknown V2 final total formula at Summary!{item.cell}.")
+                raise ValueError(f"Unknown native final total formula at Summary!{item.cell}.")
             if item.cell=="W40":
                 # W40 masters the vehicle totals' shared group. Materialize its
                 # dependents before replacing it so their formulas stay unchanged.
                 if dict(formula.attributes.items())!={"t":"shared","ref":"W40:AJ40","si":"8"}:
-                    raise ValueError("Unknown V2 W40 shared formula group.")
+                    raise ValueError("Unknown native W40 shared formula group.")
                 preserved_formulas=dict(plan.preserved_formulas)
                 for ref in _range_refs("X40:AJ40"):
                     dependent=_child(cells[ref],MAIN_NS,"f")
                     if dependent is None or _text(dependent) or dict(dependent.attributes.items())!={"t":"shared","si":"8"}:
-                        raise ValueError(f"Unknown V2 shared formula at Summary!{ref}.")
+                        raise ValueError(f"Unknown native shared formula at Summary!{ref}.")
                     value=_cellvalue(cells[ref],_shared(original))
                     _set_value(summary,cells[ref],preserved_formulas[ref],formula=True)
                     _set_formula_cache(summary,cells,ref,value)
