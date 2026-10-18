@@ -28,6 +28,7 @@ from .report_template import (
     _normalise_time_label,
     movement_values_by_code,
 )
+from .time_utils import time_to_minutes
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,102 @@ def v2_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
     return tuple(result)
 
 
+def v1_final_total_formulas(formulas, support) -> tuple[FinalTotalFormula, ...]:
+    """Validate V1's variable support rows before rounding the five final cells."""
+    movement = support.get("Movement_Summary")
+    normalized = support.get("Normalized_Data")
+    hourly = support.get("Hourly_Summary")
+    peak = support.get("Peak_PHF")
+    if movement is None or list(movement.columns) != [
+        "movement_code", "from_leg", "to_leg", "turn_type", "facility_type",
+        "include_in_peak", "include_in_report", "count", "pcu",
+    ] or movement.empty:
+        raise ValueError("V1 final totals require the exported Movement_Summary schema and at least one data row.")
+    if normalized is None or not {"movement_code", "output_movement_code", "from_leg", "to_leg", "turn_type", "facility_type", "include_in_peak", "include_in_report", "pcu"}.issubset(normalized.columns):
+        raise ValueError("V1 final totals require the exported Normalized_Data source contract.")
+    if hourly is None or list(hourly.columns) != ["hour_start", "hour_end", "count", "pcu"]:
+        raise ValueError("V1 final totals require the exported Hourly_Summary schema.")
+    if peak is None or list(peak.columns) != [
+        "peak_mode", "am_peak_search_window", "pm_peak_search_window", "am_peak_start",
+        "am_peak_end", "am_peak_pcu", "am_phf", "pm_peak_start", "pm_peak_end",
+        "pm_peak_pcu", "pm_phf", "peak_selection_source",
+    ] or len(peak) != 1:
+        raise ValueError("V1 final totals require the one-row Peak_PHF source contract.")
+
+    def finite_values(frame, column, name):
+        values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        if not len(values) or not all(math.isfinite(value) for value in values):
+            raise ValueError(f"V1 final totals require finite {name} PCU values.")
+        return values
+
+    for frame, name in ((movement, "Movement_Summary"), (normalized, "Normalized_Data"), (hourly, "Hourly_Summary")):
+        finite_values(frame, "pcu", name)
+    if not movement["include_in_report"].map(lambda value: isinstance(value, (bool,)) or type(value).__name__ == "bool_").all():
+        raise ValueError("V1 Movement_Summary include_in_report must contain booleans.")
+    if not normalized["include_in_report"].map(lambda value: isinstance(value, (bool,)) or type(value).__name__ == "bool_").all():
+        raise ValueError("V1 Normalized_Data include_in_report must contain booleans.")
+    if not normalized["include_in_peak"].map(lambda value: isinstance(value, (bool,)) or type(value).__name__ == "bool_").all():
+        raise ValueError("V1 Normalized_Data include_in_peak must contain booleans.")
+
+    # Rebuild V1's movement grouping and compare every row, including excluded
+    # report groups; this prevents a stale, duplicated, or missing support row
+    # from silently changing the validated dynamic SUMIFS range.
+    group_keys = ["movement_code", "from_leg", "to_leg", "turn_type", "facility_type", "include_in_peak", "include_in_report"]
+    grouped_source = normalized.copy()
+    output_code = grouped_source["output_movement_code"].fillna("").astype(str).str.strip()
+    source_code = grouped_source["movement_code"].fillna("").astype(str).str.strip()
+    grouped_source["movement_code"] = output_code.where(output_code != "", source_code)
+    expected_rows = grouped_source.groupby(group_keys, dropna=False, as_index=False).agg(pcu=("pcu", "sum"))
+    actual_rows = movement[group_keys + ["pcu"]].groupby(group_keys, dropna=False, as_index=False).agg(pcu=("pcu", "sum"))
+    if len(actual_rows) != len(expected_rows):
+        raise ValueError("V1 Movement_Summary rows disagree with the normalized source grouping.")
+    merged = expected_rows.merge(actual_rows, on=group_keys, how="outer", suffixes=("_source", "_summary"), indicator=True)
+    if not (merged["_merge"].eq("both").all() and all(
+        math.isclose(float(left), float(right), rel_tol=1e-12, abs_tol=1e-9)
+        for left, right in zip(merged["pcu_source"], merged["pcu_summary"])
+    )):
+        raise ValueError("V1 Movement_Summary PCU rows disagree with Normalized_Data.")
+
+    report_total = math.fsum(float(value) for value in movement.loc[movement["include_in_report"], "pcu"])
+    normalized_report_total = math.fsum(float(value) for value in normalized.loc[normalized["include_in_report"], "pcu"])
+    hourly_total = math.fsum(float(value) for value in hourly["pcu"])
+    normalized_total = math.fsum(float(value) for value in normalized["pcu"])
+    if not math.isclose(report_total, normalized_report_total, rel_tol=1e-12, abs_tol=1e-9):
+        raise ValueError("V1 reported Movement_Summary PCU disagrees with Normalized_Data.")
+    if not math.isclose(hourly_total, normalized_total, rel_tol=1e-12, abs_tol=1e-9):
+        raise ValueError("V1 Hourly_Summary PCU disagrees with Normalized_Data.")
+
+    if not all(math.isfinite(float(peak.iloc[0][name])) for name in ("am_peak_pcu", "pm_peak_pcu")):
+        raise ValueError("V1 final totals require finite effective Peak_PHF PCU values.")
+    for period in ("am", "pm"):
+        start = time_to_minutes(peak.iloc[0][f"{period}_peak_start"])
+        end = time_to_minutes(peak.iloc[0][f"{period}_peak_end"])
+        if start is None or end is None or end - start != 60:
+            raise ValueError(f"V1 {period.upper()} Peak_PHF must identify one effective 60-minute interval.")
+        source = normalized.loc[normalized["include_in_peak"]].copy()
+        source["_minute"] = source["time_start"].map(time_to_minutes)
+        precise_peak = math.fsum(float(value) for value in source.loc[source["_minute"].between(start, end - 1), "pcu"])
+        if not math.isclose(precise_peak, float(peak.iloc[0][f"{period}_peak_pcu"]), rel_tol=1e-12, abs_tol=1e-9):
+            raise ValueError(f"V1 effective {period.upper()} Peak_PHF disagrees with normalized include_in_peak PCU.")
+    total_formula = "=ROUND(SUMIFS('Movement_Summary'!$I$2:$I${last},'Movement_Summary'!$G$2:$G${last},TRUE),0)"
+    result = []
+    last = len(movement) + 1
+    total_formula = total_formula.format(last=last)
+    overrides = (
+        ("F30", "=SUM(G19:G22,J16:M16,O21:O24,J27:M27)", "=ROUND('Peak_PHF'!$F$2,0)", peak.iloc[0]["am_peak_pcu"]),
+        ("F31", "=SUM(J15:M15,F19:F22,J28:M28,P21:P24)", "=ROUND('Peak_PHF'!$J$2,0)", peak.iloc[0]["pm_peak_pcu"]),
+        ("F32", "=SUM(J14:M14,E19:E22,J29:M29,Q21:Q24)", total_formula, report_total),
+        ("W40", "=SUM(W28:W39)", total_formula, report_total),
+        ("AM22", "=SUM(AM10:AM21)", total_formula, report_total),
+    )
+    for cell, old, new, precise in overrides:
+        if formulas.get(cell) != old:
+            raise ValueError(f"Unknown V1 final total formula at Summary!{cell}.")
+        cache = int(Decimal(str(precise)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        result.append(FinalTotalFormula(cell, old, new, cache))
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class TemplateWritePlan:
     template_sheet: str
@@ -264,6 +361,8 @@ def resolve_template_write_plan(
     report_data: dict[str, Any],
     metadata: dict[str, Any],
     chart_source_data: dict[str, Any],
+    *,
+    apply_v1_precision: bool = False,
 ) -> TemplateWritePlan:
     """Resolve the COM destination order into transport-independent cell writes."""
 
@@ -437,7 +536,12 @@ def resolve_template_write_plan(
         )
         for row, code in enumerate(codes, 2)
     )
-    final_totals = v2_final_total_formulas(formulas, support) if template_map.get("movement_code_scheme") == "approach_movement" else ()
+    if template_map.get("movement_code_scheme") == "approach_movement":
+        final_totals = v2_final_total_formulas(formulas, support)
+    elif apply_v1_precision:
+        final_totals = v1_final_total_formulas(formulas, support)
+    else:
+        final_totals = ()
     rebound_cells = {binding.cell for binding in bindings} | {item.cell for item in final_totals}
     preserved = tuple(sorted((cell, formula) for cell, formula in formulas.items() if not _in_ranges(cell, overwritten) and cell not in rebound_cells))
     caches = tuple(

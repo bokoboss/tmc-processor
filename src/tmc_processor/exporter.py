@@ -1497,13 +1497,17 @@ def _export_workbook_with_ooxml(
         "diagram_movement_codes": MOVEMENT_CODES,
         "diagram_data_sheet_name": DIAGRAM_DATA_SHEET_NAME,
     }
-    plan = resolve_template_write_plan(resources.template_path, resources.mapping, report_data, setup, chart_source_data)
+    plan = resolve_template_write_plan(
+        resources.template_path, resources.mapping, report_data, setup, chart_source_data,
+        apply_v1_precision=True,
+    )
     file_descriptor, temporary_path = mkstemp(prefix="tmc_report_ooxml_", suffix=".xlsx")
     os.close(file_descriptor)
     output_path = Path(temporary_path)
     try:
         export_template_ooxml(
-            resources.template_path, output_path, resources.mapping, report_data, setup, chart_source_data
+            resources.template_path, output_path, resources.mapping, report_data, setup, chart_source_data,
+            apply_v1_precision=True,
         )
         verify_ooxml_against_plan(resources.template_path, output_path, resources.mapping, plan)
         return output_path.read_bytes()

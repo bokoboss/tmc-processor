@@ -27,8 +27,9 @@ from .ooxml_template_export import (
     _sheet_parts,
     _text,
     _range_refs,
+    _prove_v1_hourly_rounding_accumulation,
 )
-from .template_write_plan import TemplateWritePlan, v2_final_total_formulas
+from .template_write_plan import TemplateWritePlan, v1_final_total_formulas, v2_final_total_formulas
 
 
 def _expected(value):
@@ -115,9 +116,14 @@ def verify_ooxml_against_plan(
         final_writes = {write.cell: write for write in plan.summary_writes}
         final_totals = {item.cell: item for item in plan.final_total_formulas}
         original_formulas = {ref: "=" + _text(_child(cell, MAIN_NS, "f")) for ref, cell in original_summary.items() if _child(cell, MAIN_NS, "f") is not None}
-        expected_totals = v2_final_total_formulas(original_formulas, dict(plan.support_sheets)) if template_map.get("movement_code_scheme") == "approach_movement" else ()
+        if template_map.get("movement_code_scheme") == "approach_movement":
+            expected_totals = v2_final_total_formulas(original_formulas, dict(plan.support_sheets))
+        elif plan.final_total_formulas:
+            expected_totals = v1_final_total_formulas(original_formulas, dict(plan.support_sheets))
+        else:
+            expected_totals = ()
         if plan.final_total_formulas != expected_totals:
-            issues.append("Final PCU overrides differ from the validated V2 allow-list")
+            issues.append("Final PCU overrides differ from the validated native allow-list")
         for item in expected_totals:
             formula = _child(summary.get(item.cell), MAIN_NS, "f")
             if formula is None or _text(formula) != item.new_formula[1:] or not _equal(_cellvalue(summary.get(item.cell), strings), item.cache):
@@ -174,6 +180,11 @@ def verify_ooxml_against_plan(
         hourly_support = dict(plan.support_sheets).get("Hourly_Movement_PCU")
         if hourly_support is None:
             issues.append("Hourly_Movement_PCU support data missing from write plan")
+        if template_map.get("movement_code_scheme") != "approach_movement" and plan.final_total_formulas:
+            try:
+                _prove_v1_hourly_rounding_accumulation(summary, strings, template_map, plan)
+            except (ValueError, TypeError, KeyError) as exc:
+                issues.append(f"V1 final-total rounding proof failed: {exc}")
         for code, column in movement_table["columns"].items():
             if code == "time":
                 continue
